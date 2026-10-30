@@ -1,0 +1,184 @@
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+"""
+اینترفیس پایه‌ی مشترک برای همه‌ی provider های پنل VPN (PasarGuard، و در آینده
+Marzban، Marzneshin، X-UI و ...). هر provider جدید فقط باید این کلاس را
+پیاده‌سازی کند و در panel_providers/__init__.py رجیستر شود؛ بقیه‌ی کد پروژه
+(handlers_user.py, miniapp/server.py) فقط با همین اینترفیس کار می‌کند و از
+جزئیات API هر پنل بی‌خبر است.
+"""
+import asyncio
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+import aiohttp
+
+try:
+    from aiohttp_socks import ProxyConnector
+except ImportError:
+    ProxyConnector = None
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+
+
+@dataclass
+class PanelUserResult:
+    username: str
+    subscription_url: str
+    raw: dict = None
+
+
+class PanelError(Exception):
+    """خطای عمومی ارتباط با پنل (اتصال، احراز هویت، یا پاسخ نامعتبر)."""
+    pass
+
+
+class PanelUsernameTakenError(PanelError):
+    """نام کاربری روی خود پنل هم از قبل وجود دارد."""
+    pass
+
+
+def subscription_token(url: str) -> str:
+    """آخرین بخش مسیر یک لینک اشتراک (توکن)، بدون query و اسلش انتهایی."""
+    from urllib.parse import urlsplit
+
+    path = urlsplit(url or "").path.rstrip("/")
+    return path.rsplit("/", 1)[-1] if path else ""
+
+
+def build_connector(server, ssl: bool = False):
+    """کانکتور aiohttp برای اتصال به پنل: اگر روی این پنل یک پروکسی SOCKS
+    تنظیم شده باشد (ستون socks_proxy - برای پنل‌هایی که مستقیم از سرور بات
+    قابل‌اتصال نیستند، مثلاً پنل ایرانی پشت سرور خارجی)، از طریق آن پروکسی
+    وصل می‌شود؛ در غیر این صورت اتصال مستقیم معمولی."""
+    proxy = None
+    if server is not None:
+        try:
+            proxy = server["socks_proxy"]
+        except (KeyError, IndexError, TypeError):
+            proxy = None
+    if proxy:
+        if ProxyConnector is None:
+            raise PanelError(
+                "برای اتصال این پنل از طریق پروکسی SOCKS باید پکیج aiohttp_socks روی سرور نصب باشد."
+            )
+        return ProxyConnector.from_url(proxy, ssl=ssl)
+    return aiohttp.TCPConnector(ssl=ssl)
+
+
+class BasePanelProvider(ABC):
+    """server: ردیف جدول panel_servers (sqlite3.Row) شامل api_url/api_username/
+    api_password/group_ids/proxy_settings/default_group/socks_proxy"""
+
+    supports_user_limit = False
+    last_error = ""
+
+    def __init__(self, server):
+        self.server = server
+
+    def _build_connector(self, ssl: bool = False):
+        return build_connector(self.server, ssl=ssl)
+
+    @abstractmethod
+    async def create_user(self, username: str, volume_gb: int, duration_days: int, start_on_first_use: bool = False) -> PanelUserResult:
+        """کاربر جدید روی پنل می‌سازد و لینک اشتراک را برمی‌گرداند."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_user(self, username: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_user_usage(self, username: str) -> dict:
+        """برمی‌گرداند: {"used_bytes": int, "data_limit_bytes": int, "status": str}"""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_user(self, username: str) -> PanelUserResult:
+        """اطلاعات فعلیِ کاربر را مستقیماً از پنل می‌خواند (نه از دیتابیس خودمان)
+        و شامل لینک اشتراک (subscription_url) به‌روز است. برای رفرش‌کردن لینکی
+        که قبلاً ذخیره شده استفاده می‌شود - مثلاً وقتی ادمین تنظیمات پنل (دامنه‌ی
+        Subscription، inbound و ...) را بعد از فروش عوض کرده و لینک قدیمی دیگر
+        معتبر نیست. اگر کاربر روی پنل پیدا نشود PanelError پرتاب می‌شود."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_user(self, username: str, add_volume_gb: float = 0, add_days: int = 0,
+                           reset_usage: bool = False, preserve_remaining: bool = False,
+                           unlimited_volume: bool = False) -> PanelUserResult:
+        """حجم/انقضای یک کاربر موجود روی پنل را برای «تمدید سرویس» افزایش می‌دهد.
+        add_volume_gb/add_days روی مقدار فعلی جمع می‌شوند (نه جایگزین آن).
+        اگر انقضای فعلی گذشته باشد، مبنای محاسبه‌ی انقضای جدید «اکنون» است، نه
+        تاریخ گذشته. reset_usage=True یعنی مصرف قبلی صفر شود (تمدید کامل).
+        وقتی reset_usage=True است، preserve_remaining تعیین می‌کند سقف حجم جدید
+        چطور محاسبه شود: False (پیش‌فرض) = جایگزینی با بستهٔ تازه (حجم باقیمانده
+        از دست می‌رود)؛ True = حجم باقیمانده‌ی مصرف‌نشده حفظ و بستهٔ جدید رویش
+        اضافه می‌شود."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def revoke_credentials(self, username: str) -> PanelUserResult:
+        """اعتبار/لینک فعلی کاربر را باطل می‌کند و یک لینک تازه صادر می‌کند،
+        بدون این‌که حجم، انقضا یا مصرف قبلی‌اش تغییر کند (دقیقاً همان حجم/زمان
+        باقی‌مانده‌ی قبلی حفظ می‌شود؛ فقط UUID/کلید کاربر روی پنل عوض می‌شود
+        تا لینک قدیمی از کار بیفتد). برای دکمه‌ی «قطع دسترسی و لینک جدید»."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def test_connection(self) -> bool:
+        """برای دکمه‌ی «تست اتصال» در پنل ادمین؛ فقط احراز هویت را چک می‌کند."""
+        raise NotImplementedError
+
+    async def check_connection(self):
+        """(ok, error): مثل test_connection ولی علت دقیق شکست را هم برمی‌گرداند."""
+        self.last_error = ""
+        try:
+            ok = await self.test_connection()
+        except asyncio.TimeoutError:
+            return False, "پاسخی از سرور در زمان مقرر دریافت نشد (timeout)"
+        except Exception as e:
+            return False, (str(e) or type(e).__name__)[:300]
+        if ok:
+            return True, ""
+        return False, self.last_error or "اتصال یا احراز هویت ناموفق"
+
+    supports_data_limit_sync = False
+
+    async def set_data_limit_bytes(self, username: str, limit_bytes: int, reenable: bool = False) -> None:
+        """فقط «سقف حجم» کاربر روی خودِ پنل را به limit_bytes تغییر می‌دهد (0 = نامحدود)،
+        بدون دست‌زدن به انقضا، مصرف یا وضعیت دستی فعال/غیرفعال. برای سرویس‌های ترکیبی
+        VPN+SSH استفاده می‌شود: مصرف SSH از سقف مشترک کم می‌شود تا پنل VPN هم باقی‌مانده‌ی
+        واقعی را ببیند و خودش در لحظه‌ی اتمام قطع کند. reenable=True یعنی پنل کاربر را چون
+        به سقف قبلی رسیده بود خودش غیرفعال کرده و حالا باید دوباره فعال شود.
+        provider هایی که این قابلیت را دارند این متد را override و supports_data_limit_sync را True می‌کنند."""
+        raise PanelError("این نوع پنل از تغییر مستقل سقف حجم پشتیبانی نمی‌کند.")
+
+    async def set_enabled(self, username: str, enabled: bool) -> None:
+        """کاربر را روی خودِ پنل فعال/غیرفعال می‌کند (بدون تغییر حجم/انقضا).
+        پیاده‌سازی پیش‌فرض: پشتیبانی نمی‌شود؛ provider هایی که این قابلیت را
+        دارند این متد را override می‌کنند."""
+        raise PanelError("این نوع پنل از فعال/غیرفعال کردن مستقیم کاربر پشتیبانی نمی‌کند.")
+
+    async def rename_user(self, username: str, new_username: str) -> str:
+        """نام/شناسه‌ی کاربر را روی خودِ پنل عوض می‌کند. اگر تغییر نام باعث
+        عوض‌شدن لینک اشتراک (subscription_url) هم بشود، لینک تازه را
+        برمی‌گرداند (در غیر این صورت None، یعنی لینک قبلی هنوز معتبر است).
+        پیاده‌سازی پیش‌فرض: پشتیبانی نمی‌شود."""
+        raise PanelError("این نوع پنل از تغییر نام کاربر روی خودِ پنل پشتیبانی نمی‌کند.")
+
+    supports_fingerprints = False
+
+    async def get_fingerprints(self, username: str) -> list:
+        """همه‌ی مقادیر محرمانه‌ای که این کاربر را روی پنل شناسایی می‌کنند
+        (UUID و پسورد پروتکل‌ها و توکن اشتراک) را به‌صورت لیست رشته برمی‌گرداند.
+        این مقادیر فقط برای ساخت ایندکس هشِ تشخیص نشت استفاده می‌شوند و
+        هرگز ذخیره‌ی متنی نمی‌شوند. پیش‌فرض: پشتیبانی نمی‌شود."""
+        raise PanelError("این نوع پنل از خواندن اثر انگشت کاربر پشتیبانی نمی‌کند.")
+
+    supports_online_status = False
+
+    async def is_client_online(self, username: str) -> bool:
+        """آیا کاربر همین الان به سرور متصل است (وصل=True/قطع=False).
+        پیاده‌سازی پیش‌فرض: پشتیبانی نمی‌شود؛ provider هایی که این قابلیت را
+        دارند این متد را override و supports_online_status را True می‌کنند."""
+        raise PanelError("این نوع پنل از استعلام وضعیت آنلاین لحظه‌ای پشتیبانی نمی‌کند.")
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+# 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

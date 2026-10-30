@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800;900&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#fff;--ink:#000;--mute:#767676;--line:#e2e2e2;--soft:#f4f4f4;--inv:#fff;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--ink:#fff;--mute:#8c8c8c;--line:#262626;--soft:#101010;--inv:#000;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#000;--ink:#fff;--mute:#8c8c8c;--line:#262626;--soft:#101010;--inv:#000;color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 15px/1.7 Vazirmatn,Tahoma,sans-serif;transition:background .25s,color .25s}
+main{max-width:640px;margin:0 auto;padding:14px 16px 96px}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+header{display:flex;align-items:center;justify-content:space-between;padding:6px 4px 16px;gap:12px}
+.id{display:flex;align-items:center;gap:10px;min-width:0}
+.logo{width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--line);flex:none}
+.who{font-weight:800;font-size:17px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brand{display:block;font-weight:400;font-size:12.5px;color:var(--mute)}
+.ic{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:none;display:grid;place-items:center;flex:none}
+.note{display:flex;gap:10px;align-items:center;border:1px dashed var(--mute);border-radius:14px;padding:9px 14px;margin-bottom:14px;font-size:14px}
+.note span:last-child{overflow-wrap:anywhere}
+/* پنل اصلی: معکوس رنگ صفحه */
+.panel{position:relative;overflow:hidden;background:var(--ink);color:var(--inv);border-radius:28px;padding:22px 20px 18px;margin-bottom:14px;isolation:isolate}
+.panel::before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(var(--inv) 1.1px,transparent 1.6px) 0 0/14px 14px;opacity:.16;-webkit-mask:linear-gradient(to bottom,#000,transparent 70%);mask:linear-gradient(to bottom,#000,transparent 70%)}
+.pill{display:inline-flex;align-items:center;gap:8px;border:1px solid color-mix(in srgb,var(--inv) 40%,transparent);border-radius:999px;padding:1px 12px 1px 14px;font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--inv)}
+.bad .dot{background:transparent;border:1.5px solid var(--inv)}
+.live .dot{animation:pulse 1.8s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--inv) 70%,transparent)}100%{box-shadow:0 0 0 9px transparent}}
+.lbl{opacity:.6;font-size:14px;margin-top:22px}
+.big{font-size:clamp(56px,19vw,92px);font-weight:900;line-height:1.05;letter-spacing:-2px}
+.big span{font-size:.3em;font-weight:600;opacity:.6;margin-inline-start:8px;letter-spacing:0}
+.ins{font-size:14px;opacity:.8;margin:6px 0 20px;min-height:24px}
+.tabs{display:flex;gap:2px;width:max-content;padding:3px;border:1px solid color-mix(in srgb,var(--inv) 30%,transparent);border-radius:999px;margin-bottom:12px}
+.tabs button{border:0;background:none;padding:0 14px;border-radius:999px;font-size:13px;opacity:.65}
+.tabs button[aria-pressed=true]{background:var(--inv);color:var(--ink);opacity:1}
+.read{display:flex;align-items:baseline;gap:10px;min-height:34px}
+.read b{font-size:22px;font-weight:800}.read span{opacity:.6;font-size:13px}
+.chart{height:130px;display:flex;border-bottom:1px solid var(--inv);margin-top:6px}
+.bar{flex:1;min-width:0;padding:0 2px;border:0;background:none;display:flex;align-items:flex-end;height:100%}
+.bar i{display:block;width:100%;height:var(--h);min-height:3px;background:repeating-linear-gradient(to top,var(--inv) 0 4px,transparent 4px 7px);opacity:.35;transform-origin:bottom;animation:grow .7s cubic-bezier(.2,.8,.2,1) backwards;animation-delay:calc(var(--i)*18ms)}
+.bar.nil i{opacity:.12;height:3px}
+.bar:hover i,.bar[aria-pressed=true] i{opacity:1}
+.bar.nil:hover i,.bar.nil[aria-pressed=true] i{opacity:.3}
+@keyframes grow{from{transform:scaleY(0)}}
+.axis{display:flex;justify-content:space-between;opacity:.6;font-size:12px;margin-top:6px}
+/* اتصال سریع */
+.go{border:1px solid var(--ink);border-radius:24px;padding:18px;margin-bottom:14px}
+.go h2{margin:0 0 2px;font-size:17px;font-weight:800}
+.go p{margin:0 0 14px;color:var(--mute);font-size:13px}
+.cta{display:block;text-align:center;text-decoration:none;background:var(--ink);color:var(--inv);border-radius:16px;padding:14px;font-weight:800;font-size:16px;border:0;width:100%}
+.cta:active{transform:scale(.98)}
+.steps{display:flex;gap:6px;margin:14px 0;padding:0;list-style:none;counter-reset:s;font-size:12.5px;color:var(--mute)}
+.steps li{flex:1;counter-increment:s;border-top:2px solid var(--line);padding-top:6px}
+.steps li::before{content:counter(s,persian)" ";color:var(--ink);font-weight:800}
+.sub{display:flex;gap:8px}
+.sub code{flex:1;min-width:0;direction:ltr;text-align:left;background:var(--soft);border-radius:12px;padding:9px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px ui-monospace,Menlo,monospace;line-height:1.9}
+.sm{border:1px solid var(--line);background:none;border-radius:12px;padding:3px 13px;font-size:13px;color:inherit;text-decoration:none;display:inline-flex;align-items:center}
+.sm:hover,.sm.k{border-color:var(--ink)}
+.sm.k{background:var(--ink);color:var(--inv)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:34px}
+.grid div{background:var(--soft);border-radius:18px;padding:12px 16px}
+.grid small{display:block;color:var(--mute);font-size:12.5px}
+.grid b{font-size:18px;font-weight:800}
+h3{font-size:17px;font-weight:800;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}
+.sec{margin-bottom:34px}
+.cfg{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.cfg li{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:16px}
+.cfg .f{font-size:22px;line-height:1}
+.cfg .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.tag{font:700 10.5px ui-monospace,Menlo,monospace;background:var(--soft);border-radius:6px;padding:0 7px;direction:ltr}
+details{border-bottom:1px solid var(--line)}
+details:first-of-type{border-top:1px solid var(--line)}
+summary{list-style:none;padding:14px 2px;font-weight:600;display:flex;justify-content:space-between;cursor:pointer}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-weight:400;font-size:20px;line-height:1}
+details[open] summary::after{content:"−"}
+.app{display:flex;align-items:center;gap:8px;padding:4px 2px 12px}
+.app b{flex:1;font-weight:600}
+.me{font-weight:400;color:var(--mute);font-size:13px;margin-inline-start:8px}
+footer{text-align:center;color:var(--mute);font-size:14px}
+footer a{color:var(--ink)}
+footer p{margin:6px 0}
+dialog{border:1px solid var(--ink);border-radius:24px;background:var(--bg);color:var(--ink);padding:24px;text-align:center;max-width:300px;width:90%}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+#qb{background:#fff;padding:12px;border-radius:12px;display:inline-block;margin-bottom:12px;min-width:224px;min-height:224px;color:#000}
+#qb img{display:block;width:200px;height:200px}
+#toast{position:fixed;inset-inline:0;bottom:calc(24px + env(safe-area-inset-bottom,0px));margin:auto;width:max-content;max-width:90%;background:var(--ink);color:var(--inv);border-radius:999px;padding:8px 20px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+@media (prefers-reduced-motion:reduce){*,.bar i{animation:none!important;transition:none!important}}
+main{display:flex;flex-direction:column}
+.left,.right{display:contents}
+.panel{order:1}.go{order:2}.grid{order:3}.right>.sec{order:4}footer{order:9}
+.mt{margin:0 0 18px}.mt:empty{display:none}
+.m{margin-bottom:12px;font-size:13px}.r{display:flex;justify-content:space-between;opacity:.85}
+.sg{height:8px;margin-top:6px;background:repeating-linear-gradient(to left,color-mix(in srgb,var(--inv) 25%,transparent) 0 4px,transparent 4px 7px)}
+.sg i{display:block;height:100%;width:var(--p);background:repeating-linear-gradient(to left,var(--inv) 0 4px,transparent 4px 7px)}
+.faqp{margin:0 2px 14px;color:var(--mute);font-size:14px;overflow-wrap:anywhere}
+.dock{position:fixed;inset-inline:0;bottom:0;padding:24px 16px calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(to top,var(--bg) 55%,transparent);transform:translateY(120%);transition:transform .3s;z-index:5}
+.dock.show{transform:none}
+.dock .cta{max-width:608px;margin:auto}
+@media(min-width:960px){
+main{max-width:1080px;display:grid;grid-template-columns:400px 1fr;column-gap:36px;align-items:start;padding:24px 16px 56px}
+header,#notes{grid-column:1/-1}
+.left{display:block;position:sticky;top:20px}
+.right{display:block}
+.grid{margin-bottom:0}
+.dock{display:none}
+}
+.pt{display:flex;gap:6px;overflow-x:auto;padding-bottom:12px;scrollbar-width:none}
+.pt::-webkit-scrollbar{display:none}
+.pt button{flex:none;border:1px solid var(--line);background:none;border-radius:999px;padding:3px 16px;font-size:14px;white-space:nowrap}
+.pt button[aria-pressed=true]{background:var(--ink);color:var(--inv);border-color:var(--ink)}
+.pt em{font-style:normal;font-size:11px;opacity:.65;margin-inline-start:6px}
+.al{display:grid;gap:10px}
+.ap{border:1px solid var(--line);border-radius:18px;padding:14px 16px}
+.ap.rec{border-color:var(--ink)}
+.at{display:flex;align-items:center;gap:8px}.at b{font-weight:800;font-size:16px}
+.ap p{margin:2px 0 12px;color:var(--mute);font-size:13.5px}
+.ab{display:flex;gap:8px}
+.badge{font-size:11px;border:1px solid var(--ink);border-radius:999px;padding:0 9px}
+.empty{color:var(--mute);font-size:14px;margin:0}
+@media(min-width:960px){.al{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div class="id"><img class="logo" id="logo" alt="" hidden><div class="who"><small class="brand" id="brand" hidden></small><span id="uname"></span></div></div>
+  <button class="ic" id="theme" aria-label="تغییر تم"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3v18a9 9 0 0 0 0-18z" fill="currentColor"/></svg></button>
+</header>
+<div id="notes"></div>
+
+<div class="left">
+<section class="panel">
+  <span class="pill" id="pill"><span class="dot"></span><span id="ustate"></span></span>
+  <div class="lbl">مصرف‌شده تا امروز</div>
+  <div class="big" id="used"></div>
+  <div class="ins" id="ins"></div>
+  <div class="mt" id="mt"></div>
+  <div id="chartbox">
+    <div class="tabs" id="tabs"><button data-r="d" aria-pressed="false">۲۴ ساعت</button><button data-r="w" aria-pressed="true">۷ روز</button><button data-r="m" aria-pressed="false">۳۰ روز</button></div>
+    <div class="read"><b id="rv"></b><span id="rl"></span></div>
+    <div class="chart" id="chart"></div>
+    <div class="axis"><span id="a1"></span><span id="a2"></span></div>
+  </div>
+</section>
+
+<section class="grid" id="info"></section>
+</div>
+<div class="right">
+<section class="go">
+  <h2>اتصال با یک لمس</h2>
+  <p id="gop"></p>
+  <a class="cta" id="cta" href="#"></a>
+  <ol class="steps"><li>نصب برنامه</li><li>زدن دکمه بالا</li><li>اتصال</li></ol>
+  <div class="sub"><code id="sublink"></code><button class="sm k" id="copysub">کپی</button><button class="sm" id="subqr" hidden>QR</button></div>
+</section>
+
+<section class="sec" id="cfgsec" hidden>
+  <h3>کانفیگ‌ها <button class="sm" id="copyall">کپی همه</button></h3>
+  <ul class="cfg" id="cfg"></ul>
+</section>
+
+<section class="sec" id="faqsec" hidden>
+  <h3>اگر وصل نشد</h3>
+  <div id="faq"></div>
+</section>
+
+<section class="sec" id="appsec" hidden>
+  <h3>برنامه‌ها</h3>
+  <div id="apps"></div>
+</section>
+
+<footer id="foot" hidden><p id="ftext" hidden></p><a href="#" id="support" rel="noopener" hidden>پشتیبانی</a></footer>
+</div>
+</main>
+<div class="dock" id="dock"><a class="cta" id="cta2" href="#"></a></div>
+
+<dialog id="qr"><div id="qb"></div><p id="qn" style="margin:0 0 14px"></p><button class="sm k" id="qclose">بستن</button></dialog>
+<div id="toast" role="status"></div>
+
+<script nonce="__NONCE__">
+/* داده‌ها را سرور ساب برای همین سرویس می‌سازد */
+const D=__DATA__;
+const previewMode=new URLSearchParams(location.search).get('preview')==='1';
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fa=(n,d=2)=>Number(n).toLocaleString('fa-IR',{minimumFractionDigits:d,maximumFractionDigits:d});
+const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('show'),1600)};
+const copy=async(txt,msg,btn)=>{
+  try{await navigator.clipboard.writeText(txt)}catch(e){const a=document.createElement('textarea');a.value=txt;document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(_){}a.remove()}
+  try{navigator.vibrate&&navigator.vibrate(20)}catch(_){}
+  toast(msg||'کپی شد');
+  if(btn){const o=btn.textContent;btn.textContent='✓';setTimeout(()=>btn.textContent=o,1200)}
+};
+
+/* تم: انتخاب کاربر > پیش‌فرض ادمین > سیستم */
+const root=document.documentElement;
+try{const s=localStorage.getItem('theme');if(s==='light'||s==='dark')root.dataset.theme=s;else if(D.theme==='light'||D.theme==='dark')root.dataset.theme=D.theme}catch(e){if(D.theme==='light'||D.theme==='dark')root.dataset.theme=D.theme}
+$('#theme').onclick=()=>{
+  const dark=root.dataset.theme?root.dataset.theme==='dark':matchMedia('(prefers-color-scheme:dark)').matches;
+  root.dataset.theme=dark?'light':'dark';
+  try{localStorage.setItem('theme',root.dataset.theme)}catch(e){}
+};
+
+/* بالای صفحه */
+$('#uname').textContent=D.user||D.brand;
+if(D.brand&&D.user){$('#brand').textContent=D.brand;$('#brand').hidden=false}
+if(D.logo){$('#logo').src=D.logo;$('#logo').hidden=false;$('#logo').onerror=function(){this.hidden=true}}
+const ST={active:'فعال',expired:'منقضی شده',limited:'حجم تمام شده',disabled:'غیرفعال'};
+$('#ustate').textContent=ST[D.state]||'فعال';
+$('#pill').classList.add(D.state==='active'?'live':'bad');
+const notes=[];
+if(D.notice)notes.push(['🔔',D.notice]);
+if(!D.live)notes.push(['⚠️','اطلاعات لحظه‌ای از سرور دریافت نشد؛ کمی بعد دوباره صفحه را باز کنید.']);
+if(D.state==='expired')notes.push(['⏳','این سرویس منقضی شده است. برای تمدید به ربات مراجعه کنید.']);
+if(D.state==='limited')notes.push(['📶','حجم این سرویس تمام شده است. برای تمدید یا خرید حجم به ربات مراجعه کنید.']);
+if(D.state==='disabled')notes.push(['⛔','این سرویس غیرفعال است. برای پیگیری با پشتیبانی در ارتباط باشید.']);
+$('#notes').innerHTML=notes.map(n=>`<div class="note"><span>${n[0]}</span><span>${esc(n[1])}</span></div>`).join('');
+
+/* عدد اصلی با شمارش از صفر */
+const big=$('#used'),paint=v=>big.innerHTML=fa(v)+'<span>GB</span>';
+if(!D.live)big.innerHTML='—<span>GB</span>';
+else if(matchMedia('(prefers-reduced-motion:reduce)').matches)paint(D.used);
+else{const t0=performance.now();(function f(t){const k=Math.min((t-t0)/1000,1);paint(D.used*(1-Math.pow(1-k,4)));if(k<1)requestAnimationFrame(f)})(t0)}
+
+/* کاشی‌های اطلاعات */
+const dfmt=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{year:'numeric',month:'long',day:'numeric'});
+const dshort=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{day:'numeric',month:'long'});
+const left=D.total?Math.max(D.total-D.used,0):null;
+const tiles=[['حجم سرویس',D.total?fa(D.total)+' GB':'نامحدود'],
+ ['باقی‌مانده',D.live?(D.total?fa(left)+' GB':'∞'):'—'],
+ ['انقضا',D.expire?dfmt.format(new Date(D.expire*1000)):'بدون محدودیت'],
+ ['تاریخ ساخت',D.created?dfmt.format(new Date(D.created*1000)):'—']];
+$('#info').innerHTML=tiles.map(r=>`<div><small>${r[0]}</small><b>${r[1]}</b></div>`).join('');
+
+/* نمودار ستونی خط‌چین (از نمونه‌های واقعی مصرف؛ مقدار null یعنی داده‌ای ثبت نشده) */
+const S=D.series;
+let range='w';
+function label(r,i,n){
+  if(r==='d'){const a=new Date(Date.now()-(n-1-i)*2*36e5).getHours();return 'ساعت '+fa(a,0)+' تا '+fa((a+2)%24,0)}
+  return dshort.format(new Date(Date.now()-(n-1-i)*864e5));
+}
+function pick(i){
+  const v=S[range],n=v.length;
+  document.querySelectorAll('.bar').forEach((b,k)=>b.setAttribute('aria-pressed',k===i));
+  $('#rv').textContent=v[i]==null?'—':fa(v[i])+' GB';$('#rl').textContent=label(range,i,n);
+}
+function insight(){
+  const v=S[range].filter(x=>x!=null);
+  if(!v.length){$('#ins').textContent='برای این بازه هنوز داده‌ای ثبت نشده';return}
+  const avg=v.reduce((a,b)=>a+b,0)/v.length,lastRaw=S[range][S[range].length-1];
+  if(lastRaw==null){$('#ins').textContent=`میانگین ${range==='d'?'این ۲۴ ساعت':range==='w'?'هفته':'ماه'}: ${fa(avg)} گیگ`;return}
+  const p=avg?Math.round(Math.abs(lastRaw/avg-1)*100):0,w=range==='d'?'بازه آخر':'امروز',u=range==='d'?'میانگین این ۲۴ ساعت':range==='w'?'میانگین هفته':'میانگین ماه';
+  $('#ins').textContent=`${w} ${fa(lastRaw)} گیگ؛ ${fa(p,0)}٪ ${lastRaw>=avg?'بیشتر':'کمتر'} از ${u}`;
+}
+function draw(){
+  const v=S[range],n=v.length,max=Math.max(...v.map(x=>x||0))||1;
+  $('#chart').innerHTML=v.map((x,i)=>`<button class="bar${x==null?' nil':''}" aria-pressed="false" aria-label="${esc(label(range,i,n))}: ${x==null?'بدون داده':fa(x)+' GB'}" style="--h:${(x||0)/max*100}%;--i:${i}"><i></i></button>`).join('');
+  document.querySelectorAll('.bar').forEach((b,i)=>{b.onclick=b.onmouseenter=b.onfocus=()=>pick(i)});
+  $('#a1').textContent=label(range,0,n);$('#a2').textContent=range==='d'?'اکنون':'امروز';
+  pick(n-1);insight();
+}
+if(D.show.chart&&S){
+  $('#tabs').onclick=e=>{const b=e.target.closest('button');if(!b)return;range=b.dataset.r;
+    document.querySelectorAll('#tabs button').forEach(x=>x.setAttribute('aria-pressed',x===b));draw()};
+  draw();
+}else{
+  $('#chartbox').hidden=true;
+  $('#ins').textContent=D.show.chart?'نمودار مصرف روزانه پس از چند ساعت استفاده فعال می‌شود':'';
+}
+
+/* اتصال سریع بر اساس سیستم‌عامل */
+const PL={ios:'iOS',android:'اندروید',windows:'ویندوز',mac:'مک',linux:'لینوکس'};
+const ua=navigator.userAgent;
+const mine=/iPhone|iPad/.test(ua)?'ios':/Android/.test(ua)?'android':/Windows/.test(ua)?'windows':/Mac/.test(ua)?'mac':/Linux/.test(ua)?'linux':'android';
+const deep=a=>{
+  if(!a.add)return a.dl||'#';
+  if(a.fmt==='sr'){let b;try{b=btoa(unescape(encodeURIComponent(D.sub)))}catch(e){b=''}return a.add+b+'?remark='+encodeURIComponent(D.user||D.brand||'')}
+  return a.add+encodeURIComponent(D.sub);
+};
+const mineApps=D.apps[mine]||[];
+const first=mineApps.find(a=>a.add)||mineApps[0];
+if(first){
+  $('#cta').textContent='افزودن به '+first.n;
+  $('#cta').href=deep(first);
+  $('#gop').textContent='برنامه‌ی پیشنهادی برای '+PL[mine]+(first.add?'، اشتراک خودکار اضافه می‌شود.':'، بعد از نصب لینک اشتراک را در برنامه وارد کنید.');
+}else{
+  $('#cta').textContent='کپی لینک اشتراک';
+  $('#cta').href='#';
+  $('#cta').onclick=e=>{e.preventDefault();copy(D.sub,'لینک اشتراک کپی شد')};
+  $('#gop').textContent='لینک اشتراک را کپی کنید و در برنامه‌ی VPN خود وارد کنید.';
+}
+$('#sublink').textContent=D.sub;
+$('#copysub').onclick=e=>copy(D.sub,'لینک اشتراک کپی شد',e.currentTarget);
+function showQR(src,name){
+  const box=$('#qb');box.textContent='';
+  const img=new Image();img.alt='QR';img.src=src;
+  img.onerror=()=>{box.textContent='QR در دسترس نیست'};
+  box.appendChild(img);
+  $('#qn').textContent=name;$('#qr').showModal();
+}
+$('#qclose').onclick=()=>$('#qr').close();
+if(D.show.qr){$('#subqr').hidden=false;$('#subqr').onclick=()=>showQR(D.sub+'/qr.png','لینک اشتراک')}
+
+/* کانفیگ‌ها */
+if(D.show.configs&&D.configs.length){
+  $('#cfgsec').hidden=false;
+  $('#copyall').onclick=e=>copy(D.configs.map(c=>c.u).join('\n'),'همه کانفیگ‌ها کپی شد',e.currentTarget);
+  $('#cfg').innerHTML=D.configs.map((c,i)=>`<li><span class="f">${esc(c.f)}</span><span class="n">${esc(c.n)}</span><span class="tag">${esc(c.p)}</span>${D.show.qr?`<button class="sm" data-q="${i}">QR</button>`:''}<button class="sm" data-c="${i}">کپی</button></li>`).join('');
+  $('#cfg').onclick=e=>{
+    const b=e.target.closest('button');if(!b)return;
+    if(b.dataset.c!==undefined)copy(D.configs[b.dataset.c].u,'کپی شد',b);
+    if(b.dataset.q!==undefined){const c=D.configs[b.dataset.q];showQR(D.sub+'/qr.png?i='+b.dataset.q,c.n)}
+  };
+}
+
+/* برنامه‌ها */
+let plat=mine;
+function apps(){
+  const list=D.apps[plat]||[];
+  $('#apps').innerHTML=`<div class="pt">${Object.keys(D.apps).map(k=>`<button data-p="${esc(k)}" aria-pressed="${k===plat}">${esc(PL[k]||k)}${k===mine?'<em>سیستم شما</em>':''}</button>`).join('')}</div>`+
+  (list.length?`<div class="al">${list.map(a=>`<div class="ap${a.rec?' rec':''}"><div class="at"><b>${esc(a.n)}</b>${a.rec?'<span class="badge">پیشنهادی</span>':''}</div><p>${esc(a.d)}</p><div class="ab">${a.add?`<a class="sm k" href="${esc(deep(a))}">افزودن</a>`:''}${a.dl?`<a class="sm" href="${esc(a.dl)}" target="_blank" rel="noopener noreferrer">دانلود</a>`:''}</div></div>`).join('')}</div>`:'<p class="empty">برای این سیستم‌عامل برنامه‌ای معرفی نشده است.</p>');
+}
+if(D.show.apps){
+  $('#appsec').hidden=false;
+  $('#apps').onclick=e=>{const b=e.target.closest('[data-p]');if(b){plat=b.dataset.p;apps()}};
+  apps();
+}
+
+/* راهنمای عیب‌یابی */
+if(D.show.faq&&D.faq.length){
+  $('#faqsec').hidden=false;
+  $('#faq').innerHTML=D.faq.map(f=>`<details><summary><span>${esc(f[0])}</span></summary><p class="faqp">${esc(f[1])}</p></details>`).join('');
+}
+
+/* پایین صفحه */
+if(D.footer){$('#ftext').textContent=D.footer;$('#ftext').hidden=false}
+if(D.support){$('#support').href=D.support;$('#support').hidden=false}
+if(D.footer||D.support)$('#foot').hidden=false;
+
+/* دکمه شناور اتصال وقتی دکمه اصلی از صفحه رد شد */
+$('#cta2').textContent=$('#cta').textContent;$('#cta2').href=$('#cta').href;
+if(!first){$('#cta2').onclick=$('#cta').onclick}
+try{new IntersectionObserver(([e])=>$('#dock').classList.toggle('show',!e.isIntersecting&&e.boundingClientRect.top<0)).observe($('#cta'))}catch(_){}
+
+/* حالت پیش‌نمایش پنل ادمین: بدون رفرش، برندینگ و بخش‌های قابل‌نمایش را زنده عوض می‌کند. */
+if(previewMode){
+  const applyPreview=(b)=>{
+    b=b||{};
+    const brand=b.brand||'ShopVPN';
+    $('#brand').textContent=brand; $('#brand').hidden=false;
+    $('#uname').textContent='سرویس نمونه';
+    const logo=b.logo||'';
+    if(logo){$('#logo').src=logo;$('#logo').hidden=false;$('#logo').onerror=()=>$('#logo').hidden=true}else $('#logo').hidden=true;
+    if(b.theme==='light'||b.theme==='dark') root.dataset.theme=b.theme; else delete root.dataset.theme;
+    const notes=$('#notes'); notes.innerHTML=b.notice?`<div class="note"><span>🔔</span><span>${esc(b.notice)}</span></div>`:'';
+    const show=Object.assign({configs:true,chart:true,qr:true,apps:true,faq:true},b.show||{});
+    $('#cfgsec').hidden=!show.configs;
+    $('#chartbox').hidden=!show.chart;
+    $('#appsec').hidden=!show.apps;
+    $('#faqsec').hidden=!show.faq;
+    $('#subqr').hidden=!show.qr;
+    document.querySelectorAll('[data-q]').forEach(el=>el.hidden=!show.qr);
+    if(show.qr) $('#subqr').onclick=()=>showQR(D.sub,'لینک اشتراک');
+    const support=b.support||'';
+    $('#support').hidden=!support; if(support) $('#support').href=support;
+    const footer=b.footer||'';
+    $('#ftext').hidden=!footer; $('#ftext').textContent=footer;
+    $('#foot').hidden=!(support||footer);
+  };
+  window.addEventListener('message',ev=>{if(!ev.data||ev.data.type!=='shopvpn-sub-page-preview')return;applyPreview(ev.data.payload||{})});
+  applyPreview({brand:D.brand,logo:D.logo,notice:D.notice,support:D.support,footer:D.footer,theme:D.theme,show:D.show});
+}
+</script>
+</body>
+</html>

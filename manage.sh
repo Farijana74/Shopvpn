@@ -1,0 +1,3632 @@
+#!/bin/bash
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+# ============================================================================
+# Text management panel for the V2Ray config sales bot
+# پنل مدیریت متنی بات فروش کانفیگ V2Ray
+#
+# Run directly (no prior install):
+#   bash <(curl -fsSL https://raw.githubusercontent.com/USERNAME/v2ray-bot/main/manage.sh)
+#
+# Run after install:
+#   bash ~/Shopvpn-independent/manage.sh
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Customizable settings / تنظیمات قابل شخصی‌سازی
+# ---------------------------------------------------------------------------
+GITHUB_OWNER="${SHOPVPN_REPO_OWNER:-farijana74}"
+GITHUB_REPO="${SHOPVPN_REPO_NAME:-Shopvpn}"
+GITHUB_BRANCH="${SHOPVPN_REPO_BRANCH:-main}"
+REPO_URL="${SHOPVPN_REPO_URL:-https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git}"
+INSTALL_DIR="${SHOPVPN_INSTALL_DIR:-$HOME/Shopvpn-independent}"
+SERVICE_NAME="${SHOPVPN_SERVICE_NAME:-shopvpn-independent}"
+CLI_NAME="${SHOPVPN_CLI_NAME:-shopvpn-independent}"
+export SHOPVPN_INSTALL_DIR="$INSTALL_DIR" SHOPVPN_SERVICE_NAME="$SERVICE_NAME" SHOPVPN_CLI_NAME="$CLI_NAME"
+export GIT_TERMINAL_PROMPT=0
+
+# ---------------------------------------------------------------------------
+# Fetch/update project code without ever hanging on a git username/password
+# prompt. Some server IPs (common on cheap VPS providers) get blocked or
+# rate-limited by GitHub for the git-over-https protocol, even for public
+# repos, and git falls back to an interactive credential prompt that just
+# hangs a headless install. We try git first (fast, incremental); if it
+# fails for any reason we fall back to downloading the plain tarball, which
+# uses a different endpoint (codeload.github.com) and is not subject to
+# that block.
+# دریافت/آپدیت کد پروژه بدون گیر کردن روی پرامپت یوزرنیم/پسورد گیت.
+# ---------------------------------------------------------------------------
+fetch_project_code() {
+    local target_dir="$1"
+    local ok=0
+
+    if [ -d "$target_dir/.git" ]; then
+        if git -C "$target_dir" pull --quiet 2>/dev/null; then ok=1; fi
+    elif [ ! -f "$target_dir/main.py" ]; then
+        if git clone --quiet "$REPO_URL" "$target_dir" 2>/dev/null; then ok=1; fi
+    fi
+
+    if [ "$ok" = "1" ]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}$(t git_blocked_fallback)${RESET}"
+    local tmp_tar tmp_dir
+    tmp_tar=$(mktemp)
+    tmp_dir=$(mktemp -d)
+    if ! curl -fsSL "https://codeload.github.com/${GITHUB_OWNER}/${GITHUB_REPO}/tar.gz/refs/heads/${GITHUB_BRANCH}" -o "$tmp_tar"; then
+        echo -e "${RED}$(t archive_download_failed)${RESET}"
+        rm -f "$tmp_tar"; rm -rf "$tmp_dir"
+        return 1
+    fi
+    tar -xzf "$tmp_tar" -C "$tmp_dir" --strip-components=1
+    rm -f "$tmp_tar"
+    mkdir -p "$target_dir"
+    if ! command -v rsync > /dev/null 2>&1; then
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rsync > /dev/null
+    fi
+    rsync -a --exclude='.env' --exclude='*.db' --exclude='*.db-journal' \
+        --exclude='*.sqlite3' --exclude='venv' --exclude='.git' --exclude='backups' \
+        "$tmp_dir"/ "$target_dir"/
+    rm -rf "$target_dir/.git" 2>/dev/null
+    rm -rf "$tmp_dir"
+    return 0
+}
+
+# Version is computed automatically from git (commit count + short hash)
+# so that every update (git pull) shows the correct running version.
+# It's read from the VERSION file (bumped only for real, notable changes,
+# not for every raw commit). The short git hash is shown next to it for
+# exact build identification. If VERSION is missing, falls back to the
+# old commit-count method so the banner is never empty.
+get_version() {
+    local base hash
+    if [ -f "$INSTALL_DIR/VERSION" ]; then
+        base="v$(cat "$INSTALL_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+    elif [ -d "$INSTALL_DIR/.git" ]; then
+        base="v$(git -C "$INSTALL_DIR" rev-list --count HEAD 2>/dev/null)"
+    else
+        base="v1.0"
+    fi
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        hash=$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null)
+        [ -n "$hash" ] && base="${base} (${hash})"
+    fi
+    echo "$base"
+}
+
+# Avoid apt getting stuck behind interactive prompts (e.g. needrestart)
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
+# ---------------------------------------------------------------------------
+# Colors / رنگ‌ها
+# ---------------------------------------------------------------------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+UI_WIDTH=60
+
+# ---------------------------------------------------------------------------
+# Language / زبان
+# Default language is English. It can be switched to Persian from the menu
+# ([L]) and the choice is remembered for next time.
+# ---------------------------------------------------------------------------
+LANG_FILE="$HOME/.shopvpn_independent_manage_lang"
+APP_LANG="en"
+if [ -f "$LANG_FILE" ]; then
+    _saved_lang=$(tr -d '[:space:]' < "$LANG_FILE" 2>/dev/null)
+    [ "$_saved_lang" = "fa" ] && APP_LANG="fa"
+fi
+export SHOPVPN_UI_LANG="$APP_LANG"
+
+toggle_lang() {
+    if [ "$APP_LANG" = "en" ]; then
+        APP_LANG="fa"
+    else
+        APP_LANG="en"
+    fi
+    echo "$APP_LANG" > "$LANG_FILE" 2>/dev/null
+    export SHOPVPN_UI_LANG="$APP_LANG"
+}
+
+declare -A MSG_EN
+declare -A MSG_FA
+
+# Status / وضعیت
+MSG_EN[not_installed]="Not installed"
+MSG_FA[not_installed]="نصب نشده"
+MSG_EN[service_running]="Running"
+MSG_FA[service_running]="در حال اجرا"
+MSG_EN[service_stopped]="Stopped"
+MSG_FA[service_stopped]="متوقف"
+MSG_EN[lbl_bot]="Bot"
+MSG_FA[lbl_bot]="بات"
+MSG_EN[lbl_miniapp]="Mini App"
+MSG_FA[lbl_miniapp]="مینی‌اپ"
+MSG_EN[lbl_panel]="Admin Panel"
+MSG_FA[lbl_panel]="پنل مدیریت"
+MSG_EN[lbl_api]="Integration API"
+MSG_FA[lbl_api]="API یکپارچه‌سازی"
+MSG_EN[subtitle]="BOT MANAGEMENT ENGINE"
+MSG_FA[subtitle]="موتور مدیریت بات"
+
+MSG_EN[sec_setup]="BOT SETUP"
+MSG_FA[sec_setup]="نصب و به‌روزرسانی"
+MSG_EN[sec_service]="SERVICE CONTROL"
+MSG_FA[sec_service]="کنترل سرویس"
+MSG_EN[sec_store]="STATS & CONFIG"
+MSG_FA[sec_store]="آمار و تنظیمات"
+MSG_EN[sec_webstore]="WEB SHOP"
+MSG_FA[sec_webstore]="فروشگاه وب"
+MSG_EN[sec_miniapp]="MINI APP"
+MSG_FA[sec_miniapp]="مینی‌اپ"
+MSG_EN[sec_panel]="ADMIN PANEL"
+MSG_FA[sec_panel]="پنل مدیریت وب"
+MSG_EN[sec_domains]="DOMAINS & PROXY"
+MSG_FA[sec_domains]="دامنه و پروکسی"
+MSG_EN[sec_api]="INTEGRATION API"
+MSG_FA[sec_api]="API یکپارچه‌سازی"
+MSG_EN[sec_advanced]="ADVANCED"
+MSG_FA[sec_advanced]="پیشرفته"
+MSG_EN[sec_translation]="AUTO-TRANSLATION"
+MSG_FA[sec_translation]="ترجمه خودکار"
+MSG_EN[pause_prompt]="Press Enter to return to the menu..."
+MSG_FA[pause_prompt]="برای بازگشت به منو، Enter را بزن..."
+
+# install_bot
+MSG_EN[git_blocked_fallback]="⚠️  Git access was blocked, downloading via the direct archive..."
+MSG_FA[git_blocked_fallback]="⚠️  دسترسی git مسدود شد، در حال دریافت از طریق آرشیو مستقیم..."
+MSG_EN[archive_download_failed]="❌ Downloading the project archive failed too. Check the server's internet connection."
+MSG_FA[archive_download_failed]="❌ دانلود آرشیو پروژه هم ناموفق بود. اتصال اینترنت سرور را بررسی کن."
+MSG_EN[install_translation_runtime]="🌍 Installing the local translation engine and language models..."
+MSG_FA[install_translation_runtime]="🌍 نصب خودکار موتور ترجمه محلی و مدل‌های زبان..."
+MSG_EN[translation_install_incomplete]="⚠️ Translation engine install did not complete; the bot keeps running and will retry on the next update."
+MSG_FA[translation_install_incomplete]="⚠️ نصب موتور ترجمه کامل نشد؛ بات ادامه می‌دهد و در آپدیت بعدی دوباره تلاش می‌کند."
+MSG_EN[installing_prereqs]="📦 Checking and installing prerequisites (git, python3, pip, venv)..."
+MSG_FA[installing_prereqs]="📦 بررسی و نصب پیش‌نیازها (git, python3, pip, venv)..."
+MSG_EN[already_installed_pulling]="⚠️ Project is already installed. Fetching the latest version..."
+MSG_FA[already_installed_pulling]="⚠️ پروژه از قبل نصب شده است. در حال دریافت آخرین نسخه..."
+MSG_EN[cloning_project]="📥 Cloning the project from GitHub..."
+MSG_FA[cloning_project]="📥 دریافت پروژه از گیت‌هاب..."
+MSG_EN[preparing_python]="🐍 Preparing the Python environment..."
+MSG_FA[preparing_python]="🐍 آماده‌سازی محیط پایتون..."
+MSG_EN[enter_bot_info]="🔑 Enter the bot info:"
+MSG_FA[enter_bot_info]="🔑 اطلاعات بات را وارد کن:"
+MSG_EN[prompt_bot_token]="Bot token (from BotFather): "
+MSG_FA[prompt_bot_token]="توکن بات (از BotFather): "
+MSG_EN[prompt_owner_id]="Admin numeric ID: "
+MSG_FA[prompt_owner_id]="آیدی عددی ادمین: "
+MSG_EN[env_created]="✅ .env file created."
+MSG_FA[env_created]="✅ فایل .env ساخته شد."
+MSG_EN[env_exists]="✅ .env file already exists, left unchanged."
+MSG_FA[env_exists]="✅ فایل .env از قبل موجود است، دست‌نخورده باقی می‌ماند."
+MSG_EN[creating_service]="⚙️ Creating the systemd service..."
+MSG_FA[creating_service]="⚙️ ساخت سرویس systemd..."
+MSG_EN[install_done]="✅ Installation complete, the bot is running."
+MSG_FA[install_done]="✅ نصب کامل شد و بات در حال اجراست."
+MSG_EN[install_failed]="⚠️ Bot did not start. To check the error: sudo journalctl -u %s -n 50 --no-pager"
+MSG_FA[install_failed]="⚠️ بات اجرا نشد. برای بررسی خطا: sudo journalctl -u %s -n 50 --no-pager"
+
+MSG_EN[install_header]="Installing ShopVPN"
+MSG_FA[install_header]="نصب ShopVPN"
+MSG_EN[install_fetch]="Downloading project files"
+MSG_FA[install_fetch]="دریافت فایل‌های پروژه"
+MSG_EN[install_python]="Preparing Python environment and packages"
+MSG_FA[install_python]="آماده‌سازی محیط پایتون و نصب پکیج‌ها"
+MSG_EN[install_env]="Configuring bot settings"
+MSG_FA[install_env]="تنظیم اطلاعات بات"
+MSG_EN[install_translation]="Installing local translation engine and language models"
+MSG_FA[install_translation]="نصب موتور ترجمه محلی و مدل‌های زبان"
+MSG_EN[install_service]="Creating and starting the system service"
+MSG_FA[install_service]="ساخت و راه‌اندازی سرویس دائمی"
+MSG_EN[install_done_hint]="Everything is ready. The bot is waking up..."
+MSG_FA[install_done_hint]="همه‌چیز آماده است؛ بات دارد از خواب بیدار می‌شود..."
+
+
+# update_bot / update_miniapp
+MSG_EN[bot_not_installed]="⛔️ Bot not installed yet. Run option 1 (install) first."
+MSG_FA[bot_not_installed]="⛔️ بات هنوز نصب نشده. اول گزینه ۱ (نصب) را بزن."
+MSG_EN[fetching_latest]="🔄 Fetching latest changes from GitHub"
+MSG_FA[fetching_latest]="🔄 دریافت آخرین تغییرات از گیت‌هاب"
+MSG_EN[updating_packages]="🐍 Updating Python packages"
+MSG_EN[updating_translation]="🌍 Updating local translation runtime/models"
+MSG_FA[updating_translation]="🌍 آپدیت موتور و مدل‌های ترجمه محلی"
+MSG_FA[updating_packages]="🐍 آپدیت پکیج‌های پایتون"
+MSG_EN[restarting_bot_service]="♻️ Restarting bot service"
+MSG_FA[restarting_bot_service]="♻️ ری‌استارت سرویس بات"
+MSG_EN[update_bot_header]="Updating Bot"
+MSG_FA[update_bot_header]="آپدیت بات"
+MSG_EN[update_done]="✅ Bot updated."
+MSG_FA[update_done]="✅ آپدیت بات انجام شد."
+MSG_EN[miniapp_not_installed]="⛔️ Mini App not installed yet. Run option 15 (setup Mini App) first."
+MSG_FA[miniapp_not_installed]="⛔️ مینی‌اپ هنوز نصب نشده. اول گزینه ۱۵ (نصب/تنظیم مینی‌اپ) را بزن."
+MSG_EN[restarting_miniapp_service]="♻️ Restarting Mini App service"
+MSG_FA[restarting_miniapp_service]="♻️ ری‌استارت سرویس مینی‌اپ"
+MSG_EN[update_miniapp_header]="Updating Mini App"
+MSG_FA[update_miniapp_header]="آپدیت مینی‌اپ"
+MSG_EN[miniapp_update_done]="✅ Mini App updated."
+MSG_FA[miniapp_update_done]="✅ آپدیت مینی‌اپ انجام شد."
+
+# uninstall_bot
+MSG_EN[uninstall_warning]="⚠️ This will completely remove the bot service."
+MSG_FA[uninstall_warning]="⚠️ این کار سرویس بات را کاملاً حذف می‌کند."
+MSG_EN[confirm_prompt]="Are you sure? (type yes to confirm): "
+MSG_FA[confirm_prompt]="آیا مطمئن هستی؟ (yes برای تایید): "
+MSG_EN[cancelled]="Cancelled."
+MSG_FA[cancelled]="لغو شد."
+MSG_EN[service_removed]="✅ Service removed."
+MSG_FA[service_removed]="✅ سرویس حذف شد."
+MSG_EN[confirm_delete_files]="Also delete the project files (including the customer database)? (type yes to confirm): "
+MSG_FA[confirm_delete_files]="آیا فایل‌های پروژه (شامل دیتابیس مشتری‌ها) هم پاک شود؟ (yes برای تایید): "
+MSG_EN[files_removed]="✅ Project files removed too."
+MSG_FA[files_removed]="✅ فایل‌های پروژه هم حذف شدند."
+MSG_EN[files_kept]="Project files kept at %s."
+MSG_FA[files_kept]="فایل‌های پروژه در %s باقی ماندند."
+
+# view_logs / restart / stop
+MSG_EN[logs_exit_hint]="To exit live log view: Ctrl+C"
+MSG_FA[logs_exit_hint]="برای خروج از حالت لاگ زنده: Ctrl+C"
+MSG_EN[bot_restarted]="✅ Bot restarted."
+MSG_FA[bot_restarted]="✅ بات ری‌استارت شد."
+MSG_EN[bot_stopped]="⛔️ Bot stopped."
+MSG_FA[bot_stopped]="⛔️ بات متوقف شد."
+
+# show_stats
+MSG_EN[no_database]="No database found."
+MSG_FA[no_database]="دیتابیسی پیدا نشد."
+
+# edit_env
+MSG_EN[prompt_new_token]="New bot token (press Enter to keep current): "
+MSG_FA[prompt_new_token]="توکن جدید بات (اگر تغییری نیست Enter بزن): "
+MSG_EN[prompt_new_owner]="New admin numeric ID (press Enter to keep current): "
+MSG_FA[prompt_new_owner]="آیدی عددی جدید ادمین (اگر تغییری نیست Enter بزن): "
+MSG_EN[saved_restarting]="✅ Saved. Restarting..."
+MSG_FA[saved_restarting]="✅ ذخیره شد. در حال ری‌استارت..."
+MSG_EN[env_dir_missing]="Install directory not found: %s"
+MSG_FA[env_dir_missing]="پوشه نصب پیدا نشد: %s"
+MSG_EN[invalid_token_fmt]="Invalid token format. Expected like 123456789:AAxxxxxxxx (no spaces)."
+MSG_FA[invalid_token_fmt]="فرمت توکن نامعتبر است. باید مثل 123456789:AAxxxxxxxx باشد (بدون فاصله)."
+MSG_EN[token_rejected]="Telegram rejected this token (getMe failed). Nothing was changed."
+MSG_FA[token_rejected]="تلگرام این توکن را رد کرد (getMe ناموفق). هیچ تغییری اعمال نشد."
+MSG_EN[invalid_owner_fmt]="Admin ID must be a numeric Telegram ID."
+MSG_FA[invalid_owner_fmt]="آیدی ادمین باید یک عدد (آیدی عددی تلگرام) باشد."
+MSG_EN[owner_change_warn]="Changing the admin ID rebuilds the admins table: all other admins will be removed on restart. Continue? [y/N]: "
+MSG_FA[owner_change_warn]="تغییر آیدی ادمین جدول ادمین‌ها را بازسازی می‌کند: بقیه ادمین‌ها بعد از ری‌استارت حذف می‌شوند. ادامه می‌دهی؟ [y/N]: "
+MSG_EN[env_backup_done]="Backup saved: %s"
+MSG_FA[env_backup_done]="بکاپ ذخیره شد: %s"
+MSG_EN[env_service_failed]="Service %s is not active after restart. Last log lines:"
+MSG_FA[env_service_failed]="سرویس %s بعد از ری‌استارت فعال نیست. آخرین خطوط لاگ:"
+
+# restore_backup_cli (new-server migration wizard)
+MSG_EN[prompt_backup_path]="Full path of the backup .db file already placed on this server (e.g. /root/bot_database.db): "
+MSG_FA[prompt_backup_path]="مسیر کامل فایل بکاپ .db که از قبل روی همین سرور گذاشتی (مثلاً /root/bot_database.db): "
+MSG_EN[backup_file_missing]="⛔️ File not found at this path."
+MSG_FA[backup_file_missing]="⛔️ فایلی در این مسیر پیدا نشد."
+MSG_EN[validating_backup]="🔎 Validating the backup file..."
+MSG_FA[validating_backup]="🔎 بررسی صحت فایل بکاپ..."
+MSG_EN[venv_missing]="⛔️ Python venv not found. Install the bot first (option 1)."
+MSG_FA[venv_missing]="⛔️ محیط مجازی پایتون پیدا نشد. اول بات را نصب کن (گزینه ۱)."
+MSG_EN[backup_invalid]="⛔️ This file is not a valid SQLite database. Cancelled."
+MSG_FA[backup_invalid]="⛔️ این فایل یک دیتابیس SQLite معتبر نیست. لغو شد."
+MSG_EN[restore_warning]="⚠️ This will completely replace the current database with the uploaded backup (a safety copy of the current one is kept)."
+MSG_FA[restore_warning]="⚠️ این کار دیتابیس فعلی را کاملاً با فایل بکاپ جایگزین می‌کند (یک نسخه‌ی امن از وضعیت فعلی هم نگه داشته می‌شود)."
+MSG_EN[stopping_services_for_restore]="⏸ Stopping services to safely replace the database..."
+MSG_FA[stopping_services_for_restore]="⏸ توقف سرویس‌ها برای جایگزینی امن دیتابیس..."
+MSG_EN[restoring_backup]="♻️ Restoring the database..."
+MSG_FA[restoring_backup]="♻️ در حال بازیابی دیتابیس..."
+MSG_EN[restore_failed]="⛔️ Restore failed: %s\nServices have been started back up unchanged."
+MSG_FA[restore_failed]="⛔️ بازیابی ناموفق بود: %s\nسرویس‌ها بدون تغییر دوباره روشن شدند."
+MSG_EN[restore_done]="✅ Database restored. A safety copy of the previous one was saved as: %s"
+MSG_FA[restore_done]="✅ دیتابیس بازیابی شد. یک نسخه‌ی امن از دیتابیس قبلی با نام «%s» ذخیره شد."
+MSG_EN[prompt_had_miniapp]="Was the Mini App enabled on the old server? Set up a new domain for it now on this server? (y/n): "
+MSG_FA[prompt_had_miniapp]="آیا مینی‌اپ روی سرور قبلی فعال بود؟ الان یک دامنه‌ی جدید برایش روی این سرور تنظیم شود؟ (y/n): "
+MSG_EN[prompt_had_panel]="Was the standalone Admin Panel enabled on the old server? Set up a new domain for it now on this server? (y/n): "
+MSG_FA[prompt_had_panel]="آیا پنل مدیریت وب مستقل روی سرور قبلی فعال بود؟ الان یک دامنه‌ی جدید برایش روی این سرور تنظیم شود؟ (y/n): "
+MSG_EN[restore_flow_done]="🎉 Migration to the new server finished."
+MSG_FA[restore_flow_done]="🎉 انتقال به سرور جدید تمام شد."
+
+# setup_miniapp / setup_admin_panel (shared)
+MSG_EN[miniapp_dir_missing]="⛔️ miniapp folder not found. Update the project code first (git pull/update)."
+MSG_FA[miniapp_dir_missing]="⛔️ پوشه miniapp پیدا نشد. اول باید کد مینی‌اپ را داخل پروژه بیاوری (git pull/آپدیت)."
+MSG_EN[panel_dir_missing]="⛔️ admin_panel folder not found. Update the project code first (option 2)."
+MSG_FA[panel_dir_missing]="⛔️ پوشه admin_panel پیدا نشد. اول باید کد پروژه را آپدیت کنی (گزینه ۲)."
+MSG_EN[prompt_domain_miniapp]="Enter the domain pointing to this server's IP (e.g. shop.example.com): "
+MSG_FA[prompt_domain_miniapp]="دامنه‌ای که به IP همین سرور اشاره می‌کند را وارد کن (مثلاً shop.example.com): "
+MSG_EN[prompt_domain_panel]="Enter the domain pointing to this server's IP (e.g. panel.example.com): "
+MSG_FA[prompt_domain_panel]="دامنه‌ای که به IP همین سرور اشاره می‌کند را وارد کن (مثلاً panel.example.com): "
+MSG_EN[domain_empty]="Domain is empty, cancelled."
+MSG_FA[domain_empty]="دامنه خالی است، لغو شد."
+MSG_EN[checking_dns]="🔎 Checking domain DNS..."
+MSG_FA[checking_dns]="🔎 بررسی DNS دامنه..."
+MSG_EN[dns_mismatch_warn]="⚠️ Warning: the domain does not point to this server's IP (%s) (currently %s)."
+MSG_FA[dns_mismatch_warn]="⚠️ هشدار: دامنه به IP این سرور (%s) اشاره نمی‌کند (الان %s است)."
+MSG_EN[continue_prompt]="Continue anyway? (type yes to continue): "
+MSG_FA[continue_prompt]="همچنان ادامه بدهم؟ (yes برای ادامه): "
+MSG_EN[installing_nginx]="📦 Installing nginx and certbot..."
+MSG_FA[installing_nginx]="📦 نصب nginx و certbot..."
+MSG_EN[installing_miniapp_pkgs]="🐍 Installing Mini App packages (fastapi, uvicorn)..."
+MSG_FA[installing_miniapp_pkgs]="🐍 نصب پکیج‌های مینی‌اپ (fastapi, uvicorn)..."
+MSG_EN[installing_panel_pkgs]="🐍 Installing admin panel packages (fastapi, uvicorn)..."
+MSG_FA[installing_panel_pkgs]="🐍 نصب پکیج‌های پنل (fastapi, uvicorn)..."
+MSG_EN[creating_miniapp_service]="⚙️ Creating the systemd service for the Mini App backend..."
+MSG_FA[creating_miniapp_service]="⚙️ ساخت سرویس systemd برای بک‌اند مینی‌اپ..."
+MSG_EN[creating_panel_service]="⚙️ Creating the systemd service for the admin panel..."
+MSG_FA[creating_panel_service]="⚙️ ساخت سرویس systemd برای پنل مدیریت وب..."
+MSG_EN[configuring_nginx]="🌐 Configuring nginx for %s..."
+MSG_FA[configuring_nginx]="🌐 تنظیم nginx برای %s..."
+MSG_EN[nginx_error]="⛔️ nginx config has an error. Details: %s"
+MSG_FA[nginx_error]="⛔️ کانفیگ nginx خطا دارد. جزئیات: %s"
+MSG_EN[getting_ssl]="🔐 Obtaining a free SSL certificate (Let's Encrypt)..."
+MSG_FA[getting_ssl]="🔐 دریافت گواهی SSL رایگان (Let's Encrypt)..."
+MSG_EN[ssl_failed]="⛔️ Getting the SSL certificate failed. Make sure the domain correctly points to this server and ports 80/443 are open."
+MSG_FA[ssl_failed]="⛔️ دریافت SSL ناموفق بود. مطمئن شو دامنه درست به این سرور اشاره می‌کند و پورت 80/443 باز است."
+MSG_EN[saving_miniapp_url]="📝 Saving the Mini App URL in .env..."
+MSG_FA[saving_miniapp_url]="📝 ثبت آدرس مینی‌اپ در .env..."
+MSG_EN[miniapp_ready]="✅ Mini App is ready: %s"
+MSG_FA[miniapp_ready]="✅ مینی‌اپ آماده است: %s"
+MSG_EN[miniapp_button_hint]="The «✨ Store Mini App» button will now appear in the bot menu."
+MSG_FA[miniapp_button_hint]="دکمه «✨ مینی‌اپ فروشگاه» از الان در منوی بات دیده می‌شود."
+MSG_EN[panel_ready]="✅ Admin panel is ready: %s"
+MSG_FA[panel_ready]="✅ پنل مدیریت آماده است: %s"
+MSG_EN[panel_login_hint]="Log in with the username/password you created."
+MSG_FA[panel_login_hint]="با یوزرنیم/پسوردی که ساختی وارد شو."
+MSG_EN[restarting_bot_for_panel_url]="🔁 Restarting the main bot so it picks up the panel address (ADMIN_PANEL_URL)..."
+MSG_FA[restarting_bot_for_panel_url]="🔁 ری‌استارت بات اصلی تا آدرس پنل (ADMIN_PANEL_URL) را بشناسد..."
+MSG_EN[enter_owner_account]="🔑 Create the panel owner account:"
+MSG_FA[enter_owner_account]="🔑 حساب مالک (owner) پنل را بساز:"
+MSG_EN[prompt_username]="Username: "
+MSG_FA[prompt_username]="یوزرنیم: "
+MSG_EN[prompt_password]="Password (min 8 characters): "
+MSG_FA[prompt_password]="پسورد (حداقل ۸ کاراکتر): "
+
+# change_admin_panel_credentials
+MSG_EN[no_panel_admins_found]="⛔️ No admin panel accounts found yet. Run option 18 (setup admin panel) first."
+MSG_FA[no_panel_admins_found]="⛔️ هنوز هیچ حساب پنلی ساخته نشده. اول گزینه ۱۸ (نصب/تنظیم پنل مدیریت) را بزن."
+MSG_EN[existing_admins_header]="👤 Existing panel accounts:"
+MSG_FA[existing_admins_header]="👤 حساب‌های موجود پنل:"
+MSG_EN[prompt_current_username]="Current username: "
+MSG_FA[prompt_current_username]="یوزرنیم فعلی: "
+MSG_EN[prompt_new_username]="New username (leave empty to keep it unchanged): "
+MSG_FA[prompt_new_username]="یوزرنیم جدید (خالی بگذار تا همان قبلی بماند): "
+MSG_EN[prompt_new_password]="New password (min 8 characters): "
+MSG_FA[prompt_new_password]="پسورد جدید (حداقل ۸ کاراکتر): "
+MSG_EN[change_admin_creds_cancelled]="Current username or new password is empty, cancelled."
+MSG_FA[change_admin_creds_cancelled]="یوزرنیم فعلی یا پسورد جدید خالی است، لغو شد."
+
+# remove_miniapp
+MSG_EN[remove_miniapp_warn]="⚠️ This will remove the Mini App service and its nginx config (the SSL certificate is kept)."
+MSG_FA[remove_miniapp_warn]="⚠️ این کار سرویس و کانفیگ nginx مینی‌اپ را حذف می‌کند (گواهی SSL نگه داشته می‌شود)."
+MSG_EN[prompt_domain_used_miniapp]="What domain did you use for the Mini App? (to remove its nginx config): "
+MSG_FA[prompt_domain_used_miniapp]="دامنه‌ای که برای مینی‌اپ استفاده کرده بودی چه بود؟ (برای حذف کانفیگ nginx): "
+MSG_EN[miniapp_removed]="✅ Mini App removed."
+MSG_FA[miniapp_removed]="✅ مینی‌اپ حذف شد."
+
+# update_admin_panel / remove_admin_panel
+MSG_EN[panel_not_installed_yet]="⛔️ Admin panel not installed yet. Run option 18 (setup admin panel) first."
+MSG_FA[panel_not_installed_yet]="⛔️ پنل مدیریت هنوز نصب نشده. اول گزینه ۱۸ (نصب/تنظیم پنل مدیریت) را بزن."
+MSG_EN[restarting_panel_service]="♻️ Restarting admin panel service"
+MSG_FA[restarting_panel_service]="♻️ ری‌استارت سرویس پنل مدیریت"
+MSG_EN[update_panel_header]="Updating Admin Panel"
+MSG_FA[update_panel_header]="آپدیت پنل مدیریت"
+MSG_EN[panel_update_done]="✅ Admin panel updated."
+MSG_FA[panel_update_done]="✅ آپدیت پنل مدیریت انجام شد."
+MSG_EN[remove_panel_warn]="⚠️ This will remove the admin panel service and its nginx config (SSL certificate is kept; panel accounts in the database are untouched)."
+MSG_FA[remove_panel_warn]="⚠️ این کار سرویس و کانفیگ nginx پنل مدیریت را حذف می‌کند (گواهی SSL نگه داشته می‌شود؛ حساب‌های پنل در دیتابیس دست‌نخورده می‌مانند)."
+MSG_EN[prompt_domain_used_panel]="What domain did you use for the admin panel? (to remove its nginx config): "
+MSG_FA[prompt_domain_used_panel]="دامنه‌ای که برای پنل مدیریت استفاده کرده بودی چه بود؟ (برای حذف کانفیگ nginx): "
+MSG_EN[panel_removed]="✅ Admin panel removed."
+MSG_FA[panel_removed]="✅ پنل مدیریت حذف شد."
+
+# setup_vapid_keys
+MSG_EN[admin_panel_folder_missing]="⛔️ admin_panel folder not found. Update the project code first (option 2)."
+MSG_FA[admin_panel_folder_missing]="⛔️ پوشه admin_panel پیدا نشد. اول باید کد پروژه را آپدیت کنی (گزینه ۲)."
+MSG_EN[vapid_already_set_warn1]="⚠️ VAPID keys are already set."
+MSG_FA[vapid_already_set_warn1]="⚠️ کلیدهای VAPID از قبل تنظیم شده‌اند."
+MSG_EN[vapid_already_set_warn2]="If you regenerate them, every device that already enabled notifications will stop working and will need to re-enable them."
+MSG_FA[vapid_already_set_warn2]="اگر دوباره بسازی، تمام دستگاه‌هایی که قبلاً اعلان را فعال کرده‌اند از کار می‌افتند و باید دوباره فعال‌سازی کنند."
+MSG_EN[confirm_regenerate]="Generate and replace with new keys anyway? (type yes to confirm): "
+MSG_FA[confirm_regenerate]="همچنان کلید جدید بسازم و جایگزین کنم؟ (yes برای تایید): "
+MSG_EN[prompt_vapid_email]="Contact email for VAPID (optional, press Enter for admin@example.com): "
+MSG_FA[prompt_vapid_email]="ایمیل تماس برای VAPID (اختیاری، Enter بزن برای پیش‌فرض admin@example.com): "
+MSG_EN[generating_vapid]="🔑 Generating VAPID keys..."
+MSG_FA[generating_vapid]="🔑 در حال ساخت کلیدهای VAPID..."
+MSG_EN[vapid_generation_failed]="⛔️ Key generation failed."
+MSG_FA[vapid_generation_failed]="⛔️ ساخت کلیدها ناموفق بود."
+MSG_EN[vapid_saved]="✅ VAPID keys generated and saved to .env."
+MSG_FA[vapid_saved]="✅ کلیدهای VAPID ساخته و در .env ذخیره شدند."
+MSG_EN[panel_restarted_hint]="✅ Service restarted. Now log into the panel and click \"Enable\" notifications."
+MSG_FA[panel_restarted_hint]="✅ سرویس ری‌استارت شد. حالا وارد پنل شو و روی «فعال‌سازی» اعلان بزن."
+MSG_EN[panel_not_installed_vapid_hint]="Admin panel not installed yet. These keys will be used automatically once installed (option 18)."
+MSG_FA[panel_not_installed_vapid_hint]="پنل مدیریت هنوز نصب نشده. بعد از نصب (گزینه ۱۸) این کلیدها خودکار استفاده می‌شوند."
+
+# setup_api / update_api / remove_api
+MSG_EN[api_dir_missing]="⛔️ api folder not found. Update the project code first (option 2)."
+MSG_FA[api_dir_missing]="⛔️ پوشه api پیدا نشد. اول باید کد پروژه را آپدیت کنی (گزینه ۲)."
+MSG_EN[prompt_domain_api]="Enter a dedicated domain pointing to this server's IP (e.g. api.example.com): "
+MSG_FA[prompt_domain_api]="یک دامنه‌ی جدا که به IP همین سرور اشاره می‌کند را وارد کن (مثلاً api.example.com): "
+MSG_EN[creating_api_service]="⚙️ Creating the systemd service for the integration API..."
+MSG_FA[creating_api_service]="⚙️ ساخت سرویس systemd برای API یکپارچه‌سازی..."
+MSG_EN[api_ready]="✅ Integration API is ready: %s"
+MSG_FA[api_ready]="✅ API یکپارچه‌سازی آماده است: %s"
+MSG_EN[api_token_hint]="Create a token by sending /token2 to the admin bot. Docs: /api/index.html and /api/docs. Access log: logs/api_access.log"
+MSG_FA[api_token_hint]="برای ساخت توکن در بات ادمین دستور /token2 را بفرست. مستندات: /api/index.html و /api/docs. لاگ دسترسی: logs/api_access.log"
+MSG_EN[api_not_installed]="⛔️ Integration API not installed yet. Run option 26 (setup integration API) first."
+MSG_FA[api_not_installed]="⛔️ API یکپارچه‌سازی هنوز نصب نشده. اول گزینه ۲۶ (نصب/تنظیم API یکپارچه‌سازی) را بزن."
+MSG_EN[restarting_api_service]="♻️ Restarting integration API service"
+MSG_FA[restarting_api_service]="♻️ ری‌استارت سرویس API یکپارچه‌سازی"
+MSG_EN[update_api_header]="Updating Integration API"
+MSG_FA[update_api_header]="آپدیت API یکپارچه‌سازی"
+MSG_EN[api_update_done]="✅ Integration API updated."
+MSG_FA[api_update_done]="✅ آپدیت API یکپارچه‌سازی انجام شد."
+MSG_EN[remove_api_warn]="⚠️ This will remove the integration API service and its nginx config (the SSL certificate is kept; API tokens in the database are untouched)."
+MSG_FA[remove_api_warn]="⚠️ این کار سرویس و کانفیگ nginx API یکپارچه‌سازی را حذف می‌کند (گواهی SSL نگه داشته می‌شود؛ توکن‌ها در دیتابیس دست‌نخورده می‌مانند)."
+MSG_EN[prompt_domain_used_api]="What domain did you use for the integration API? (to remove its nginx config): "
+MSG_FA[prompt_domain_used_api]="دامنه‌ای که برای API یکپارچه‌سازی استفاده کرده بودی چه بود؟ (برای حذف کانفیگ nginx): "
+MSG_EN[api_removed]="✅ Integration API removed."
+MSG_FA[api_removed]="✅ API یکپارچه‌سازی حذف شد."
+MSG_EN[lbl_dsub]="Dedicated Sub"
+MSG_FA[lbl_dsub]="ساب اختصاصی"
+MSG_EN[sec_dsub]="DEDICATED SUBSCRIPTION SERVER"
+MSG_FA[sec_dsub]="سرور ساب اختصاصی"
+MSG_EN[menu_37]="Setup dedicated sub server (domain + SSL + service)"
+MSG_FA[menu_37]="نصب/تنظیم سرور ساب اختصاصی (دامنه + SSL + سرویس)"
+MSG_EN[menu_38]="Turn dedicated sub ON / OFF"
+MSG_FA[menu_38]="روشن/خاموش کردن ساب اختصاصی"
+MSG_EN[menu_39]="Update dedicated sub server"
+MSG_FA[menu_39]="آپدیت سرور ساب اختصاصی"
+MSG_EN[menu_40]="Remove dedicated sub server"
+MSG_FA[menu_40]="حذف سرور ساب اختصاصی"
+MSG_EN[dsub_dir_missing]="⛔️ sub_server folder not found. Update the project code first (option 2)."
+MSG_FA[dsub_dir_missing]="⛔️ پوشه sub_server پیدا نشد. اول باید کد پروژه را آپدیت کنی (گزینه ۲)."
+MSG_EN[prompt_domain_dsub]="Enter a dedicated domain pointing to this server's IP for the sub links (e.g. sub.example.com): "
+MSG_FA[prompt_domain_dsub]="یک دامنه‌ی جدا که به IP همین سرور اشاره می‌کند برای لینک‌های ساب را وارد کن (مثلاً sub.example.com): "
+MSG_EN[creating_dsub_service]="⚙️ Creating the systemd service for the dedicated sub server..."
+MSG_FA[creating_dsub_service]="⚙️ ساخت سرویس systemd برای سرور ساب اختصاصی..."
+MSG_EN[dsub_env_saved]="✅ Saved DEDICATED_SUB_URL in .env."
+MSG_FA[dsub_env_saved]="✅ آدرس DEDICATED_SUB_URL در .env ذخیره شد."
+MSG_EN[dsub_ready]="✅ Dedicated sub server is ready: %s"
+MSG_FA[dsub_ready]="✅ سرور ساب اختصاصی آماده است: %s"
+MSG_EN[dsub_health_ok]="✅ Health check passed (the server answers over HTTPS)."
+MSG_FA[dsub_health_ok]="✅ تست سلامت موفق بود (سرور روی HTTPS پاسخ می‌دهد)."
+MSG_EN[dsub_health_fail]="⚠️ Health check failed. Look at: sudo journalctl -u %s -n 50 --no-pager"
+MSG_FA[dsub_health_fail]="⚠️ تست سلامت ناموفق بود. بررسی کن: sudo journalctl -u %s -n 50 --no-pager"
+MSG_EN[dsub_enable_ask]="Turn the dedicated sub ON now? (Y/n): "
+MSG_FA[dsub_enable_ask]="ساب اختصاصی همین الان روشن شود؟ (Y/n): "
+MSG_EN[dsub_hint]="All other settings (page design, texts, apps, headers) are in the Telegram bot: Admin panel → Dedicated Sub."
+MSG_FA[dsub_hint]="بقیه‌ی تنظیمات (طراحی صفحه، متن‌ها، برنامه‌ها، هدرها) داخل بات تلگرام است: پنل مدیریت ← ساب اختصاصی."
+MSG_EN[dsub_not_installed]="⛔️ Dedicated sub server not installed yet. Run option 29 first."
+MSG_FA[dsub_not_installed]="⛔️ سرور ساب اختصاصی هنوز نصب نشده. اول گزینه ۲۹ را بزن."
+MSG_EN[dsub_state]="Dedicated sub is currently: %s"
+MSG_FA[dsub_state]="وضعیت فعلی ساب اختصاصی: %s"
+MSG_EN[dsub_toggle_prompt]="1) Turn ON   2) Turn OFF   (Enter = cancel): "
+MSG_FA[dsub_toggle_prompt]="۱) روشن   ۲) خاموش   (Enter = انصراف): "
+MSG_EN[dsub_toggle_off_note]="OFF keeps links that were already sent to users working (plain pass-through); new links use the panel address again."
+MSG_FA[dsub_toggle_off_note]="حالت خاموش لینک‌هایی که قبلاً به کاربران داده شده را سالم نگه می‌دارد (عبور ساده)؛ لینک‌های جدید دوباره آدرس خود پنل می‌شوند."
+MSG_EN[restarting_dsub_service]="♻️ Restarting dedicated sub server"
+MSG_FA[restarting_dsub_service]="♻️ ری‌استارت سرور ساب اختصاصی"
+MSG_EN[update_dsub_header]="Updating Dedicated Sub Server"
+MSG_FA[update_dsub_header]="آپدیت سرور ساب اختصاصی"
+MSG_EN[dsub_update_done]="✅ Dedicated sub server updated."
+MSG_FA[dsub_update_done]="✅ آپدیت سرور ساب اختصاصی انجام شد."
+MSG_EN[remove_dsub_warn]="⚠️ This removes the sub server and its nginx config. Sub links already given to users will STOP working (turn it OFF instead if you only want to disable the feature). The SSL certificate is kept."
+MSG_FA[remove_dsub_warn]="⚠️ این کار سرور ساب و کانفیگ nginx آن را حذف می‌کند. لینک‌های ساب که قبلاً به کاربران داده شده از کار می‌افتند (اگر فقط می‌خواهی قابلیت را غیرفعال کنی «خاموش کردن» را بزن). گواهی SSL نگه داشته می‌شود."
+MSG_EN[prompt_domain_used_dsub]="What domain did you use for the dedicated sub server? (to remove its nginx config): "
+MSG_FA[prompt_domain_used_dsub]="دامنه‌ای که برای سرور ساب اختصاصی استفاده کرده بودی چه بود؟ (برای حذف کانفیگ nginx): "
+MSG_EN[menu_dsub_status]="Dedicated sub status"
+MSG_FA[menu_dsub_status]="وضعیت ساب اختصاصی"
+MSG_EN[dsub_status_title]="Dedicated sub status"
+MSG_FA[dsub_status_title]="وضعیت ساب اختصاصی"
+MSG_EN[dsub_status_none]="No dedicated sub domain is configured."
+MSG_FA[dsub_status_none]="هیچ دامنه‌ی ساب اختصاصی تنظیم نشده است."
+MSG_EN[dsub_status_service]="Service active"
+MSG_FA[dsub_status_service]="سرویس فعال"
+MSG_EN[dsub_status_state]="Feature state (ON/OFF)"
+MSG_FA[dsub_status_state]="وضعیت قابلیت (روشن/خاموش)"
+MSG_EN[dsub_removed]="✅ Dedicated sub server removed."
+MSG_FA[dsub_removed]="✅ سرور ساب اختصاصی حذف شد."
+
+# setup_panel_proxy / remove_panel_proxy
+MSG_EN[prompt_domain_panel_proxy]="Domain for the VPN panel (e.g. panel.example.com): "
+MSG_FA[prompt_domain_panel_proxy]="دامنه‌ای که برای پنل VPN می‌خواهی (مثلا panel.example.com): "
+MSG_EN[prompt_backend_address]="Local address:port the VPN panel is listening on (e.g. 127.0.0.1:8000): "
+MSG_FA[prompt_backend_address]="آدرس:پورت داخلی که پنل VPN رویش گوش می‌دهد (مثلا 127.0.0.1:8000): "
+MSG_EN[backend_address_empty]="⛔️ Address:port cannot be empty."
+MSG_FA[backend_address_empty]="⛔️ آدرس:پورت نمی‌تواند خالی باشد."
+MSG_EN[prompt_backend_https]="Does the panel serve HTTPS itself on that port (usually with a self-signed certificate)? (yes/no): "
+MSG_FA[prompt_backend_https]="آیا خود پنل روی همان پورت HTTPS (معمولا با گواهی خودامضا) سرو می‌کند؟ (yes/no): "
+MSG_EN[prompt_backend_path]="URL path to proxy on this domain (press Enter for / , e.g. /dashboard or /a1b2c3): "
+MSG_FA[prompt_backend_path]="مسیر (path) روی این دامنه که پروکسی شود (برای / فقط Enter بزن، مثلا /dashboard یا /a1b2c3): "
+MSG_EN[panel_proxy_note]="⚠️ Make sure the VPN panel's own installer is NOT bound to ports 80/443 anymore (disable its own nginx/haproxy, or set it to listen only on the address:port you entered), otherwise it will still conflict with this server's nginx."
+MSG_FA[panel_proxy_note]="⚠️ مطمئن شو نصب‌کننده خود پنل VPN دیگر روی پورت 80/443 گوش نمی‌دهد (nginx/haproxy داخلی خودش را غیرفعال کن یا فقط روی همان آدرس:پورتی که وارد کردی محدودش کن)، وگرنه باز هم با nginx این سرور تصادم می‌کند."
+MSG_EN[panel_proxy_ready]="✅ Reverse-proxy is ready. The VPN panel is now reachable at: %s"
+MSG_FA[panel_proxy_ready]="✅ پروکسی آماده است. پنل VPN از این آدرس در دسترس است: %s"
+MSG_EN[remove_panel_proxy_warn]="⚠️ This will remove the nginx config for this VPN panel proxy (the SSL certificate is kept)."
+MSG_FA[remove_panel_proxy_warn]="⚠️ این کار کانفیگ nginx این پروکسی پنل VPN را حذف می‌کند (گواهی SSL نگه داشته می‌شود)."
+MSG_EN[prompt_domain_used_panel_proxy]="Which domain did you use for this VPN panel proxy? (to remove its nginx config): "
+MSG_FA[prompt_domain_used_panel_proxy]="برای این پروکسی پنل VPN چه دامنه‌ای استفاده کرده بودی؟ (برای حذف کانفیگ nginx): "
+MSG_EN[panel_proxy_removed]="✅ VPN panel proxy removed."
+MSG_FA[panel_proxy_removed]="✅ پروکسی پنل VPN حذف شد."
+MSG_EN[panel_proxy_list_header]="📋 Panel/config proxies set up with this menu:"
+MSG_FA[panel_proxy_list_header]="📋 پروکسی‌های پنل/کانفیگی که با این منو ساخته شده‌اند:"
+MSG_EN[panel_proxy_list_empty]="No panel proxy has been set up with option 22 yet."
+MSG_FA[panel_proxy_list_empty]="هنوز هیچ پروکسی پنلی با گزینه ۲۲ ساخته نشده."
+MSG_EN[panel_proxy_list_enabled]="enabled"
+MSG_FA[panel_proxy_list_enabled]="فعال"
+MSG_EN[panel_proxy_list_disabled]="disabled"
+MSG_FA[panel_proxy_list_disabled]="غیرفعال"
+MSG_EN[panel_proxy_list_ssl_ok]="valid until %s"
+MSG_FA[panel_proxy_list_ssl_ok]="معتبر تا %s"
+MSG_EN[panel_proxy_list_ssl_missing]="no certificate found"
+MSG_FA[panel_proxy_list_ssl_missing]="گواهی SSL پیدا نشد"
+MSG_EN[panel_proxy_domain_conflict]="⚠️ This domain (%s) already has an nginx config that was NOT created by this menu (likely your Mini App or Admin Panel domain). Using it here would overwrite that config and break the Mini App / Admin Panel. Pick a different domain/subdomain for the panel proxy, or remove the existing config yourself first if you are sure."
+MSG_FA[panel_proxy_domain_conflict]="⚠️ این دامنه (%s) از قبل یک کانفیگ nginx دارد که با این منو ساخته نشده (احتمالاً دامنه مینی‌اپ یا پنل مدیریت توست). اگر همین‌جا ادامه بدهی، آن کانفیگ overwrite می‌شود و مینی‌اپ/پنل مدیریت از دسترس خارج می‌شوند. یک دامنه یا ساب‌دامنه دیگر برای پروکسی پنل انتخاب کن، یا اگر مطمئنی، اول خودت کانفیگ فعلی را حذف کن."
+
+MSG_EN[service_domains_header]="🌐 Domains registered for the Mini App / Admin Panel"
+MSG_FA[service_domains_header]="🌐 دامنه‌های ثبت‌شده برای مینی‌اپ / پنل مدیریت"
+MSG_EN[service_domains_empty]="No domain is registered yet for the Mini App or Admin Panel."
+MSG_FA[service_domains_empty]="هنوز هیچ دامنه‌ای برای مینی‌اپ یا پنل مدیریت ثبت نشده."
+MSG_EN[service_domains_miniapp_label]="Mini App"
+MSG_FA[service_domains_miniapp_label]="مینی‌اپ"
+MSG_EN[service_domains_panel_label]="Admin Panel"
+MSG_FA[service_domains_panel_label]="پنل مدیریت"
+MSG_EN[service_domains_delete_prompt]="Enter the number to delete that domain (removes nginx+SSL only, service stays up), or press Enter to cancel: "
+MSG_FA[service_domains_delete_prompt]="شماره مورد نظر برای حذف آن دامنه را وارد کن (فقط nginx و SSL حذف می‌شود، سرویس خاموش نمی‌شود)، برای لغو فقط Enter بزن: "
+MSG_EN[service_domains_delete_warn]="⚠️ This removes the nginx/SSL config for the %s domain (%s). It will stop working until you set a new one."
+MSG_FA[service_domains_delete_warn]="⚠️ این کار تنظیمات nginx/SSL دامنه %s (%s) را حذف می‌کند. تا دامنه جدید تنظیم نکنی، از کار می‌افتد."
+MSG_EN[service_domains_deleted]="✅ Domain config removed."
+MSG_FA[service_domains_deleted]="✅ تنظیمات دامنه حذف شد."
+MSG_EN[current_bot_mode]="Current mode: %s"
+MSG_FA[current_bot_mode]="حالت فعلی: %s"
+MSG_EN[choose_bot_mode]="Choose [1/2]: "
+MSG_FA[choose_bot_mode]="انتخاب [1/2]: "
+MSG_EN[prompt_domain_webhook]="Domain to use for the bot webhook (DNS must point to this server): "
+MSG_FA[prompt_domain_webhook]="دامنه‌ای که برای وب‌هوک بات استفاده می‌کنی (DNS باید روی این سرور باشد): "
+MSG_EN[bot_mode_set_polling]="✅ Mode set to Polling and the bot was restarted."
+MSG_FA[bot_mode_set_polling]="✅ حالت روی Polling تنظیم شد و بات ری‌استارت شد."
+MSG_EN[bot_mode_set_webhook]="✅ Webhook mode is ready: %s"
+MSG_FA[bot_mode_set_webhook]="✅ حالت Webhook آماده شد: %s"
+
+# Main menu / منوی اصلی
+MSG_EN[menu_1]="Full bot install (first time)"
+MSG_FA[menu_1]="نصب کامل بات (اولین بار)"
+MSG_EN[menu_2]="Update bot"
+MSG_FA[menu_2]="آپدیت بات"
+MSG_EN[menu_3]="Completely remove bot from server"
+MSG_FA[menu_3]="حذف کامل بات از سرور"
+MSG_EN[menu_4]="View bot status"
+MSG_FA[menu_4]="مشاهده وضعیت بات"
+MSG_EN[menu_5]="View live logs"
+MSG_FA[menu_5]="مشاهده لاگ زنده"
+MSG_EN[menu_6]="Restart bot"
+MSG_FA[menu_6]="ری‌استارت بات"
+MSG_EN[menu_7]="Stop bot"
+MSG_FA[menu_7]="توقف بات"
+MSG_EN[menu_8]="View sales stats"
+MSG_FA[menu_8]="مشاهده آمار فروش"
+MSG_EN[menu_9]="Change admin token or ID"
+MSG_FA[menu_9]="تغییر توکن یا آیدی ادمین"
+MSG_EN[menu_10]="Setup Mini App (auto: domain + SSL + service)"
+MSG_FA[menu_10]="نصب/تنظیم مینی‌اپ (خودکار: دامنه + SSL + سرویس)"
+MSG_EN[menu_11]="Remove Mini App"
+MSG_FA[menu_11]="حذف مینی‌اپ"
+MSG_EN[menu_12]="Update Mini App"
+MSG_FA[menu_12]="آپدیت مینی‌اپ"
+MSG_EN[menu_13]="Setup admin panel (domain + SSL + service)"
+MSG_FA[menu_13]="نصب/تنظیم پنل مدیریت وب (دامنه + SSL + سرویس)"
+MSG_EN[menu_14]="Remove admin panel"
+MSG_FA[menu_14]="حذف پنل مدیریت وب"
+MSG_EN[menu_15]="Update admin panel"
+MSG_FA[menu_15]="آپدیت پنل مدیریت وب"
+MSG_EN[menu_16]="Generate VAPID keys (admin panel push)"
+MSG_FA[menu_16]="ساخت کلید VAPID (اعلان Push پنل)"
+MSG_EN[menu_17]="Add domain proxy for VPN panel (share port 443)"
+MSG_FA[menu_17]="افزودن دامنه پروکسی برای پنل VPN (اشتراک پورت 443)"
+MSG_EN[menu_18]="List panel/config domain proxies"
+MSG_FA[menu_18]="نمایش لیست پروکسی‌های دامنه پنل/کانفیگ"
+MSG_EN[menu_19]="Remove VPN panel domain proxy"
+MSG_FA[menu_19]="حذف دامنه پروکسی پنل VPN"
+MSG_EN[menu_20]="Mini App / Admin Panel domains (view + delete)"
+MSG_FA[menu_20]="دامنه‌های مینی‌اپ / پنل مدیریت (نمایش + حذف)"
+MSG_EN[menu_21]="Restore backup (new server migration wizard)"
+MSG_FA[menu_21]="بازیابی بکاپ (ویزارد انتقال به سرور جدید)"
+MSG_EN[menu_22]="Bot update mode (Polling / Webhook)"
+MSG_FA[menu_22]="حالت دریافت آپدیت بات (Polling / Webhook)"
+MSG_EN[menu_24]="Setup integration API (domain + SSL + service)"
+MSG_FA[menu_24]="نصب/تنظیم API یکپارچه‌سازی (دامنه + SSL + سرویس)"
+MSG_EN[menu_25]="Remove integration API"
+MSG_FA[menu_25]="حذف API یکپارچه‌سازی"
+MSG_EN[menu_26]="Update integration API"
+MSG_FA[menu_26]="آپدیت API یکپارچه‌سازی"
+MSG_EN[menu_23]="Change admin panel username/password"
+MSG_FA[menu_23]="تغییر نام کاربری و رمز عبور پنل مدیریت وب"
+MSG_EN[menu_27]="Repair / install local translation runtime (automatic)"
+MSG_FA[menu_27]="نصب/آپدیت خودکار موتور ترجمه محلی"
+MSG_EN[menu_28]="Remove LibreTranslate"
+MSG_FA[menu_28]="حذف LibreTranslate"
+MSG_EN[menu_30]="Remove unwanted translation languages (free disk space)"
+MSG_FA[menu_30]="حذف زبان‌های ناخواسته (آزاد کردن فضا)"
+MSG_EN[sec_userbot]="TELEGRAM USERBOT"
+MSG_FA[sec_userbot]="یوزربات تلگرام"
+MSG_EN[menu_31]="Login Telegram account (AI support in your private chats)"
+MSG_FA[menu_31]="ورود به اکانت تلگرام (پشتیبان هوش مصنوعی در پی‌وی)"
+MSG_EN[menu_32]="Logout Telegram account (userbot)"
+MSG_FA[menu_32]="خروج از اکانت تلگرام (یوزربات)"
+MSG_EN[menu_33]="Telegram accounts (userbot / leak scanner)"
+MSG_FA[menu_33]="اکانت‌های تلگرام (یوزربات / اسکنر نشت کانفیگ)"
+MSG_EN[menu_34]="Setup web shop (domain + SSL)"
+MSG_FA[menu_34]="راه‌اندازی فروشگاه وب (دامنه + SSL)"
+MSG_EN[menu_35]="Configure email service (SMTP verification codes)"
+MSG_FA[menu_35]="تنظیم سرویس ایمیل (SMTP برای کد ورود)"
+MSG_EN[menu_36]="Configure Cloudflare Turnstile (web shop protection)"
+MSG_FA[menu_36]="تنظیم Cloudflare Turnstile (امنیت فروشگاه وب)"
+MSG_EN[acc_title]="TELEGRAM ACCOUNTS"
+MSG_FA[acc_title]="اکانت‌های تلگرام"
+MSG_EN[acc_1]="Login USERBOT account (AI replies to customers)"
+MSG_FA[acc_1]="ورود حساب یوزربات (پاسخ هوش مصنوعی به مشتری‌ها)"
+MSG_EN[acc_2]="Login LEAK SCANNER account (separate account, recommended)"
+MSG_FA[acc_2]="ورود حساب اسکنر نشت کانفیگ (اکانت جدا، پیشنهادی)"
+MSG_EN[acc_3]="Use ONE account for both (userbot + scanner)"
+MSG_FA[acc_3]="هر دو روی یک اکانت (یوزربات + اسکنر)"
+MSG_EN[acc_4]="Show account status"
+MSG_FA[acc_4]="نمایش وضعیت حساب‌ها"
+MSG_EN[acc_5]="Logout userbot account"
+MSG_FA[acc_5]="خروج از حساب یوزربات"
+MSG_EN[acc_6]="Logout leak scanner account (scanner falls back to the userbot account)"
+MSG_FA[acc_6]="خروج از حساب اسکنر نشت (اسکنر به حساب یوزربات برمی‌گردد)"
+MSG_EN[acc_back]="Back"
+MSG_FA[acc_back]="بازگشت"
+MSG_EN[acc_scanner_ok]="✅ Scanner account saved. It starts automatically (bot restarted)."
+MSG_FA[acc_scanner_ok]="✅ حساب اسکنر ذخیره شد و خودکار شروع می‌شود (بات ری‌استارت شد)."
+MSG_EN[acc_both_ok]="✅ Now the userbot and the scanner share ONE account (dedicated scanner account removed)."
+MSG_FA[acc_both_ok]="✅ حالا یوزربات و اسکنر روی یک اکانت‌اند (حساب اختصاصی اسکنر حذف شد)."
+MSG_EN[acc_both_warn]="⚠️ Heavy scanning/joining on the customer-facing account can get it limited by Telegram. Keep the join caps low."
+MSG_FA[acc_both_warn]="⚠️ اسکن و عضویت زیاد روی اکانت پاسخ‌گوی مشتری ممکن است باعث محدودیت تلگرام شود؛ سقف عضویت را کم نگه دارید."
+MSG_EN[acc_scanner_removed]="✅ Scanner account removed and bot restarted."
+MSG_FA[acc_scanner_removed]="✅ حساب اسکنر حذف شد و بات ری‌استارت شد."
+MSG_EN[acc_choice]="Choose: "
+MSG_FA[acc_choice]="انتخاب کنید: "
+MSG_EN[ub_need_update]="⛔️ userbot.py not found. Update the bot first (option 2)."
+MSG_FA[ub_need_update]="⛔️ فایل userbot.py پیدا نشد. اول بات را آپدیت کن (گزینه ۲)."
+MSG_EN[ub_installing]="📦 Installing Telegram client library..."
+MSG_FA[ub_installing]="📦 نصب کتابخانه کلاینت تلگرام..."
+MSG_EN[ub_pip_failed]="✗ Failed to install telethon."
+MSG_FA[ub_pip_failed]="✗ نصب telethon ناموفق بود."
+MSG_EN[ub_login_ok]="✅ Logged in and bot restarted. AI support is now active in your private chats."
+MSG_FA[ub_login_ok]="✅ ورود انجام شد و بات ری‌استارت شد. پشتیبان هوش مصنوعی حالا در پی‌وی شما فعال است."
+MSG_EN[ub_login_failed]="✗ Login failed."
+MSG_FA[ub_login_failed]="✗ ورود ناموفق بود."
+MSG_EN[ub_removed]="✅ Userbot session removed and bot restarted."
+MSG_FA[ub_removed]="✅ نشست یوزربات حذف شد و بات ری‌استارت شد."
+MSG_EN[rl_header]="Remove translation languages"
+MSG_FA[rl_header]="حذف زبان‌های ترجمه"
+MSG_EN[rl_none]="No removable extra language is installed."
+MSG_FA[rl_none]="هیچ زبان اضافه‌ای برای حذف نصب نیست."
+MSG_EN[rl_prompt]="Numbers or codes to remove (comma/space separated, a = all, Enter = cancel): "
+MSG_FA[rl_prompt]="شماره یا کد زبان‌هایی که حذف می‌شوند (با کاما/فاصله، a = همه، Enter = انصراف): "
+MSG_EN[rl_warn]="These languages will be removed: models, cached translations and settings. Persian and English are never touched."
+MSG_FA[rl_warn]="این زبان‌ها حذف می‌شوند: مدل‌ها، ترجمه‌های ذخیره‌شده و تنظیمات. فارسی و انگلیسی هرگز حذف نمی‌شوند."
+MSG_EN[rl_done]="✅ Languages removed."
+MSG_FA[rl_done]="✅ زبان‌ها حذف شدند."
+MSG_EN[menu_29]="Full cleanup / factory reset"
+MSG_FA[menu_29]="پاک‌سازی کامل و بازگشت به حالت اولیه"
+MSG_EN[fr_warn]="⚠️ FULL RESET: this will permanently delete ALL bot services (bot, mini app, admin panel, API, LibreTranslate), their nginx configs, the database, resellers, .env and the whole project folder. The server returns to its state before ShopVPN was installed."
+MSG_FA[fr_warn]="⚠️ پاک‌سازی کامل: همه‌ی سرویس‌ها (بات، مینی‌اپ، پنل ادمین، API، LibreTranslate)، کانفیگ‌های nginx، دیتابیس، نماینده‌ها، فایل .env و کل پوشه‌ی پروژه برای همیشه حذف می‌شود. سرور به حالت قبل از نصب ShopVPN برمی‌گردد."
+MSG_EN[fr_type_reset]="To continue type RESET (anything else cancels): "
+MSG_FA[fr_type_reset]="برای ادامه کلمه RESET را تایپ کن (هر چیز دیگر لغو می‌کند): "
+MSG_EN[fr_backup_ask]="Create a backup archive of database and .env in your home folder first? [Y/n]: "
+MSG_FA[fr_backup_ask]="قبل از پاک‌سازی از دیتابیس و .env یک بکاپ در پوشه‌ی هوم گرفته شود؟ [Y/n]: "
+MSG_EN[fr_backup_done]="Backup saved: %s"
+MSG_FA[fr_backup_done]="بکاپ ذخیره شد: %s"
+MSG_EN[fr_backup_failed]="Backup failed, reset aborted. Nothing was deleted."
+MSG_FA[fr_backup_failed]="بکاپ ناموفق بود، پاک‌سازی لغو شد. چیزی حذف نشد."
+MSG_EN[fr_domains_found]="nginx configs that will be removed:"
+MSG_FA[fr_domains_found]="کانفیگ‌های nginx که حذف می‌شوند:"
+MSG_EN[fr_ssl_ask]="Also delete the Let's Encrypt SSL certificates of these domains? [y/N]: "
+MSG_FA[fr_ssl_ask]="گواهی‌های SSL (Let's Encrypt) این دامنه‌ها هم حذف شود؟ [y/N]: "
+MSG_EN[fr_unsafe_dir]="Refusing to delete unsafe install path: %s"
+MSG_FA[fr_unsafe_dir]="مسیر نصب ناامن است، حذف انجام نشد: %s"
+MSG_EN[fr_done]="✅ Full cleanup finished. To install again, run option 1 (or the install command)."
+MSG_FA[fr_done]="✅ پاک‌سازی کامل انجام شد. برای نصب دوباره گزینه‌ی ۱ (یا دستور نصب) را اجرا کن."
+MSG_EN[menu_lang]="Language / زبان (English ⇄ فارسی)"
+MSG_FA[menu_lang]="Language / زبان (English ⇄ فارسی)"
+MSG_EN[ws_need_miniapp]="The web shop service files or venv are missing. Update the project and reinstall packages first."
+MSG_FA[ws_need_miniapp]="فایل‌های سرویس فروشگاه وب یا venv پیدا نشد. ابتدا پروژه را به‌روزرسانی و پکیج‌ها را نصب کن."
+MSG_EN[ws_miniapp_inactive]="The Mini App service is not active. Run option 15 first."
+MSG_FA[ws_miniapp_inactive]="سرویس مینی‌اپ فعال نیست. ابتدا گزینه ۱۵ را اجرا کن."
+MSG_EN[ws_domain_prompt]="Web shop domain (e.g. shop.example.com; its A record must point to this server's IP): "
+MSG_FA[ws_domain_prompt]="دامنه فروشگاه (مثلاً shop.example.com؛ رکورد A باید به IP همین سرور اشاره کند): "
+MSG_EN[ws_domain_invalid]="Invalid domain."
+MSG_FA[ws_domain_invalid]="دامنه معتبر نیست."
+MSG_EN[ws_check_dns]="Checking DNS..."
+MSG_FA[ws_check_dns]="بررسی DNS..."
+MSG_EN[ws_dns_unresolved]="The domain does not resolve to an IP; fix your DNS."
+MSG_FA[ws_dns_unresolved]="دامنه به IP قابل‌حل نیست؛ DNS را تنظیم کن."
+MSG_EN[ws_ip_mismatch]="Warning: the domain IP (%s) does not match the server IP (%s)."
+MSG_FA[ws_ip_mismatch]="هشدار: IP دامنه (%s) با IP سرور (%s) یکی نیست."
+MSG_EN[ws_continue_anyway]="Continue anyway? (yes/no): "
+MSG_FA[ws_continue_anyway]="با این حال ادامه بدهم؟ (yes/no): "
+MSG_EN[ws_conf_exists]="A config file for this domain already exists: %s"
+MSG_FA[ws_conf_exists]="فایل پیکربندی این دامنه از قبل وجود دارد: %s"
+MSG_EN[ws_replace_prompt]="Replace it? (yes/no): "
+MSG_FA[ws_replace_prompt]="جایگزین شود؟ (yes/no): "
+MSG_EN[ws_nginx_invalid]="Invalid Nginx configuration; check the file: %s"
+MSG_FA[ws_nginx_invalid]="پیکربندی Nginx نامعتبر است؛ فایل را بررسی کن: %s"
+MSG_EN[ws_cert_email_prompt]="Contact email for SSL renewal notices (empty = no email): "
+MSG_FA[ws_cert_email_prompt]="ایمیل تماس برای تمدید گواهی SSL (خالی = بدون ایمیل): "
+MSG_EN[ws_ready]="Web shop is ready: https://%s/"
+MSG_FA[ws_ready]="فروشگاه وب آماده است: https://%s/"
+MSG_EN[ws_ports_hint]="Make sure ports 80 and 443 are open in your firewall / provider panel."
+MSG_EN[menu_store_status]="Web shop status"
+MSG_FA[menu_store_status]="وضعیت فروشگاه وب"
+MSG_EN[menu_store_remove]="Remove web shop (service + nginx, SSL kept)"
+MSG_FA[menu_store_remove]="حذف فروشگاه وب (سرویس + nginx، SSL نگه داشته می‌شود)"
+MSG_EN[menu_store_update]="Update web shop"
+MSG_FA[menu_store_update]="آپدیت فروشگاه وب"
+MSG_EN[lbl_store]="Web Shop"
+MSG_FA[lbl_store]="فروشگاه وب"
+MSG_EN[store_not_installed]="⛔️ Web shop not installed yet. Run option 10 (setup web shop) first."
+MSG_FA[store_not_installed]="⛔️ فروشگاه وب هنوز نصب نشده. اول گزینه ۱۰ (راه‌اندازی فروشگاه وب) را بزن."
+MSG_EN[restarting_store_service]="♻️ Restarting web shop service"
+MSG_FA[restarting_store_service]="♻️ ری‌استارت سرویس فروشگاه وب"
+MSG_EN[update_store_header]="Updating Web Shop"
+MSG_FA[update_store_header]="آپدیت فروشگاه وب"
+MSG_EN[store_update_done]="✅ Web shop updated."
+MSG_FA[store_update_done]="✅ آپدیت فروشگاه وب انجام شد."
+MSG_EN[ws_status_none]="No web shop domain is configured."
+MSG_FA[ws_status_none]="هیچ دامنه‌ی فروشگاه وبی تنظیم نشده است."
+MSG_EN[ws_status_title]="Web shop status"
+MSG_FA[ws_status_title]="وضعیت فروشگاه وب"
+MSG_EN[ws_status_enabled]="nginx config enabled"
+MSG_FA[ws_status_enabled]="کانفیگ nginx فعال"
+MSG_EN[ws_status_cert]="SSL certificate"
+MSG_FA[ws_status_cert]="گواهی SSL"
+MSG_EN[ws_status_store]="/healthz HTTP code"
+MSG_FA[ws_status_store]="کد HTTP مسیر /healthz"
+MSG_EN[ws_status_root]="/ HTTP code"
+MSG_FA[ws_status_root]="کد HTTP ریشه /"
+MSG_EN[ws_status_miniapp_svc]="Mini App service"
+MSG_FA[ws_status_miniapp_svc]="سرویس مینی‌اپ"
+MSG_EN[ws_yes]="yes"
+MSG_FA[ws_yes]="بله"
+MSG_EN[ws_no]="no"
+MSG_FA[ws_no]="خیر"
+MSG_EN[ws_pick_domain]="Which domain? (number): "
+MSG_FA[ws_pick_domain]="کدام دامنه؟ (شماره): "
+MSG_EN[ws_remove_warn]="This removes the web shop nginx config for %s. SSL is kept. If MINIAPP_URL points here, it is reset to the plain domain."
+MSG_FA[ws_remove_warn]="کانفیگ nginx فروشگاه وب برای %s حذف می‌شود. گواهی SSL نگه داشته می‌شود. اگر MINIAPP_URL به این دامنه اشاره کند، به آدرس ساده‌ی دامنه برمی‌گردد."
+MSG_EN[ws_removed]="Web shop domain %s removed."
+MSG_FA[ws_removed]="دامنه‌ی فروشگاه وب %s حذف شد."
+MSG_EN[ws_miniapp_url_warn]="MINIAPP_URL still points here, but no Mini App nginx config exists for this domain. Set MINIAPP_URL manually."
+MSG_FA[ws_miniapp_url_warn]="MINIAPP_URL هنوز به این دامنه اشاره می‌کند، ولی کانفیگ nginx مینی‌اپ برای این دامنه وجود ندارد. MINIAPP_URL را دستی تنظیم کن."
+MSG_FA[ws_ports_hint]="مطمئن شو پورت‌های 80 و 443 در فایروال/پنل ارائه‌دهنده باز هستند."
+MSG_EN[env_missing_install_first]="The .env file was not found; install the bot first."
+MSG_FA[env_missing_install_first]="فایل .env پیدا نشد؛ ابتدا بات را نصب کن."
+MSG_EN[smtp_intro]="Enter your email provider's SMTP details. This option does not install a mail server; it uses your provider's SMTP."
+MSG_FA[smtp_intro]="اطلاعات SMTP سرویس ایمیلی را وارد کن. این گزینه سرور ایمیل نصب نمی‌کند؛ از SMTP سرویس‌دهنده ایمیل استفاده می‌کند."
+MSG_EN[smtp_host_prompt]="SMTP Host (e.g. smtp.gmail.com): "
+MSG_FA[smtp_host_prompt]="SMTP Host (مثلاً smtp.gmail.com): "
+MSG_EN[smtp_port_prompt]="SMTP Port (587 or 465): "
+MSG_FA[smtp_port_prompt]="SMTP Port (587 یا 465): "
+MSG_EN[smtp_user_prompt]="SMTP username / email address: "
+MSG_FA[smtp_user_prompt]="نام کاربری SMTP / آدرس ایمیل: "
+MSG_EN[smtp_pass_prompt]="SMTP password or App Password: "
+MSG_FA[smtp_pass_prompt]="رمز SMTP یا App Password: "
+MSG_EN[smtp_from_prompt]="Sender address (empty = same as username): "
+MSG_FA[smtp_from_prompt]="آدرس فرستنده (خالی = همان نام کاربری): "
+MSG_EN[smtp_ssl_prompt]="Direct SSL connection on port 465? (y/N): "
+MSG_FA[smtp_ssl_prompt]="اتصال SSL مستقیم روی پورت 465؟ (y/N): "
+MSG_EN[smtp_invalid]="Incomplete information or invalid port."
+MSG_FA[smtp_invalid]="اطلاعات ناقص یا پورت نامعتبر است."
+MSG_EN[miniapp_restart_failed]="Restarting the Mini App service failed."
+MSG_FA[miniapp_restart_failed]="ری‌استارت سرویس مینی‌اپ ناموفق بود."
+MSG_EN[smtp_saved]="SMTP settings saved. To test, request an email login code in the shop."
+MSG_FA[smtp_saved]="تنظیمات SMTP ذخیره شد. برای تست، در فروشگاه یک کد ورود ایمیلی درخواست کن."
+MSG_EN[smtp_fail_hint]="If sending failed: sudo journalctl -u %s-miniapp -n 100 --no-pager"
+MSG_FA[smtp_fail_hint]="اگر ارسال ناموفق بود: sudo journalctl -u %s-miniapp -n 100 --no-pager"
+MSG_EN[ts_intro]="Create a widget for your shop domain in Cloudflare Turnstile and enter the Site Key and Secret Key."
+MSG_FA[ts_intro]="در Cloudflare Turnstile یک widget برای دامنه فروشگاه بساز و Site Key و Secret Key را وارد کن."
+MSG_EN[ts_disable_hint]="To disable it, leave both values empty."
+MSG_FA[ts_disable_hint]="برای غیرفعال‌کردن، هر دو مقدار را خالی بگذار."
+MSG_EN[ts_secret_required]="Secret Key is required too."
+MSG_FA[ts_secret_required]="Secret Key هم الزامی است."
+MSG_EN[ts_site_required]="Site Key is required too."
+MSG_FA[ts_site_required]="Site Key هم الزامی است."
+MSG_EN[ts_saved]="Turnstile settings saved. Check a test purchase and an email-code request."
+MSG_FA[ts_saved]="تنظیمات Turnstile ذخیره شد. یک خرید آزمایشی و درخواست کد ایمیل را بررسی کن."
+MSG_EN[menu_0]="Exit"
+MSG_FA[menu_0]="خروج"
+MSG_EN[enter_choice_prompt]="Enter choice [0-40, L]: "
+MSG_FA[enter_choice_prompt]="یک گزینه انتخاب کن [0-40, L]: "
+MSG_EN[invalid_choice]="Invalid option."
+MSG_FA[invalid_choice]="گزینه نامعتبر است."
+MSG_EN[goodbye]="Goodbye 👋"
+MSG_FA[goodbye]="خدانگهدار 👋"
+
+# LibreTranslate self-hosted install / لغات نصب LibreTranslate اختصاصی
+MSG_EN[lt_header]="Self-hosted LibreTranslate"
+MSG_FA[lt_header]="LibreTranslate اختصاصی (self-hosted)"
+MSG_EN[lt_installing_deps]="📦 Making sure Python/venv are installed..."
+MSG_FA[lt_installing_deps]="📦 اطمینان از نصب بودن Python/venv..."
+MSG_EN[lt_venv_failed]="✗ Failed to create the virtual environment."
+MSG_FA[lt_venv_failed]="✗ ساخت virtual environment ناموفق بود."
+MSG_EN[lt_installing_pip]="⬇️ Installing LibreTranslate via pip (downloads translation models, may take several minutes and needs a few GB of free disk)..."
+MSG_FA[lt_installing_pip]="⬇️ در حال نصب LibreTranslate با pip (مدل‌های ترجمه دانلود می‌شود، ممکن است چند دقیقه طول بکشد و چند گیگابایت فضای دیسک لازم دارد)..."
+MSG_EN[lt_pip_failed]="✗ pip install failed. Last lines of the log:"
+MSG_FA[lt_pip_failed]="✗ نصب با pip ناموفق بود. آخرین خطوط لاگ:"
+MSG_EN[lt_writing_service]="⚙️ Creating the systemd service..."
+MSG_FA[lt_writing_service]="⚙️ در حال ساخت سرویس systemd..."
+MSG_EN[lt_already_installed]="⚠️ A LibreTranslate service already exists on this server."
+MSG_FA[lt_already_installed]="⚠️ یک سرویس LibreTranslate از قبل روی این سرور وجود دارد."
+MSG_EN[lt_confirm_reinstall]="Remove it and reinstall fresh? (type yes to confirm): "
+MSG_FA[lt_confirm_reinstall]="حذف و نصب دوباره از صفر؟ (برای تأیید yes بنویس): "
+MSG_EN[lt_waiting_ready]="⏳ Waiting for language models to load (first run only, can take a few minutes)"
+MSG_FA[lt_waiting_ready]="⏳ در انتظار بارگذاری مدل‌های زبان (فقط بار اول، ممکن است چند دقیقه طول بکشد)"
+MSG_EN[lt_ready]="✅ LibreTranslate is up and answering requests."
+MSG_FA[lt_ready]="✅ LibreTranslate بالا آمد و به درخواست‌ها پاسخ می‌دهد."
+MSG_EN[lt_not_ready_yet]="⚠️ Still not answering after a few minutes; it may still be downloading language models in the background. Check again shortly with: sudo journalctl -u %s -n 50 --no-pager"
+MSG_FA[lt_not_ready_yet]="⚠️ بعد از چند دقیقه هنوز پاسخ نمی‌دهد؛ ممکن است هنوز در حال دانلود مدل‌های زبان در پس‌زمینه باشد. کمی بعد با این دستور بررسی کن: sudo journalctl -u %s -n 50 --no-pager"
+MSG_EN[lt_env_saved]="✅ Saved the LibreTranslate address in .env (SHOPVPN_LIBRETRANSLATE_URL)."
+MSG_FA[lt_env_saved]="✅ آدرس LibreTranslate در .env ذخیره شد (SHOPVPN_LIBRETRANSLATE_URL)."
+MSG_EN[lt_done]="🎉 Done. LibreTranslate now runs automatically as a free, unlimited translation fallback — no API key needed."
+MSG_FA[lt_done]="🎉 تمام شد. از این به بعد LibreTranslate به‌صورت خودکار به‌عنوان جایگزین رایگان و بدون محدودیت ترجمه استفاده می‌شود — بدون نیاز به هیچ کلید API."
+MSG_EN[lt_remove_warn]="⚠️ This removes the local LibreTranslate fallback. Argos local models remain available for translation."
+MSG_FA[lt_remove_warn]="⚠️ این کار LibreTranslate محلی را حذف می‌کند. مدل‌های محلی Argos همچنان برای ترجمه در دسترس می‌مانند."
+MSG_EN[lt_removed]="✅ LibreTranslate removed."
+MSG_FA[lt_removed]="✅ LibreTranslate حذف شد."
+MSG_EN[lt_not_installed]="ℹ️ LibreTranslate is not installed on this server."
+MSG_FA[lt_not_installed]="ℹ️ LibreTranslate روی این سرور نصب نیست."
+
+# t <key> [args...] -> prints the localized, formatted string for the
+# current APP_LANG (falls back to English if a key is somehow missing).
+t() {
+    local key="$1"; shift
+    local fmt
+    if [ "$APP_LANG" = "fa" ]; then
+        fmt="${MSG_FA[$key]:-${MSG_EN[$key]}}"
+    else
+        fmt="${MSG_EN[$key]}"
+    fi
+    if [ "$#" -gt 0 ]; then
+        printf -- "$fmt" "$@"
+    else
+        printf '%s' "$fmt"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Title bar / banner / نوار عنوان / بنر
+# ---------------------------------------------------------------------------
+draw_rule() {
+    local pad
+    printf -v pad '%*s' "$UI_WIDTH" ''
+    echo -e "  ${DIM}${pad// /─}${RESET}"
+}
+
+print_logo() {
+    local -a rows=(
+        '███████╗██╗  ██╗ ██████╗ ██████╗ ██╗   ██╗██████╗ ███╗   ██╗'
+        '██╔════╝██║  ██║██╔═══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║'
+        '███████╗███████║██║   ██║██████╔╝██║   ██║██████╔╝██╔██╗ ██║'
+        '╚════██║██╔══██║██║   ██║██╔═══╝ ╚██╗ ██╔╝██╔═══╝ ██║╚██╗██║'
+        '███████║██║  ██║╚██████╔╝██║      ╚████╔╝ ██║     ██║ ╚████║'
+        '╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝       ╚═══╝  ╚═╝     ╚═╝  ╚═══╝'
+    )
+    local -a shades=(51 45 39 33 63 99)
+    local i
+    for i in "${!rows[@]}"; do
+        printf '  \033[1;38;5;%sm%s\033[0m\n' "${shades[$i]}" "${rows[$i]}"
+    done
+}
+
+print_banner() {
+    local sub pad
+    clear
+    echo ""
+    print_logo
+    draw_rule
+    sub="$(t subtitle)  ·  $(get_version)"
+    printf -v pad '%*s' $(( (UI_WIDTH - ${#sub}) / 2 + 2 )) ''
+    echo -e "${pad}${YELLOW}${BOLD}${sub}${RESET}"
+    draw_rule
+}
+
+status_row() {
+    local label dot color text pad
+    label="$(t "$1")"
+    case "$2" in
+        running) dot="●"; color="${GREEN}${BOLD}"; text="$(t service_running)" ;;
+        stopped) dot="●"; color="${RED}${BOLD}"; text="$(t service_stopped)" ;;
+        *)       dot="○"; color="${YELLOW}"; text="$(t not_installed)" ;;
+    esac
+    printf -v pad '%*s' $(( ${#label} < 14 ? 14 - ${#label} : 0 )) ''
+    printf '  %b%s%s%b %b%s %s%b\n' "$DIM" "$label" "$pad" "$RESET" "$color" "$dot" "$text" "$RESET"
+}
+
+service_state() {
+    if systemctl is-active --quiet "$1" 2>/dev/null; then
+        echo running
+    else
+        echo stopped
+    fi
+}
+
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+unit_state() {
+    if systemctl list-units --type=service --all 2>/dev/null | grep -q "$1.service"; then
+        service_state "$1"
+    else
+        echo missing
+    fi
+}
+
+print_status_line() {
+    local bot_state="missing"
+    [ -d "$INSTALL_DIR" ] && bot_state="$(service_state "$SERVICE_NAME")"
+    echo ""
+    status_row lbl_bot "$bot_state"
+    status_row lbl_miniapp "$(unit_state "${SERVICE_NAME}-miniapp")"
+    status_row lbl_panel "$(unit_state "${SERVICE_NAME}-adminpanel")"
+    status_row lbl_api "$(unit_state "${SERVICE_NAME}-api")"
+    status_row lbl_dsub "$(unit_state "${SERVICE_NAME}-sub")"
+    status_row lbl_store "$(unit_state "${SERVICE_NAME}-store")"
+    echo ""
+}
+
+menu_section() {
+    local title fill pad
+    title="$(t "$1")"
+    fill=$(( UI_WIDTH - ${#title} - 3 ))
+    [ "$fill" -lt 0 ] && fill=0
+    printf -v pad '%*s' "$fill" ''
+    echo -e "  ${YELLOW}${BOLD}▌ ${title}${RESET} ${DIM}${pad// /─}${RESET}"
+}
+
+menu_item() {
+    local num="$1" key="$2" color="${3:-$RESET}"
+    printf '   %b[%2s]%b  %b%s%b\n' "${CYAN}${BOLD}" "$num" "$RESET" "$color" "$(t "$key")" "$RESET"
+}
+
+pause() {
+    printf '\033[?25h\033[?7h'
+    echo ""
+    read -rp "$(t pause_prompt)" _
+}
+
+# ---------------------------------------------------------------------------
+# Friendly live progress UI
+# رابط پیشرفت زنده و دوستانه برای عملیات طولانی
+# ---------------------------------------------------------------------------
+INSTALL_JOKES_FA=(
+    "اوه اوه، پردازنده رو دارم می‌خورم 😅"
+    "یک لحظه... دارم با سرور گپ می‌زنم ☕"
+    "این مرحله قهوه می‌خواد، ولی من هنوز ادامه می‌دم 😎"
+    "نگران نباش؛ هنوز هنگ نکردیم، داریم کار می‌کنیم 👀"
+    "دارم پیچ و مهره‌های سرور رو سفت می‌کنم 🔧"
+    "اینترنت گفت صبر کن؛ منم دارم صبر می‌کنم 😂"
+    "پکیج‌ها دارن صف می‌کشن، یکی‌یکی میان داخل 🚪"
+    "تقریباً رسیدیم... معروفه که «تقریباً» طول می‌کشه 😄"
+)
+INSTALL_JOKES_EN=(
+    "Oh oh, I'm eating the CPU 😅"
+    "One moment... I'm having a chat with the server ☕"
+    "This step needs coffee, but I'm still going 😎"
+    "Don't worry; I'm not frozen, I'm working 👀"
+    "Tightening the server's nuts and bolts 🔧"
+    "The internet said wait, so I'm waiting 😂"
+    "Packages are lining up at the door 🚪"
+    "Almost there... the famous 'almost' 😄"
+)
+
+# ---------------------------------------------------------------------------
+# Live step UI (append-only: one live line per running step, permanent result
+# lines, final gradient bar). Uses only "\r" + "erase line" so it behaves the
+# same in every terminal app (Termius, Termux, JuiceSSH, desktop...).
+# رابط زنده مرحله‌ای: یک خط زنده برای مرحله جاری، خط ثابت برای مراحل تمام‌شده
+# ---------------------------------------------------------------------------
+UI_SPIN_FRAMES=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+UI_GRAD=(51 45 39 33 63 99)     # same cyan -> blue -> purple flow as the logo
+UI_T0=${UI_T0:-0}
+UI_FAIL=0
+UI_OK=0
+trap '[ -t 1 ] && printf "\033[?25h\033[?7h"' EXIT
+
+ui_fmt_dur() {
+  local s="$1"
+  if [ "$s" -ge 60 ]; then printf '%dm %02ds' $(( s / 60 )) $(( s % 60 )); else printf '%ds' "$s"; fi
+}
+
+# Real terminal width (tput inside $(...) cannot see the tty and may say 80)
+ui_cols() {
+  local c=""
+  c="$(stty size 2>/dev/null </dev/tty | awk '{print $2}')"
+  [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] || c="${COLUMNS:-}"
+  [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] || c=80
+  echo "$c"
+}
+
+ui_trunc() {
+  local t="$1" max="$2"
+  [ "$max" -lt 6 ] && max=6
+  [ "${#t}" -gt "$max" ] && t="${t:0:$((max - 1))}…"
+  printf '%s' "$t"
+}
+
+# Drop a leading emoji token ("🔄 text" -> "text"); the UI draws its own icons.
+# Emoji start with a byte >= 0xE0, Latin/Persian text does not.
+ui_clean_label() {
+  local l="$1" b
+  b="$(printf '%s' "$l" | head -c1 | od -An -tu1 | tr -d ' ')"
+  if [ -n "$b" ] && [ "$b" -ge 224 ] && [[ "$l" == *" "* ]]; then l="${l#* }"; fi
+  printf '%s' "$l"
+}
+
+# ui_bar <pct> <width>  gradient bar, colours flow along the bar like the logo
+ui_bar() {
+  local pct="$1" w="$2" filled i
+  filled=$(( pct * w / 100 ))
+  for ((i = 0; i < filled; i++)); do
+    printf '\033[38;5;%sm█' "${UI_GRAD[$(( i * ${#UI_GRAD[@]} / w ))]}"
+  done
+  printf '\033[0m\033[38;5;238m'
+  for ((i = filled; i < w; i++)); do printf '░'; done
+  printf '\033[0m'
+}
+
+run_step_live() {
+  local idx="$1" total="$2" label="$3"; shift 3
+  local clean log pid start_ms ms status f=0 cols=80 bw lmax pct base span el_s pad lw ln fp tot
+  clean="$(ui_clean_label "$label")"
+
+  # Non-interactive output (pipe / CI): simple, parse-friendly lines
+  if [ ! -t 1 ]; then
+    ( "$@" ) >/dev/null 2>&1; status=$?
+    if [ "$status" -eq 0 ]; then printf '  [%s/%s] ✓ %s\n' "$idx" "$total" "$label"
+    else printf '  [%s/%s] ✗ %s\n' "$idx" "$total" "$label"; fi
+    return "$status"
+  fi
+
+  if [ "$idx" -le 1 ]; then UI_T0=$SECONDS; UI_FAIL=0; UI_OK=0; fi
+  log="$(mktemp)"
+  start_ms=$(( $(date +%s%N) / 1000000 ))
+  "$@" >"$log" 2>&1 &
+  pid=$!
+  trap 'printf "\033[?25h\033[?7h"; kill "$pid" 2>/dev/null; trap - INT; kill -INT $$' INT
+  printf '\033[?7l\033[?25l'          # no auto-wrap, hide cursor while animating
+
+  base=$(( (idx - 1) * 100 / total ))
+  span=$(( idx * 100 / total - base ))
+  while kill -0 "$pid" 2>/dev/null; do
+    ms=$(( $(date +%s%N) / 1000000 - start_ms ))
+    [ $(( f % 20 )) -eq 0 ] && cols="$(ui_cols)"
+    pct=$(( base + span * 90 * ms / ((ms + 20000) * 100) ))
+    bw=16; [ "$cols" -lt 64 ] && bw=10
+    lmax=$(( cols - bw - 22 ))
+    printf '\r\033[K  \033[1;38;5;45m%s\033[0m ' "${UI_SPIN_FRAMES[$(( f % 10 ))]}"
+    ui_bar "$pct" "$bw"
+    printf ' \033[1m%3d%%\033[0m  %s \033[2m%s\033[0m' "$pct" "$(ui_trunc "$clean" "$lmax")" "$(ui_fmt_dur $(( ms / 1000 )))"
+    f=$(( f + 1 ))
+    sleep 0.1
+  done
+  wait "$pid"; status=$?
+  trap - INT
+  el_s="$(awk -v ms=$(( $(date +%s%N) / 1000000 - start_ms )) 'BEGIN{printf "%.1fs", ms/1000}')"
+
+  # turn the live line into one permanent, aligned result line
+  cols="$(ui_cols)"
+  lw=$(( cols - 14 )); [ "$lw" -gt 52 ] && lw=52; [ "$lw" -lt 12 ] && lw=12
+  clean="$(ui_trunc "$clean" "$lw")"
+  pad=$(( lw - ${#clean} )); [ "$pad" -lt 1 ] && pad=1
+  printf '\r\033[K'
+  if [ "$status" -eq 0 ]; then
+    UI_OK=$(( UI_OK + 1 ))
+    printf '  \033[1;38;5;46m✔\033[0m %s%*s \033[2m%s\033[0m\n' "$clean" "$pad" '' "$el_s"
+  else
+    UI_FAIL=1
+    printf '  \033[1;38;5;203m✘\033[0m \033[38;5;203m%s\033[0m%*s \033[2m%s\033[0m\n' "$clean" "$pad" '' "$el_s"
+    if [ -s "$log" ]; then
+      while IFS= read -r ln; do
+        printf '      \033[2m│ %s\033[0m\n' "$(ui_trunc "$ln" $(( cols - 10 )))"
+      done < <(tail -8 "$log" | tr '\r' '\n' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | grep -v '^[[:space:]]*$')
+    fi
+  fi
+
+  # last step: full-width summary bar
+  if [ "$idx" -ge "$total" ]; then
+    tot=$(( SECONDS - UI_T0 ))
+    fp=$(( UI_OK * 100 / total ))
+    bw=$(( cols - 26 )); [ "$bw" -gt 36 ] && bw=36; [ "$bw" -lt 10 ] && bw=10
+    printf '\n  '; ui_bar "$fp" "$bw"
+    if [ "$UI_FAIL" -eq 0 ]; then
+      printf '  \033[1;38;5;46m%d%%\033[0m \033[2m%d/%d · %s\033[0m\n' "$fp" "$UI_OK" "$total" "$(ui_fmt_dur "$tot")"
+    else
+      printf '  \033[1;38;5;203m%d%%\033[0m \033[2m%d/%d · %s\033[0m\n' "$fp" "$UI_OK" "$total" "$(ui_fmt_dur "$tot")"
+    fi
+  fi
+  printf '\033[?25h\033[?7h'
+  rm -f "$log"
+  return "$status"
+}
+
+# ---------------------------------------------------------------------------
+# Step-progress UI for multi-step flows (update, etc.)
+# رابط نمایش مرحله‌ای برای عملیات چندمرحله‌ای (آپدیت و ...)
+# ---------------------------------------------------------------------------
+section_header() {
+    local title="$1" fill pad
+    fill=$(( UI_WIDTH - ${#title} - 3 ))
+    [ "$fill" -lt 0 ] && fill=0
+    printf -v pad '%*s' "$fill" ''
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}▌ ${title}${RESET} ${DIM}${pad// /─}${RESET}"
+    echo ""
+}
+
+# run_step <index> <total> <label> <command...>
+# Runs <command...>, then prints a single aligned result line:
+#   [i/N] ✓ label   (green, on success)
+#   [i/N] ✗ label   (red, plus last lines of output, on failure)
+run_step() {
+    local idx="$1" total="$2" label="$3" out status
+    shift 3
+    out="$("$@" 2>&1)"
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        printf '  %b[%s/%s]%b %b✓%b %s\n' "${CYAN}${BOLD}" "$idx" "$total" "$RESET" "${GREEN}${BOLD}" "$RESET" "$label"
+    else
+        printf '  %b[%s/%s]%b %b✗%b %s\n' "${CYAN}${BOLD}" "$idx" "$total" "$RESET" "${RED}${BOLD}" "$RESET" "$label"
+        if [ -n "$out" ]; then
+            echo "$out" | tail -5 | sed "s/^/        ${DIM}/" | sed "s/\$/${RESET}/"
+        fi
+    fi
+    return "$status"
+}
+
+# ---------------------------------------------------------------------------
+# Action: full initial install / عملیات: نصب اولیه کامل
+# ---------------------------------------------------------------------------
+install_bot() {
+    local total=6 step=0 failed=0
+    section_header "$(t install_header)"
+    echo -e "  ${DIM}$(t install_done_hint)${RESET}"
+    echo ""
+
+    step=$((step+1))
+    run_step_live "$step" "$total" "$(t installing_prereqs)" \
+        bash -c "sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get update -qq && timeout 120 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get install -y -qq git python3 python3-pip python3-venv ca-certificates curl > /dev/null" || failed=1
+
+    step=$((step+1))
+    if [ -f "$INSTALL_DIR/main.py" ]; then
+        local fetch_label
+        fetch_label="$(t already_installed_pulling)"
+    else
+        fetch_label="$(t cloning_project)"
+    fi
+    run_step_live "$step" "$total" "$fetch_label" fetch_project_code "$INSTALL_DIR" || failed=1
+    cd "$INSTALL_DIR" || return 1
+
+    step=$((step+1))
+    run_step_live "$step" "$total" "$(t preparing_python)" \
+        bash -c 'if [ ! -d "venv" ]; then python3 -m venv venv; fi; source venv/bin/activate; pip install -r requirements.txt --quiet; deactivate' || failed=1
+
+    step=$((step+1))
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        echo ""
+        echo -e "${YELLOW}${BOLD}$(t enter_bot_info)${RESET}"
+        read -rp "$(t prompt_bot_token)" BOT_TOKEN_INPUT
+        read -rp "$(t prompt_owner_id)" OWNER_ID_INPUT
+        cat > "$INSTALL_DIR/.env" <<EOF
+BOT_TOKEN=$BOT_TOKEN_INPUT
+OWNER_ID=$OWNER_ID_INPUT
+EOF
+        echo -e "${GREEN}$(t env_created)${RESET}"
+    else
+        echo -e "${GREEN}$(t env_exists)${RESET}"
+    fi
+    printf '  %b[ %s ]%b %s\n' "${CYAN}${BOLD}" "—" "${RESET}" "$(t install_env)"
+
+    bash "$INSTALL_DIR/setup_local_translation.sh" --ask || true
+    step=$((step+1))
+    run_step_live "$step" "$total" "$(t install_translation)" \
+        bash -c "bash '$INSTALL_DIR/setup_local_translation.sh'" || {
+        echo -e "  ${YELLOW}$(t translation_install_incomplete)${RESET}"
+    }
+
+    step=$((step+1))
+    SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+    run_step_live "$step" "$total" "$(t install_service)" bash -c "
+        sudo bash -c 'cat > \"$SERVICE_FILE\"' <<EOF
+[Unit]
+Description=V2Ray Telegram Sales Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/main.py
+Restart=always
+RestartSec=5
+User=$(whoami)
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        sudo systemctl daemon-reload
+        sudo systemctl enable '$SERVICE_NAME' >/dev/null 2>&1
+        sudo systemctl restart '$SERVICE_NAME'
+        sleep 2
+    " || failed=1
+
+    draw_rule
+    if [ "$failed" = "0" ] && systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo -e "  ${GREEN}${BOLD}$(t install_done)${RESET}"
+        echo -e "  ${DIM}$(t install_done_hint)${RESET}"
+    else
+        echo -e "  ${RED}$(t install_failed "$SERVICE_NAME")${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: update / عملیات: آپدیت
+# ---------------------------------------------------------------------------
+update_bot() {
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR"
+
+    MINIAPP_SERVICE="${SERVICE_NAME}-miniapp"
+    PANEL_SERVICE="${SERVICE_NAME}-adminpanel"
+    API_SERVICE="${SERVICE_NAME}-api"
+    DSUB_SERVICE="${SERVICE_NAME}-sub"
+    STORE_SERVICE="${SERVICE_NAME}-store"
+    local has_miniapp=0 has_panel=0 has_api=0 has_dsub=0 has_store=0
+    systemctl list-units --full -all | grep -q "${MINIAPP_SERVICE}.service" && has_miniapp=1
+    systemctl list-units --full -all | grep -q "${PANEL_SERVICE}.service" && has_panel=1
+    systemctl list-units --full -all | grep -q "${API_SERVICE}.service" && has_api=1
+    systemctl list-units --full -all | grep -q "${DSUB_SERVICE}.service" && has_dsub=1
+    systemctl list-units --full -all | grep -q "${STORE_SERVICE}.service" && has_store=1
+
+    local total=3
+    [ "$has_miniapp" = "1" ] && total=$((total+1))
+    [ "$has_panel" = "1" ] && total=$((total+1))
+    [ "$has_api" = "1" ] && total=$((total+1))
+    [ "$has_dsub" = "1" ] && total=$((total+1))
+    [ "$has_store" = "1" ] && total=$((total+1))
+    local step=0 failed=0
+
+    section_header "$(t update_bot_header)"
+
+    step=$((step+1))
+    run_step_live "$step" "$total" "$(t fetching_latest)" fetch_project_code "$INSTALL_DIR" || failed=1
+
+    step=$((step+1))
+    run_step_live "$step" "$total" "$(t updating_packages)" bash -c "source '$INSTALL_DIR/venv/bin/activate' && pip install -r requirements.txt --quiet && deactivate" || failed=1
+
+    step=$((step+1))
+    run_step_live "$step" "$total" "$(t restarting_bot_service)" bash -c "sudo systemctl restart '$SERVICE_NAME' && sleep 2" || failed=1
+
+    if [ "$has_miniapp" = "1" ]; then
+        step=$((step+1))
+        run_step_live "$step" "$total" "$(t restarting_miniapp_service)" bash -c "sudo systemctl restart '$MINIAPP_SERVICE' && sleep 2" || failed=1
+    fi
+
+    if [ "$has_panel" = "1" ]; then
+        step=$((step+1))
+        run_step_live "$step" "$total" "$(t restarting_panel_service)" bash -c "sudo systemctl restart '$PANEL_SERVICE' && sleep 2" || failed=1
+    fi
+
+    if [ "$has_api" = "1" ]; then
+        step=$((step+1))
+        run_step_live "$step" "$total" "$(t restarting_api_service)" bash -c "sudo systemctl restart '$API_SERVICE' && sleep 2" || failed=1
+    fi
+
+    if [ "$has_dsub" = "1" ]; then
+        step=$((step+1))
+        run_step_live "$step" "$total" "$(t restarting_dsub_service)" bash -c "sudo systemctl restart '$DSUB_SERVICE' && sleep 2" || failed=1
+    fi
+
+    if [ "$has_store" = "1" ]; then
+        step=$((step+1))
+        run_step_live "$step" "$total" "$(t restarting_store_service)" bash -c "sudo systemctl restart '$STORE_SERVICE' && sleep 2" || failed=1
+    fi
+
+    draw_rule
+    if [ "$failed" = "0" ] && systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo -e "  ${GREEN}${BOLD}$(t update_done)${RESET}  ${DIM}($(ui_fmt_dur $(( SECONDS - UI_T0 ))))${RESET}"
+        print_status_line
+    else
+        echo -e "  ${RED}$(t install_failed "$SERVICE_NAME")${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: update Mini App / عملیات: آپدیت مینی‌اپ
+# ---------------------------------------------------------------------------
+update_miniapp() {
+    MINIAPP_SERVICE="${SERVICE_NAME}-miniapp"
+    if ! systemctl list-units --full -all | grep -q "${MINIAPP_SERVICE}.service"; then
+        echo -e "${RED}$(t miniapp_not_installed)${RESET}"
+        return
+    fi
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR"
+
+    local failed=0
+    section_header "$(t update_miniapp_header)"
+    run_step_live 1 3 "$(t fetching_latest)" fetch_project_code "$INSTALL_DIR" || failed=1
+    run_step_live 2 3 "$(t updating_packages)" bash -c "source '$INSTALL_DIR/venv/bin/activate' && pip install -r requirements.txt --quiet && deactivate" || failed=1
+    run_step_live 3 3 "$(t restarting_miniapp_service)" bash -c "sudo systemctl restart '$MINIAPP_SERVICE' && sleep 2" || failed=1
+
+    draw_rule
+    if [ "$failed" = "0" ] && systemctl is-active --quiet "$MINIAPP_SERVICE"; then
+        echo -e "  ${GREEN}${BOLD}$(t miniapp_update_done)${RESET}"
+    else
+        echo -e "  ${RED}$(t install_failed "$MINIAPP_SERVICE")${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: full removal / عملیات: حذف کامل
+# ---------------------------------------------------------------------------
+shopvpn_nginx_domains() {
+    local dir="${1:-/etc/nginx/sites-available}" env_file="$INSTALL_DIR/.env" key f d wport
+    {
+        if [ -f "$env_file" ]; then
+            for key in MINIAPP_URL ADMIN_PANEL_URL WEBHOOK_BASE_URL; do
+                grep -m1 "^${key}=" "$env_file" | cut -d= -f2- | sed -E 's#^"?https?://##; s#[/"]+.*$##'
+            done
+            wport=$(grep -m1 "^WEBHOOK_LISTEN_PORT=" "$env_file" | cut -d= -f2)
+        fi
+        wport="${wport:-8010}"
+        for f in "$dir"/*.conf; do
+            [ -f "$f" ] || continue
+            if grep -q "managed-by-shopvpn-panel-proxy" "$f" 2>/dev/null \
+               || grep -qE "proxy_pass http://127\.0\.0\.1:(8001|8002|8003|8004|8005|${wport});" "$f" 2>/dev/null; then
+                d=$(basename "$f" .conf)
+                echo "$d"
+            fi
+        done
+    } | grep -E '^[A-Za-z0-9.-]+$' | sort -u
+}
+
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+factory_reset() {
+    local CONFIRM ans_backup ans_ssl real_dir script_path unit domain backup_file
+    local -a DOMAINS=()
+    real_dir=$(readlink -f "$INSTALL_DIR" 2>/dev/null || echo "$INSTALL_DIR")
+    if [ -z "$real_dir" ] || [ "$real_dir" = "/" ] || [ "$real_dir" = "$HOME" ] || [ "$real_dir" = "/root" ] || [ "${#real_dir}" -lt 8 ]; then
+        echo -e "${RED}$(t fr_unsafe_dir "$INSTALL_DIR")${RESET}"
+        return 1
+    fi
+
+    echo -e "${RED}${BOLD}$(t fr_warn)${RESET}"
+    read -rp "$(t fr_type_reset)" CONFIRM
+    if [ "$CONFIRM" != "RESET" ]; then
+        echo -e "${YELLOW}$(t cancelled)${RESET}"
+        return
+    fi
+
+    mapfile -t DOMAINS < <(shopvpn_nginx_domains)
+    if [ "${#DOMAINS[@]}" -gt 0 ]; then
+        echo -e "${CYAN}$(t fr_domains_found)${RESET}"
+        for domain in "${DOMAINS[@]}"; do echo "  - $domain"; done
+    fi
+
+    read -rp "$(t fr_backup_ask)" ans_backup
+    if [[ ! "$ans_backup" =~ ^[nN]$ ]] && [ -d "$real_dir" ]; then
+        backup_file="$HOME/shopvpn_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+        if tar -czf "$backup_file" --exclude="venv" --exclude="translation-venv" --exclude="__pycache__" \
+            -C "$(dirname "$real_dir")" "$(basename "$real_dir")" 2>/dev/null; then
+            chmod 600 "$backup_file"
+            echo -e "${GREEN}$(t fr_backup_done "$backup_file")${RESET}"
+        else
+            rm -f "$backup_file"
+            echo -e "${RED}$(t fr_backup_failed)${RESET}"
+            return 1
+        fi
+    fi
+
+    ans_ssl="n"
+    if [ "${#DOMAINS[@]}" -gt 0 ]; then
+        read -rp "$(t fr_ssl_ask)" ans_ssl
+    fi
+
+    cd "$HOME" || cd /
+    for unit in "$SERVICE_NAME" "${SERVICE_NAME}-miniapp" "${SERVICE_NAME}-adminpanel" "${SERVICE_NAME}-api" "${SERVICE_NAME}-sub" "${SERVICE_NAME}-store" "$LIBRETRANSLATE_SERVICE"; do
+        sudo systemctl stop "$unit" >/dev/null 2>&1 || true
+        sudo systemctl disable "$unit" >/dev/null 2>&1 || true
+        sudo rm -f "/etc/systemd/system/${unit}.service"
+    done
+    sudo systemctl daemon-reload
+    sudo systemctl reset-failed >/dev/null 2>&1 || true
+
+    for domain in "${DOMAINS[@]}"; do
+        sudo rm -f "/etc/nginx/sites-enabled/${domain}.conf" "/etc/nginx/sites-available/${domain}.conf"
+        if [[ "$ans_ssl" =~ ^[yY]$ ]] && [ -d "/etc/letsencrypt/live/${domain}" ]; then
+            sudo certbot delete --cert-name "$domain" --non-interactive >/dev/null 2>&1 || true
+        fi
+    done
+    if [ "${#DOMAINS[@]}" -gt 0 ]; then
+        sudo nginx -t >/dev/null 2>&1 && sudo systemctl reload nginx >/dev/null 2>&1 || true
+    fi
+
+    rm -rf "$real_dir"
+    echo -e "${GREEN}$(t fr_done)${RESET}"
+
+    script_path=$(readlink -f "$0" 2>/dev/null || echo "")
+    case "$script_path" in
+        "$real_dir"/*) exit 0 ;;
+    esac
+}
+
+uninstall_bot() {
+    echo -e "${RED}${BOLD}$(t uninstall_warning)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    if [ "$CONFIRM" != "yes" ]; then
+        echo -e "${YELLOW}$(t cancelled)${RESET}"
+        return
+    fi
+    sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    sudo systemctl daemon-reload
+    echo -e "${GREEN}$(t service_removed)${RESET}"
+
+    read -rp "$(t confirm_delete_files)" CONFIRM2
+    if [ "$CONFIRM2" == "yes" ]; then
+        rm -rf "$INSTALL_DIR"
+        echo -e "${GREEN}$(t files_removed)${RESET}"
+    else
+        echo -e "${CYAN}$(t files_kept "$INSTALL_DIR")${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: status / logs / restart / stop
+# عملیات: وضعیت / لاگ / ری‌استارت / توقف
+# ---------------------------------------------------------------------------
+view_status() {
+    sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
+}
+
+view_logs() {
+    echo -e "${CYAN}$(t logs_exit_hint)${RESET}"
+    sleep 1
+    sudo journalctl -u "$SERVICE_NAME" -f
+}
+
+restart_bot() {
+    sudo systemctl restart "$SERVICE_NAME"
+    sleep 1
+    echo -e "${GREEN}$(t bot_restarted)${RESET}"
+}
+
+stop_bot() {
+    sudo systemctl stop "$SERVICE_NAME"
+    echo -e "${YELLOW}$(t bot_stopped)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: quick sales stats (direct from DB, bot doesn't need to be running)
+# عملیات: آمار فروش سریع (مستقیم از دیتابیس، بدون نیاز به روشن بودن بات)
+# ---------------------------------------------------------------------------
+show_stats() {
+    if [ ! -f "$INSTALL_DIR/bot_database.db" ]; then
+        echo -e "${RED}$(t no_database)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+    SHOPVPN_STATS_LANG="$APP_LANG" python3 - <<'PYEOF'
+import os
+from database import Database
+
+lang = os.environ.get("SHOPVPN_STATS_LANG", "en")
+s = Database("bot_database.db").get_stats()
+
+if lang == "fa":
+    print(f"\n👥 تعداد کاربران: {s['users']}")
+    print(f"⏳ سفارش‌های در انتظار: {s['pending']}")
+    print(f"✅ سفارش‌های تایید شده: {s['approved']}")
+    print(f"❌ سفارش‌های رد شده: {s['rejected']}")
+    print(f"💰 مجموع فروش: {s['revenue']:,} تومان\n")
+else:
+    print(f"\n👥 Users: {s['users']}")
+    print(f"⏳ Pending orders: {s['pending']}")
+    print(f"✅ Approved orders: {s['approved']}")
+    print(f"❌ Rejected orders: {s['rejected']}")
+    print(f"💰 Total revenue: {s['revenue']:,} Toman\n")
+PYEOF
+    deactivate
+}
+
+# ---------------------------------------------------------------------------
+# Action: change admin token or ID / عملیات: تغییر توکن یا آیدی ادمین
+# ---------------------------------------------------------------------------
+set_env_key() {
+    local key="$1" val="$2" file="$INSTALL_DIR/.env"
+    touch "$file"
+    KEY="$key" VAL="$val" awk 'BEGIN{k=ENVIRON["KEY"];v=ENVIRON["VAL"];d=0}
+        index($0,k"=")==1{if(!d){print k"="v;d=1};next}
+        {print}
+        END{if(!d)print k"="v}' "$file" > "$file.tmp" \
+        && cat "$file.tmp" > "$file" && rm -f "$file.tmp"
+}
+
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+edit_env() {
+    local env_file="$INSTALL_DIR/.env" ans resp unit failed=0
+    if [ ! -d "$INSTALL_DIR" ]; then
+        echo -e "${RED}$(t env_dir_missing "$INSTALL_DIR")${RESET}"
+        return 1
+    fi
+    read -rp "$(t prompt_new_token)" NEW_TOKEN
+    read -rp "$(t prompt_new_owner)" NEW_OWNER
+    NEW_TOKEN=$(printf '%s' "$NEW_TOKEN" | tr -d '[:space:]')
+    NEW_OWNER=$(printf '%s' "$NEW_OWNER" | tr -d '[:space:]')
+    [ -z "$NEW_TOKEN" ] && [ -z "$NEW_OWNER" ] && return 0
+
+    if [ -n "$NEW_TOKEN" ]; then
+        if ! [[ "$NEW_TOKEN" =~ ^[0-9]{5,}:[A-Za-z0-9_-]{20,}$ ]]; then
+            echo -e "${RED}$(t invalid_token_fmt)${RESET}"
+            return 1
+        fi
+        resp=$(curl -sS --max-time 10 "https://api.telegram.org/bot${NEW_TOKEN}/getMe" 2>/dev/null || true)
+        if [[ "$resp" == *'"ok":false'* ]]; then
+            echo -e "${RED}$(t token_rejected)${RESET}"
+            return 1
+        fi
+    fi
+    if [ -n "$NEW_OWNER" ]; then
+        if ! [[ "$NEW_OWNER" =~ ^-?[0-9]+$ ]]; then
+            echo -e "${RED}$(t invalid_owner_fmt)${RESET}"
+            return 1
+        fi
+        read -rp "$(t owner_change_warn)" ans
+        [[ "$ans" =~ ^[yY]$ ]] || return 0
+    fi
+
+    touch "$env_file"
+    cp -p "$env_file" "$env_file.bak.$(date +%Y%m%d%H%M%S)"
+    echo -e "${DIM}$(t env_backup_done "$env_file.bak.*")${RESET}"
+    [ -n "$NEW_TOKEN" ] && set_env_key BOT_TOKEN "$NEW_TOKEN"
+    [ -n "$NEW_OWNER" ] && set_env_key OWNER_ID "$NEW_OWNER"
+
+    echo -e "${GREEN}$(t saved_restarting)${RESET}"
+    for unit in "$SERVICE_NAME" "${SERVICE_NAME}-miniapp" "${SERVICE_NAME}-adminpanel" "${SERVICE_NAME}-api" "${SERVICE_NAME}-sub" "${SERVICE_NAME}-store"; do
+        [ -f "/etc/systemd/system/${unit}.service" ] || continue
+        sudo systemctl restart "$unit"
+    done
+    sleep 3
+    for unit in "$SERVICE_NAME" "${SERVICE_NAME}-miniapp" "${SERVICE_NAME}-adminpanel" "${SERVICE_NAME}-api" "${SERVICE_NAME}-sub" "${SERVICE_NAME}-store"; do
+        [ -f "/etc/systemd/system/${unit}.service" ] || continue
+        if ! systemctl is-active --quiet "$unit"; then
+            failed=1
+            echo -e "${RED}$(t env_service_failed "$unit")${RESET}"
+            sudo journalctl -u "$unit" -n 15 --no-pager
+        fi
+    done
+    return $failed
+}
+
+# ---------------------------------------------------------------------------
+# Tune nginx for real production traffic. VPN config domains on this box can
+# see thousands of concurrent connections; Ubuntu's stock nginx.conf ships
+# with worker_connections=768, which is nowhere near enough. That limit is
+# shared across ALL vhosts on the same nginx process, so once it's hit,
+# EVERY domain on the box - including the Mini App / Admin Panel domains -
+# starts failing (TLS handshake errors like Cloudflare 525, refused
+# connections, etc), not just the busy one. Idempotent: safe to call every
+# time nginx is installed/updated.
+# تنظیم nginx برای ترافیک واقعی. دامنه‌های کانفیگ VPN روی این سرور می‌تونن
+# هزاران کانکشن همزمان داشته باشن؛ nginx پیش‌فرض اوبونتو با
+# worker_connections=768 میاد که اصلاً کافی نیست. چون این سقف بین همه‌ی
+# دامنه‌های همون nginx مشترکه، وقتی پر بشه همه‌ی دامنه‌ها -از جمله دامنه‌های
+# مینی‌اپ/پنل مدیریت- شروع به خطا دادن می‌کنن (مثل خطای 525 در Cloudflare یا
+# رد اتصال)، نه فقط اون دامنه‌ی پرترافیک. idempotent است؛ هر بار nginx نصب/
+# آپدیت بشه بی‌خطر صدا زده می‌شود.
+# ---------------------------------------------------------------------------
+tune_nginx_for_scale() {
+    [ -f /etc/nginx/nginx.conf ] || return
+
+    if grep -q '^worker_processes' /etc/nginx/nginx.conf; then
+        sudo sed -i 's/^worker_processes.*/worker_processes auto;/' /etc/nginx/nginx.conf
+    else
+        sudo sed -i '1i worker_processes auto;' /etc/nginx/nginx.conf
+    fi
+
+    if grep -q '^worker_rlimit_nofile' /etc/nginx/nginx.conf; then
+        sudo sed -i 's/^worker_rlimit_nofile.*/worker_rlimit_nofile 65535;/' /etc/nginx/nginx.conf
+    else
+        sudo sed -i '/^worker_processes/a worker_rlimit_nofile 65535;' /etc/nginx/nginx.conf
+    fi
+
+    if grep -q 'worker_connections' /etc/nginx/nginx.conf; then
+        sudo sed -i 's/worker_connections[[:space:]]*[0-9]*;/worker_connections 8192;/' /etc/nginx/nginx.conf
+    fi
+
+    # Raise the systemd-level open-file limit too (worker_rlimit_nofile above
+    # is capped by this), so the higher nginx.conf value actually takes effect.
+    sudo mkdir -p /etc/systemd/system/nginx.service.d
+    sudo bash -c 'cat > /etc/systemd/system/nginx.service.d/override.conf' <<'NGINXOVERRIDE'
+[Service]
+LimitNOFILE=65535
+NGINXOVERRIDE
+
+    sudo systemctl daemon-reload
+    if sudo nginx -t > /dev/null 2>&1; then
+        sudo systemctl reload nginx 2>/dev/null || sudo systemctl restart nginx 2>/dev/null || true
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: switch the bot between Polling and Webhook mode
+# عملیات: تغییر حالت دریافت آپدیت بات بین Polling و Webhook
+# ---------------------------------------------------------------------------
+setup_bot_mode() {
+    CUR_MODE=$(grep "^BOT_MODE=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d '=' -f2)
+    CUR_MODE="${CUR_MODE:-polling}"
+    echo -e "${CYAN}$(t current_bot_mode "$CUR_MODE")${RESET}"
+    echo ""
+    echo "  1) Polling"
+    echo "  2) Webhook"
+    read -rp "$(t choose_bot_mode)" MODE_CHOICE
+
+    if [ "$MODE_CHOICE" = "1" ]; then
+        if grep -q "^BOT_MODE=" "$INSTALL_DIR/.env" 2>/dev/null; then
+            sed -i "s|^BOT_MODE=.*|BOT_MODE=polling|" "$INSTALL_DIR/.env"
+        else
+            echo "BOT_MODE=polling" >> "$INSTALL_DIR/.env"
+        fi
+        sudo systemctl restart "$SERVICE_NAME"
+        echo -e "${GREEN}$(t bot_mode_set_polling)${RESET}"
+        return
+    elif [ "$MODE_CHOICE" != "2" ]; then
+        echo -e "${RED}$(t invalid_choice)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_domain_webhook)" DOMAIN
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}$(t domain_empty)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}$(t checking_dns)${RESET}"
+    SERVER_IP=$(curl -fsSL ifconfig.me || echo "")
+    DOMAIN_IP=$(getent ahosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -n "$SERVER_IP" ] && [ -n "$DOMAIN_IP" ] && [ "$SERVER_IP" != "$DOMAIN_IP" ]; then
+        echo -e "${YELLOW}$(t dns_mismatch_warn "$SERVER_IP" "$DOMAIN_IP")${RESET}"
+        read -rp "$(t continue_prompt)" CONT
+        [ "$CONT" != "yes" ] && return
+    fi
+
+    echo -e "${CYAN}$(t installing_nginx)${RESET}"
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get update -qq
+    timeout 120 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+        apt-get install -y -qq nginx certbot python3-certbot-nginx > /dev/null
+    tune_nginx_for_scale
+
+    WEBHOOK_PORT=$(grep "^WEBHOOK_LISTEN_PORT=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d '=' -f2)
+    WEBHOOK_PORT="${WEBHOOK_PORT:-8010}"
+
+    echo -e "${CYAN}$(t configuring_nginx "$DOMAIN")${RESET}"
+    sudo bash -c "cat > /etc/nginx/sites-available/${DOMAIN}.conf" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 100m;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location / {
+        proxy_pass http://127.0.0.1:$WEBHOOK_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    sudo ln -sf "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+    if ! sudo nginx -t > /dev/null 2>&1; then
+        echo -e "${RED}$(t nginx_error "$(sudo nginx -t 2>&1)")${RESET}"
+        return
+    fi
+    sudo systemctl reload nginx
+
+    echo -e "${CYAN}$(t getting_ssl)${RESET}"
+    sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+        --register-unsafely-without-email --redirect
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}$(t ssl_failed)${RESET}"
+        return
+    fi
+
+    WEBHOOK_SECRET_VAL=$(grep "^WEBHOOK_SECRET=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d '=' -f2)
+    [ -z "$WEBHOOK_SECRET_VAL" ] && WEBHOOK_SECRET_VAL=$(python3 -c "import secrets; print(secrets.token_hex(24))")
+
+    for KV in "BOT_MODE=webhook" "WEBHOOK_BASE_URL=https://$DOMAIN" "WEBHOOK_SECRET=$WEBHOOK_SECRET_VAL" \
+              "WEBHOOK_LISTEN_HOST=127.0.0.1" "WEBHOOK_LISTEN_PORT=$WEBHOOK_PORT"; do
+        KEY="${KV%%=*}"
+        if grep -q "^${KEY}=" "$INSTALL_DIR/.env" 2>/dev/null; then
+            sed -i "s|^${KEY}=.*|${KV}|" "$INSTALL_DIR/.env"
+        else
+            echo "$KV" >> "$INSTALL_DIR/.env"
+        fi
+    done
+
+    sudo systemctl restart "$SERVICE_NAME"
+    echo -e "${GREEN}${BOLD}$(t bot_mode_set_webhook "https://$DOMAIN")${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: full Mini App setup (domain + SSL + nginx + service, all automatic)
+# عملیات: نصب/تنظیم کامل مینی‌اپ (دامنه + SSL + nginx + سرویس، همه خودکار)
+# ---------------------------------------------------------------------------
+setup_miniapp() {
+    if [ ! -d "$INSTALL_DIR/miniapp" ]; then
+        echo -e "${RED}$(t miniapp_dir_missing)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_domain_miniapp)" DOMAIN
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}$(t domain_empty)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}$(t checking_dns)${RESET}"
+    SERVER_IP=$(curl -fsSL ifconfig.me || echo "")
+    DOMAIN_IP=$(getent ahosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -n "$SERVER_IP" ] && [ -n "$DOMAIN_IP" ] && [ "$SERVER_IP" != "$DOMAIN_IP" ]; then
+        echo -e "${YELLOW}$(t dns_mismatch_warn "$SERVER_IP" "$DOMAIN_IP")${RESET}"
+        read -rp "$(t continue_prompt)" CONT
+        [ "$CONT" != "yes" ] && return
+    fi
+
+    echo -e "${CYAN}$(t installing_nginx)${RESET}"
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get update -qq
+    timeout 120 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+        apt-get install -y -qq nginx certbot python3-certbot-nginx > /dev/null
+    tune_nginx_for_scale
+
+    echo -e "${CYAN}$(t installing_miniapp_pkgs)${RESET}"
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+    pip install -r requirements.txt --quiet
+    deactivate
+
+    echo -e "${CYAN}$(t creating_miniapp_service)${RESET}"
+    MINIAPP_SERVICE="${SERVICE_NAME}-miniapp"
+    sudo bash -c "cat > /etc/systemd/system/${MINIAPP_SERVICE}.service" <<EOF
+[Unit]
+Description=V2Ray Mini App Backend
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/venv/bin/uvicorn miniapp.server:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+User=$(whoami)
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$MINIAPP_SERVICE" > /dev/null 2>&1
+    sudo systemctl restart "$MINIAPP_SERVICE"
+
+    echo -e "${CYAN}$(t configuring_nginx "$DOMAIN")${RESET}"
+    sudo bash -c "cat > /etc/nginx/sites-available/${DOMAIN}.conf" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 100m;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location / {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    sudo ln -sf "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+    if ! sudo nginx -t > /dev/null 2>&1; then
+        echo -e "${RED}$(t nginx_error "$(sudo nginx -t 2>&1)")${RESET}"
+        return
+    fi
+    sudo systemctl reload nginx
+
+    echo -e "${CYAN}$(t getting_ssl)${RESET}"
+    sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+        --register-unsafely-without-email --redirect
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}$(t ssl_failed)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}$(t saving_miniapp_url)${RESET}"
+    if grep -q "^MINIAPP_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        sed -i "s|^MINIAPP_URL=.*|MINIAPP_URL=https://$DOMAIN/?app=1|" "$INSTALL_DIR/.env"
+    else
+        echo "MINIAPP_URL=https://$DOMAIN/?app=1" >> "$INSTALL_DIR/.env"
+    fi
+
+    sudo systemctl restart "$SERVICE_NAME"
+
+    echo -e "${GREEN}${BOLD}$(t miniapp_ready "https://$DOMAIN")${RESET}"
+    echo -e "${GREEN}$(t miniapp_button_hint)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: full Mini App removal / عملیات: حذف کامل مینی‌اپ
+# ---------------------------------------------------------------------------
+remove_miniapp() {
+    echo -e "${RED}${BOLD}$(t remove_miniapp_warn)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    MINIAPP_SERVICE="${SERVICE_NAME}-miniapp"
+    sudo systemctl stop "$MINIAPP_SERVICE" 2>/dev/null || true
+    sudo systemctl disable "$MINIAPP_SERVICE" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/${MINIAPP_SERVICE}.service"
+    sudo systemctl daemon-reload
+
+    read -rp "$(t prompt_domain_used_miniapp)" DOMAIN
+    if [ -n "$DOMAIN" ]; then
+        sudo rm -f "/etc/nginx/sites-enabled/${DOMAIN}.conf" "/etc/nginx/sites-available/${DOMAIN}.conf"
+        sudo systemctl reload nginx 2>/dev/null || true
+    fi
+
+    if grep -q "^MINIAPP_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        sed -i "/^MINIAPP_URL=/d" "$INSTALL_DIR/.env"
+    fi
+    sudo systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+    echo -e "${GREEN}$(t miniapp_removed)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: full standalone admin panel setup (domain + SSL + nginx + service)
+# عملیات: نصب/تنظیم کامل پنل مدیریت وب مستقل (دامنه + SSL + nginx + سرویس)
+# ---------------------------------------------------------------------------
+setup_admin_panel() {
+    if [ ! -d "$INSTALL_DIR/admin_panel" ]; then
+        echo -e "${RED}$(t panel_dir_missing)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_domain_panel)" DOMAIN
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}$(t domain_empty)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}$(t checking_dns)${RESET}"
+    SERVER_IP=$(curl -fsSL ifconfig.me || echo "")
+    DOMAIN_IP=$(getent ahosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -n "$SERVER_IP" ] && [ -n "$DOMAIN_IP" ] && [ "$SERVER_IP" != "$DOMAIN_IP" ]; then
+        echo -e "${YELLOW}$(t dns_mismatch_warn "$SERVER_IP" "$DOMAIN_IP")${RESET}"
+        read -rp "$(t continue_prompt)" CONT
+        [ "$CONT" != "yes" ] && return
+    fi
+
+    echo -e "${CYAN}$(t installing_nginx)${RESET}"
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get update -qq
+    timeout 120 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+        apt-get install -y -qq nginx certbot python3-certbot-nginx > /dev/null
+    tune_nginx_for_scale
+
+    echo -e "${CYAN}$(t installing_panel_pkgs)${RESET}"
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+    pip install -r requirements.txt --quiet
+
+    if ! grep -q "^ADMIN_PANEL_SECRET=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        echo "ADMIN_PANEL_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> "$INSTALL_DIR/.env"
+    fi
+
+    # Save the final panel address (over https, once SSL is on) in .env so
+    # the main bot can build activation links for full reseller web panels,
+    # and so that re-running this on the same domain cleanly replaces the
+    # previous value.
+    if grep -q "^ADMIN_PANEL_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        sudo sed -i "s#^ADMIN_PANEL_URL=.*#ADMIN_PANEL_URL=https://$DOMAIN#" "$INSTALL_DIR/.env"
+    else
+        echo "ADMIN_PANEL_URL=https://$DOMAIN" >> "$INSTALL_DIR/.env"
+    fi
+
+    echo ""
+    echo -e "${YELLOW}${BOLD}$(t enter_owner_account)${RESET}"
+    read -rp "$(t prompt_username)" PANEL_USER
+    read -rsp "$(t prompt_password)" PANEL_PASS
+    echo ""
+    python3 -m admin_panel.create_admin "$PANEL_USER" "$PANEL_PASS"
+    deactivate
+
+    echo -e "${CYAN}$(t creating_panel_service)${RESET}"
+    PANEL_SERVICE="${SERVICE_NAME}-adminpanel"
+    sudo bash -c "cat > /etc/systemd/system/${PANEL_SERVICE}.service" <<EOF
+[Unit]
+Description=ShopVPN Standalone Admin Panel
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/venv/bin/uvicorn admin_panel.server:app --host 127.0.0.1 --port 8002
+Restart=always
+RestartSec=5
+User=$(whoami)
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$PANEL_SERVICE" > /dev/null 2>&1
+    sudo systemctl restart "$PANEL_SERVICE"
+
+    echo -e "${CYAN}$(t configuring_nginx "$DOMAIN")${RESET}"
+    sudo bash -c "cat > /etc/nginx/sites-available/${DOMAIN}.conf" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 100m;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location / {
+        proxy_pass http://127.0.0.1:8002;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    sudo ln -sf "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+    if ! sudo nginx -t > /dev/null 2>&1; then
+        echo -e "${RED}$(t nginx_error "$(sudo nginx -t 2>&1)")${RESET}"
+        return
+    fi
+    sudo systemctl reload nginx
+
+    echo -e "${CYAN}$(t getting_ssl)${RESET}"
+    sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+        --register-unsafely-without-email --redirect
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}$(t ssl_failed)${RESET}"
+        return
+    fi
+
+    echo -e "${GREEN}${BOLD}$(t panel_ready "https://$DOMAIN")${RESET}"
+    echo -e "${GREEN}$(t panel_login_hint)${RESET}"
+
+    echo -e "${CYAN}$(t restarting_bot_for_panel_url)${RESET}"
+    sudo systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Action: update standalone admin panel / عملیات: آپدیت پنل مدیریت وب مستقل
+# ---------------------------------------------------------------------------
+update_admin_panel() {
+    PANEL_SERVICE="${SERVICE_NAME}-adminpanel"
+    if ! systemctl list-units --full -all | grep -q "${PANEL_SERVICE}.service"; then
+        echo -e "${RED}$(t panel_not_installed_yet)${RESET}"
+        return
+    fi
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR"
+
+    local failed=0
+    section_header "$(t update_panel_header)"
+    run_step_live 1 3 "$(t fetching_latest)" fetch_project_code "$INSTALL_DIR" || failed=1
+    run_step_live 2 3 "$(t updating_packages)" bash -c "source '$INSTALL_DIR/venv/bin/activate' && pip install -r requirements.txt --quiet && deactivate" || failed=1
+    run_step_live 3 3 "$(t restarting_panel_service)" bash -c "sudo systemctl restart '$PANEL_SERVICE' && sleep 2" || failed=1
+
+    draw_rule
+    if [ "$failed" = "0" ] && systemctl is-active --quiet "$PANEL_SERVICE"; then
+        echo -e "  ${GREEN}${BOLD}$(t panel_update_done)${RESET}"
+    else
+        echo -e "  ${RED}$(t install_failed "$PANEL_SERVICE")${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: change an existing admin panel account's username/password
+# عملیات: تغییر یوزرنیم/پسورد یکی از حساب‌های موجود پنل مدیریت وب
+# ---------------------------------------------------------------------------
+change_admin_panel_credentials() {
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    if [ ! -d "$INSTALL_DIR/admin_panel" ]; then
+        echo -e "${RED}$(t panel_dir_missing)${RESET}"
+        return
+    fi
+
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+
+    local EXISTING_ADMINS
+    EXISTING_ADMINS=$(python3 -c "
+from config import DB_PATH
+from database import Database
+db = Database(DB_PATH)
+for r in db.list_web_admins():
+    print(f\"  - {r['username']} ({r['role']})\")
+" 2>/dev/null)
+
+    if [ -z "$EXISTING_ADMINS" ]; then
+        echo -e "${RED}$(t no_panel_admins_found)${RESET}"
+        deactivate
+        return
+    fi
+
+    echo -e "${CYAN}$(t existing_admins_header)${RESET}"
+    echo "$EXISTING_ADMINS"
+    echo ""
+
+    read -rp "$(t prompt_current_username)" CUR_USER
+    read -rp "$(t prompt_new_username)" NEW_USER
+    [ -z "$NEW_USER" ] && NEW_USER="$CUR_USER"
+    read -rsp "$(t prompt_new_password)" NEW_PASS
+    echo ""
+
+    if [ -z "$CUR_USER" ] || [ -z "$NEW_PASS" ]; then
+        echo -e "${RED}$(t change_admin_creds_cancelled)${RESET}"
+        deactivate
+        return
+    fi
+
+    python3 -m change_admin "$CUR_USER" "$NEW_USER" "$NEW_PASS"
+    deactivate
+}
+
+# ---------------------------------------------------------------------------
+# Action: full standalone admin panel removal
+# عملیات: حذف کامل پنل مدیریت وب مستقل
+# ---------------------------------------------------------------------------
+remove_admin_panel() {
+    echo -e "${RED}${BOLD}$(t remove_panel_warn)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    PANEL_SERVICE="${SERVICE_NAME}-adminpanel"
+    sudo systemctl stop "$PANEL_SERVICE" 2>/dev/null || true
+    sudo systemctl disable "$PANEL_SERVICE" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/${PANEL_SERVICE}.service"
+    sudo systemctl daemon-reload
+
+    read -rp "$(t prompt_domain_used_panel)" DOMAIN
+    if [ -n "$DOMAIN" ]; then
+        sudo rm -f "/etc/nginx/sites-enabled/${DOMAIN}.conf" "/etc/nginx/sites-available/${DOMAIN}.conf"
+        sudo systemctl reload nginx 2>/dev/null || true
+    fi
+    echo -e "${GREEN}$(t panel_removed)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: reverse-proxy a domain (with SSL) to any locally/remotely running
+# VPN panel (Hiddify, Marzban, Marzneshin, 3X-UI, PasarGuard, ...), so it can
+# share port 443 with the mini-app / admin panel via nginx SNI vhosts.
+# عملیات: پروکسی یک دامنه (با SSL) به هر پنل VPN (Hiddify, Marzban,
+# Marzneshin, 3X-UI, PasarGuard و ...) تا پورت 443 را با مینی‌اپ/پنل مدیریت
+# از طریق vhost‌های nginx به اشتراک بگذارد.
+# ---------------------------------------------------------------------------
+setup_panel_proxy() {
+    read -rp "$(t prompt_domain_panel_proxy)" DOMAIN
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}$(t domain_empty)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_backend_address)" BACKEND
+    if [ -z "$BACKEND" ]; then
+        echo -e "${RED}$(t backend_address_empty)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_backend_https)" BACKEND_HTTPS
+    if [[ "$BACKEND_HTTPS" == "yes" ]]; then
+        BACKEND_SCHEME="https"
+    else
+        BACKEND_SCHEME="http"
+    fi
+
+    read -rp "$(t prompt_backend_path)" BACKEND_PATH
+    if [ -z "$BACKEND_PATH" ]; then
+        BACKEND_PATH="/"
+    fi
+    # normalize: must start with / and must NOT end with / (unless it's root "/")
+    [[ "$BACKEND_PATH" != /* ]] && BACKEND_PATH="/$BACKEND_PATH"
+    if [ "$BACKEND_PATH" != "/" ]; then
+        BACKEND_PATH="${BACKEND_PATH%/}"
+    fi
+
+    echo -e "${CYAN}$(t checking_dns)${RESET}"
+    SERVER_IP=$(curl -fsSL ifconfig.me || echo "")
+    DOMAIN_IP=$(getent ahosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -n "$SERVER_IP" ] && [ -n "$DOMAIN_IP" ] && [ "$SERVER_IP" != "$DOMAIN_IP" ]; then
+        echo -e "${YELLOW}$(t dns_mismatch_warn "$SERVER_IP" "$DOMAIN_IP")${RESET}"
+        read -rp "$(t continue_prompt)" CONT
+        [ "$CONT" != "yes" ] && return
+    fi
+
+    echo -e "${CYAN}$(t installing_nginx)${RESET}"
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get update -qq
+    timeout 120 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+        apt-get install -y -qq nginx certbot python3-certbot-nginx > /dev/null
+    tune_nginx_for_scale
+
+    # Guard: never silently overwrite an nginx config that this menu did not
+    # create itself (e.g. the Mini App / Admin Panel domain config), which
+    # would otherwise take down those services.
+    # گارد: هیچ‌وقت کانفیگی که خودِ این منو نساخته (مثلاً کانفیگ دامنه
+    # مینی‌اپ/پنل مدیریت) را بی‌سروصدا overwrite نکن، چون باعث از دسترس خارج
+    # شدن آن سرویس‌ها می‌شود.
+    EXISTING_CONF="/etc/nginx/sites-available/${DOMAIN}.conf"
+    if sudo test -f "$EXISTING_CONF" && ! sudo grep -q "^# managed-by-shopvpn-panel-proxy$" "$EXISTING_CONF" 2>/dev/null; then
+        echo -e "${RED}$(t panel_proxy_domain_conflict "$DOMAIN")${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}$(t configuring_nginx "$DOMAIN")${RESET}"
+    if [ "$BACKEND_SCHEME" == "https" ]; then
+        SSL_PROXY_LINES="        proxy_ssl_verify off;
+        proxy_ssl_server_name on;"
+    else
+        SSL_PROXY_LINES=""
+    fi
+    sudo bash -c "cat > /etc/nginx/sites-available/${DOMAIN}.conf" <<EOF
+# managed-by-shopvpn-panel-proxy
+# backend: ${BACKEND_SCHEME}://${BACKEND}${BACKEND_PATH}
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 100m;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location ${BACKEND_PATH} {
+        proxy_pass ${BACKEND_SCHEME}://${BACKEND};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+${SSL_PROXY_LINES}
+    }
+}
+EOF
+    sudo ln -sf "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+    if ! sudo nginx -t > /dev/null 2>&1; then
+        echo -e "${RED}$(t nginx_error "$(sudo nginx -t 2>&1)")${RESET}"
+        return
+    fi
+    sudo systemctl reload nginx
+
+    echo -e "${CYAN}$(t getting_ssl)${RESET}"
+    sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+        --register-unsafely-without-email --redirect
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}$(t ssl_failed)${RESET}"
+        return
+    fi
+
+    echo -e "${YELLOW}$(t panel_proxy_note)${RESET}"
+    echo -e "${GREEN}${BOLD}$(t panel_proxy_ready "https://${DOMAIN}${BACKEND_PATH}")${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: remove a VPN panel domain proxy
+# عملیات: حذف دامنه پروکسی پنل VPN
+# ---------------------------------------------------------------------------
+remove_panel_proxy() {
+    echo -e "${RED}${BOLD}$(t remove_panel_proxy_warn)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    read -rp "$(t prompt_domain_used_panel_proxy)" DOMAIN
+    if [ -n "$DOMAIN" ]; then
+        sudo rm -f "/etc/nginx/sites-enabled/${DOMAIN}.conf" "/etc/nginx/sites-available/${DOMAIN}.conf"
+        sudo systemctl reload nginx 2>/dev/null || true
+    fi
+    echo -e "${GREEN}$(t panel_proxy_removed)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: list all panel/config domain proxies set up via option 22
+# عملیات: نمایش لیست پروکسی‌های دامنه‌ای که با گزینه ۲۲ ساخته شده‌اند
+# ---------------------------------------------------------------------------
+list_panel_proxies() {
+    local found=0
+
+    echo -e "${CYAN}${BOLD}$(t panel_proxy_list_header)${RESET}"
+    echo ""
+
+    for conf in /etc/nginx/sites-available/*.conf; do
+        [ -e "$conf" ] || continue
+        grep -q "^# managed-by-shopvpn-panel-proxy$" "$conf" 2>/dev/null || continue
+        found=1
+
+        local domain backend path enabled_state ssl_state cert_file expiry
+        domain=$(basename "$conf" .conf)
+        backend=$(grep -m1 "^# backend:" "$conf" | sed 's/^# backend: *//')
+        path=$(grep -m1 "location " "$conf" | awk '{print $2}')
+
+        if [ -L "/etc/nginx/sites-enabled/$(basename "$conf")" ]; then
+            enabled_state="$(t panel_proxy_list_enabled)"
+        else
+            enabled_state="$(t panel_proxy_list_disabled)"
+        fi
+
+        cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
+        if [ -f "$cert_file" ]; then
+            expiry=$(sudo openssl x509 -enddate -noout -in "$cert_file" 2>/dev/null | cut -d= -f2)
+            ssl_state="$(t panel_proxy_list_ssl_ok "$expiry")"
+        else
+            ssl_state="$(t panel_proxy_list_ssl_missing)"
+        fi
+
+        echo -e "  ${GREEN}${BOLD}${domain}${RESET}"
+        echo -e "    → backend: ${backend:-?}"
+        echo -e "    → path:    ${path:-/}"
+        echo -e "    → nginx:   ${enabled_state}"
+        echo -e "    → SSL:     ${ssl_state}"
+        echo ""
+    done
+
+    if [ "$found" -eq 0 ]; then
+        echo -e "${YELLOW}$(t panel_proxy_list_empty)${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: list domains currently registered for the Mini App and for the
+# standalone Admin Panel (read from MINIAPP_URL / ADMIN_PANEL_URL in .env),
+# and let the user pick one to delete (removes only its nginx site + SSL
+# cert; the underlying systemd service is left running).
+# عملیات: نمایش دامنه‌های فعلی مینی‌اپ و پنل مدیریت وب (از .env) و امکان
+# حذف یکی از آن‌ها (فقط nginx و SSL، بدون خاموش کردن سرویس).
+# ---------------------------------------------------------------------------
+list_service_domains() {
+    local ENV_FILE="$INSTALL_DIR/.env"
+    local miniapp_domain="" admin_domain=""
+
+    if [ -f "$ENV_FILE" ]; then
+        miniapp_domain=$(grep -m1 "^MINIAPP_URL=" "$ENV_FILE" | cut -d= -f2- | sed -E 's#^https?://##; s#[/?].*$##')
+        admin_domain=$(grep -m1 "^ADMIN_PANEL_URL=" "$ENV_FILE" | cut -d= -f2- | sed -E 's#^https?://##; s#/+$##')
+    fi
+
+    if [ -z "$miniapp_domain" ] && [ -z "$admin_domain" ]; then
+        echo -e "${YELLOW}$(t service_domains_empty)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}${BOLD}$(t service_domains_header)${RESET}"
+    echo ""
+
+    local -a ENTRY_LABEL ENTRY_DOMAIN ENTRY_ENVKEY
+    local idx=0
+    if [ -n "$miniapp_domain" ]; then
+        idx=$((idx + 1))
+        ENTRY_LABEL[$idx]="$(t service_domains_miniapp_label)"
+        ENTRY_DOMAIN[$idx]="$miniapp_domain"
+        ENTRY_ENVKEY[$idx]="MINIAPP_URL"
+    fi
+    if [ -n "$admin_domain" ]; then
+        idx=$((idx + 1))
+        ENTRY_LABEL[$idx]="$(t service_domains_panel_label)"
+        ENTRY_DOMAIN[$idx]="$admin_domain"
+        ENTRY_ENVKEY[$idx]="ADMIN_PANEL_URL"
+    fi
+
+    local i
+    for ((i = 1; i <= idx; i++)); do
+        local domain="${ENTRY_DOMAIN[$i]}" enabled_state ssl_state cert_file expiry
+        if [ -L "/etc/nginx/sites-enabled/${domain}.conf" ]; then
+            enabled_state="$(t panel_proxy_list_enabled)"
+        else
+            enabled_state="$(t panel_proxy_list_disabled)"
+        fi
+
+        cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
+        if [ -f "$cert_file" ]; then
+            expiry=$(sudo openssl x509 -enddate -noout -in "$cert_file" 2>/dev/null | cut -d= -f2)
+            ssl_state="$(t panel_proxy_list_ssl_ok "$expiry")"
+        else
+            ssl_state="$(t panel_proxy_list_ssl_missing)"
+        fi
+
+        echo -e "  ${YELLOW}[$i]${RESET} ${GREEN}${BOLD}${ENTRY_LABEL[$i]}${RESET}: ${domain}"
+        echo -e "      → nginx: ${enabled_state}"
+        echo -e "      → SSL:   ${ssl_state}"
+        echo ""
+    done
+
+    read -rp "$(t service_domains_delete_prompt)" CHOICE
+    [ -z "$CHOICE" ] && return
+    if ! [[ "$CHOICE" =~ ^[0-9]+$ ]] || [ "$CHOICE" -lt 1 ] || [ "$CHOICE" -gt "$idx" ]; then
+        echo -e "${RED}$(t invalid_choice)${RESET}"
+        return
+    fi
+
+    local sel_domain="${ENTRY_DOMAIN[$CHOICE]}" sel_envkey="${ENTRY_ENVKEY[$CHOICE]}" sel_label="${ENTRY_LABEL[$CHOICE]}"
+    echo -e "${RED}${BOLD}$(t service_domains_delete_warn "$sel_label" "$sel_domain")${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    sudo rm -f "/etc/nginx/sites-enabled/${sel_domain}.conf" "/etc/nginx/sites-available/${sel_domain}.conf"
+    sudo systemctl reload nginx 2>/dev/null || true
+
+    if [ -f "$ENV_FILE" ] && grep -q "^${sel_envkey}=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "/^${sel_envkey}=/d" "$ENV_FILE"
+    fi
+    sudo systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+
+    echo -e "${GREEN}$(t service_domains_deleted)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: auto-generate VAPID keys for admin panel push notifications
+# عملیات: ساخت خودکار کلیدهای VAPID برای اعلان Push پنل مدیریت وب
+# ---------------------------------------------------------------------------
+setup_vapid_keys() {
+    if [ ! -d "$INSTALL_DIR/admin_panel" ]; then
+        echo -e "${RED}$(t admin_panel_folder_missing)${RESET}"
+        return
+    fi
+
+    ENV_FILE="$INSTALL_DIR/.env"
+    touch "$ENV_FILE"
+
+    if grep -q "^VAPID_PUBLIC_KEY=" "$ENV_FILE" 2>/dev/null && [ -n "$(grep '^VAPID_PUBLIC_KEY=' "$ENV_FILE" | cut -d= -f2-)" ]; then
+        echo -e "${YELLOW}$(t vapid_already_set_warn1)${RESET}"
+        echo -e "${YELLOW}$(t vapid_already_set_warn2)${RESET}"
+        read -rp "$(t confirm_regenerate)" CONFIRM
+        [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+    fi
+
+    echo ""
+    read -rp "$(t prompt_vapid_email)" CLAIM_EMAIL
+    CLAIM_EMAIL=${CLAIM_EMAIL:-admin@example.com}
+
+    echo -e "${CYAN}$(t generating_vapid)${RESET}"
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+    KEYS_OUTPUT=$(python3 -m admin_panel.generate_vapid_keys 2>/dev/null | grep -E "^VAPID_(PUBLIC|PRIVATE)_KEY=")
+    deactivate
+
+    VAPID_PUB=$(echo "$KEYS_OUTPUT" | grep "^VAPID_PUBLIC_KEY=" | cut -d= -f2-)
+    VAPID_PRIV=$(echo "$KEYS_OUTPUT" | grep "^VAPID_PRIVATE_KEY=" | cut -d= -f2-)
+
+    if [ -z "$VAPID_PUB" ] || [ -z "$VAPID_PRIV" ]; then
+        echo -e "${RED}$(t vapid_generation_failed)${RESET}"
+        return
+    fi
+
+    # Remove any previous values and append the new ones to .env
+    sed -i '/^VAPID_PUBLIC_KEY=/d; /^VAPID_PRIVATE_KEY=/d; /^VAPID_CLAIM_EMAIL=/d' "$ENV_FILE"
+    {
+        echo "VAPID_PUBLIC_KEY=$VAPID_PUB"
+        echo "VAPID_PRIVATE_KEY=$VAPID_PRIV"
+        echo "VAPID_CLAIM_EMAIL=$CLAIM_EMAIL"
+    } >> "$ENV_FILE"
+
+    echo -e "${GREEN}$(t vapid_saved)${RESET}"
+
+    PANEL_SERVICE="${SERVICE_NAME}-adminpanel"
+    if systemctl list-units --full -all | grep -q "${PANEL_SERVICE}.service"; then
+        echo -e "${CYAN}$(t restarting_panel_service)${RESET}"
+        sudo systemctl restart "$PANEL_SERVICE"
+        echo -e "${GREEN}$(t panel_restarted_hint)${RESET}"
+    else
+        echo -e "${YELLOW}$(t panel_not_installed_vapid_hint)${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Action: restore a database backup that was already copied onto this server
+# (e.g. via scp), meant for migrating an existing bot to a brand-new server.
+# After the database swap, optionally walks through Mini App / Admin Panel
+# domain setup again (their domain/SSL/systemd config lives in .env and
+# nginx on the OLD server, NOT inside the database backup, so a fresh server
+# needs it redone with a new domain).
+# عملیات: بازیابی یک فایل بکاپ دیتابیس که از قبل (مثلاً با scp) روی همین
+# سرور کپی شده - برای انتقال یک بات موجود به یک سرور کاملاً جدید. بعد از
+# جایگزینی دیتابیس، در صورت نیاز مینی‌اپ/پنل مدیریت را هم با دامنه‌ی جدید
+# دوباره راه‌اندازی می‌کند (چون تنظیمات دامنه/SSL/سرویس آن‌ها داخل .env و
+# nginx سرور قبلی است، نه داخل خود فایل بکاپ، و روی سرور جدید باید با یک
+# دامنه‌ی جدید از نو انجام شود).
+# ---------------------------------------------------------------------------
+restore_backup_cli() {
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    if [ ! -x "$INSTALL_DIR/venv/bin/python3" ]; then
+        echo -e "${RED}$(t venv_missing)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_backup_path)" BACKUP_FILE
+    if [ -z "$BACKUP_FILE" ] || [ ! -f "$BACKUP_FILE" ]; then
+        echo -e "${RED}$(t backup_file_missing)${RESET}"
+        return
+    fi
+    BACKUP_FILE="$(readlink -f "$BACKUP_FILE")"
+
+    echo -e "${CYAN}$(t validating_backup)${RESET}"
+    cd "$INSTALL_DIR"
+    if ! venv/bin/python3 -c "
+import sys
+sys.path.insert(0, '.')
+from backup import is_valid_sqlite_db
+sys.exit(0 if is_valid_sqlite_db(sys.argv[1]) else 1)
+" "$BACKUP_FILE"; then
+        echo -e "${RED}$(t backup_invalid)${RESET}"
+        return
+    fi
+
+    echo -e "${YELLOW}${BOLD}$(t restore_warning)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    MINIAPP_SERVICE="${SERVICE_NAME}-miniapp"
+    PANEL_SERVICE="${SERVICE_NAME}-adminpanel"
+    MINIAPP_WAS_ACTIVE=false
+    PANEL_WAS_ACTIVE=false
+    systemctl is-active --quiet "$MINIAPP_SERVICE" 2>/dev/null && MINIAPP_WAS_ACTIVE=true
+    systemctl is-active --quiet "$PANEL_SERVICE" 2>/dev/null && PANEL_WAS_ACTIVE=true
+
+    echo -e "${CYAN}$(t stopping_services_for_restore)${RESET}"
+    sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    [ "$MINIAPP_WAS_ACTIVE" = true ] && sudo systemctl stop "$MINIAPP_SERVICE" 2>/dev/null || true
+    [ "$PANEL_WAS_ACTIVE" = true ] && sudo systemctl stop "$PANEL_SERVICE" 2>/dev/null || true
+
+    echo -e "${CYAN}$(t restoring_backup)${RESET}"
+    RESTORE_OUT=$(venv/bin/python3 -c "
+import sys
+sys.path.insert(0, '.')
+from database import Database
+from backup import restore_backup
+db = Database('bot_database.db')
+try:
+    pre = restore_backup(db, 'bot_database.db', sys.argv[1])
+    print('OK:' + pre)
+except Exception as e:
+    print('ERR:' + str(e))
+    sys.exit(1)
+" "$BACKUP_FILE" 2>&1)
+
+    if [[ "$RESTORE_OUT" != OK:* ]]; then
+        echo -e "${RED}$(t restore_failed "$RESTORE_OUT")${RESET}"
+        sudo systemctl start "$SERVICE_NAME" 2>/dev/null || true
+        [ "$MINIAPP_WAS_ACTIVE" = true ] && sudo systemctl start "$MINIAPP_SERVICE" 2>/dev/null || true
+        [ "$PANEL_WAS_ACTIVE" = true ] && sudo systemctl start "$PANEL_SERVICE" 2>/dev/null || true
+        return
+    fi
+
+    echo -e "${GREEN}$(t restore_done "$(basename "${RESTORE_OUT#OK:}")")${RESET}"
+
+    echo -e "${CYAN}$(t restarting_bot_service)${RESET}"
+    sudo systemctl start "$SERVICE_NAME"
+    sleep 2
+
+    echo ""
+    read -rp "$(t prompt_had_miniapp)" HAD_MINIAPP
+    if [[ "$HAD_MINIAPP" =~ ^[yY]$ ]]; then
+        setup_miniapp
+    elif [ "$MINIAPP_WAS_ACTIVE" = true ]; then
+        sudo systemctl start "$MINIAPP_SERVICE" 2>/dev/null || true
+    fi
+
+    read -rp "$(t prompt_had_panel)" HAD_PANEL
+    if [[ "$HAD_PANEL" =~ ^[yY]$ ]]; then
+        setup_admin_panel
+    elif [ "$PANEL_WAS_ACTIVE" = true ]; then
+        sudo systemctl start "$PANEL_SERVICE" 2>/dev/null || true
+    fi
+
+    echo -e "${GREEN}${BOLD}$(t restore_flow_done)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: integration API setup / update / removal (own domain + SSL + service)
+# عملیات: نصب / آپدیت / حذف API یکپارچه‌سازی (دامنه‌ی جدا + SSL + سرویس)
+# ---------------------------------------------------------------------------
+setup_api() {
+    if [ ! -d "$INSTALL_DIR/api" ]; then
+        echo -e "${RED}$(t api_dir_missing)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_domain_api)" DOMAIN
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}$(t domain_empty)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}$(t checking_dns)${RESET}"
+    SERVER_IP=$(curl -fsSL ifconfig.me || echo "")
+    DOMAIN_IP=$(getent ahosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -n "$SERVER_IP" ] && [ -n "$DOMAIN_IP" ] && [ "$SERVER_IP" != "$DOMAIN_IP" ]; then
+        echo -e "${YELLOW}$(t dns_mismatch_warn "$SERVER_IP" "$DOMAIN_IP")${RESET}"
+        read -rp "$(t continue_prompt)" CONT
+        [ "$CONT" != "yes" ] && return
+    fi
+
+    echo -e "${CYAN}$(t installing_nginx)${RESET}"
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get update -qq
+    timeout 120 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+        apt-get install -y -qq nginx certbot python3-certbot-nginx > /dev/null
+    tune_nginx_for_scale
+
+    echo -e "${CYAN}$(t installing_miniapp_pkgs)${RESET}"
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+    pip install -r requirements.txt --quiet
+    deactivate
+
+    echo -e "${CYAN}$(t creating_api_service)${RESET}"
+    API_SERVICE="${SERVICE_NAME}-api"
+    sudo bash -c "cat > /etc/systemd/system/${API_SERVICE}.service" <<EOF
+[Unit]
+Description=ShopVPN Integration API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8003 --workers 1
+Restart=always
+RestartSec=5
+User=$(whoami)
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$API_SERVICE" > /dev/null 2>&1
+    sudo systemctl restart "$API_SERVICE"
+
+    echo -e "${CYAN}$(t configuring_nginx "$DOMAIN")${RESET}"
+    sudo bash -c "cat > /etc/nginx/sites-available/${DOMAIN}.conf" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 100m;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location / {
+        proxy_pass http://127.0.0.1:8003;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    sudo ln -sf "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+    if ! sudo nginx -t > /dev/null 2>&1; then
+        echo -e "${RED}$(t nginx_error "$(sudo nginx -t 2>&1)")${RESET}"
+        return
+    fi
+    sudo systemctl reload nginx
+
+    echo -e "${CYAN}$(t getting_ssl)${RESET}"
+    sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+        --register-unsafely-without-email --redirect
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}$(t ssl_failed)${RESET}"
+        return
+    fi
+
+    echo -e "${GREEN}${BOLD}$(t api_ready "https://$DOMAIN")${RESET}"
+    echo -e "${GREEN}$(t api_token_hint)${RESET}"
+}
+
+update_api() {
+    API_SERVICE="${SERVICE_NAME}-api"
+    if ! systemctl list-units --full -all | grep -q "${API_SERVICE}.service"; then
+        echo -e "${RED}$(t api_not_installed)${RESET}"
+        return
+    fi
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR"
+
+    local failed=0
+    section_header "$(t update_api_header)"
+    run_step_live 1 3 "$(t fetching_latest)" fetch_project_code "$INSTALL_DIR" || failed=1
+    run_step_live 2 3 "$(t updating_packages)" bash -c "source '$INSTALL_DIR/venv/bin/activate' && pip install -r requirements.txt --quiet && deactivate" || failed=1
+    run_step_live 3 3 "$(t restarting_api_service)" bash -c "sudo systemctl restart '$API_SERVICE' && sleep 2" || failed=1
+
+    draw_rule
+    if [ "$failed" = "0" ] && systemctl is-active --quiet "$API_SERVICE"; then
+        echo -e "  ${GREEN}${BOLD}$(t api_update_done)${RESET}"
+    else
+        echo -e "  ${RED}$(t install_failed "$API_SERVICE")${RESET}"
+    fi
+}
+
+remove_api() {
+    echo -e "${RED}${BOLD}$(t remove_api_warn)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    API_SERVICE="${SERVICE_NAME}-api"
+    sudo systemctl stop "$API_SERVICE" 2>/dev/null || true
+    sudo systemctl disable "$API_SERVICE" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/${API_SERVICE}.service"
+    sudo systemctl daemon-reload
+
+    read -rp "$(t prompt_domain_used_api)" DOMAIN
+    if [ -n "$DOMAIN" ]; then
+        sudo rm -f "/etc/nginx/sites-enabled/${DOMAIN}.conf" "/etc/nginx/sites-available/${DOMAIN}.conf"
+        sudo systemctl reload nginx 2>/dev/null || true
+    fi
+    echo -e "${GREEN}$(t api_removed)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Dedicated sub server (own domain for subscription links + web page)
+# سرور ساب اختصاصی (دامنه‌ی جدا برای لینک ساب + صفحه‌ی وب)
+# Everything else is configured from the Telegram bot admin panel.
+# ---------------------------------------------------------------------------
+DSUB_PORT=8004
+
+dsub_cli() {
+    ( cd "$INSTALL_DIR" && source venv/bin/activate && python -m dedicated_sub "$1"; deactivate ) 2>/dev/null
+}
+
+setup_dedicated_sub() {
+    if [ ! -d "$INSTALL_DIR/sub_server" ]; then
+        echo -e "${RED}$(t dsub_dir_missing)${RESET}"
+        return
+    fi
+
+    read -rp "$(t prompt_domain_dsub)" DOMAIN
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}$(t domain_empty)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}$(t checking_dns)${RESET}"
+    SERVER_IP=$(curl -fsSL ifconfig.me || echo "")
+    DOMAIN_IP=$(getent ahosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -n "$SERVER_IP" ] && [ -n "$DOMAIN_IP" ] && [ "$SERVER_IP" != "$DOMAIN_IP" ]; then
+        echo -e "${YELLOW}$(t dns_mismatch_warn "$SERVER_IP" "$DOMAIN_IP")${RESET}"
+        read -rp "$(t continue_prompt)" CONT
+        [ "$CONT" != "yes" ] && return
+    fi
+
+    echo -e "${CYAN}$(t installing_nginx)${RESET}"
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get update -qq
+    timeout 120 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+        apt-get install -y -qq nginx certbot python3-certbot-nginx > /dev/null
+    tune_nginx_for_scale
+
+    echo -e "${CYAN}$(t installing_miniapp_pkgs)${RESET}"
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+    pip install -r requirements.txt --quiet
+    deactivate
+
+    echo -e "${CYAN}$(t creating_dsub_service)${RESET}"
+    DSUB_SERVICE="${SERVICE_NAME}-sub"
+    sudo bash -c "cat > /etc/systemd/system/${DSUB_SERVICE}.service" <<EOF
+[Unit]
+Description=ShopVPN Dedicated Subscription Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/venv/bin/uvicorn sub_server.server:app --host 127.0.0.1 --port $DSUB_PORT --workers 1 --no-proxy-headers
+Restart=always
+RestartSec=5
+User=$(whoami)
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$DSUB_SERVICE" > /dev/null 2>&1
+    sudo systemctl restart "$DSUB_SERVICE"
+
+    echo -e "${CYAN}$(t configuring_nginx "$DOMAIN")${RESET}"
+    # X-Forwarded-For is overwritten (not appended) so the rate limiter and
+    # access log can trust it.
+    sudo bash -c "cat > /etc/nginx/sites-available/${DOMAIN}.conf" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 1m;
+    proxy_read_timeout 60s;
+    proxy_send_timeout 60s;
+
+    location / {
+        proxy_pass http://127.0.0.1:$DSUB_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    sudo ln -sf "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+    if ! sudo nginx -t > /dev/null 2>&1; then
+        echo -e "${RED}$(t nginx_error "$(sudo nginx -t 2>&1)")${RESET}"
+        return
+    fi
+    sudo systemctl reload nginx
+
+    echo -e "${CYAN}$(t getting_ssl)${RESET}"
+    sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+        --register-unsafely-without-email --redirect
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}$(t ssl_failed)${RESET}"
+        return
+    fi
+
+    set_env_key DEDICATED_SUB_URL "https://$DOMAIN"
+    set_env_key DEDICATED_SUB_PORT "$DSUB_PORT"
+    echo -e "${GREEN}$(t dsub_env_saved)${RESET}"
+    sudo systemctl restart "$DSUB_SERVICE" 2>/dev/null || true
+    sudo systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+
+    sleep 2
+    if curl -fsS -m 10 "https://$DOMAIN/healthz" > /dev/null 2>&1; then
+        echo -e "${GREEN}$(t dsub_health_ok)${RESET}"
+    else
+        echo -e "${YELLOW}$(t dsub_health_fail "$DSUB_SERVICE")${RESET}"
+    fi
+
+    echo -e "${GREEN}${BOLD}$(t dsub_ready "https://$DOMAIN")${RESET}"
+    read -rp "$(t dsub_enable_ask)" ANS
+    if [[ ! "$ANS" =~ ^[nN]$ ]]; then
+        dsub_cli enable
+    fi
+    echo -e "${GREEN}$(t dsub_hint)${RESET}"
+}
+
+toggle_dedicated_sub() {
+    DSUB_SERVICE="${SERVICE_NAME}-sub"
+    if [ ! -f "/etc/systemd/system/${DSUB_SERVICE}.service" ]; then
+        echo -e "${RED}$(t dsub_not_installed)${RESET}"
+        return
+    fi
+    local cur
+    cur=$(dsub_cli status | head -1)
+    echo -e "${CYAN}$(t dsub_state "${cur:-?}")${RESET}"
+    echo -e "${DIM}$(t dsub_toggle_off_note)${RESET}"
+    read -rp "$(t dsub_toggle_prompt)" CH
+    case "$CH" in
+        1) dsub_cli enable | head -1 ;;
+        2) dsub_cli disable | head -1 ;;
+        *) echo -e "${YELLOW}$(t cancelled)${RESET}" ;;
+    esac
+}
+
+update_dedicated_sub() {
+    DSUB_SERVICE="${SERVICE_NAME}-sub"
+    if ! systemctl list-units --full -all | grep -q "${DSUB_SERVICE}.service"; then
+        echo -e "${RED}$(t dsub_not_installed)${RESET}"
+        return
+    fi
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR"
+
+    local failed=0
+    section_header "$(t update_dsub_header)"
+    run_step_live 1 3 "$(t fetching_latest)" fetch_project_code "$INSTALL_DIR" || failed=1
+    run_step_live 2 3 "$(t updating_packages)" bash -c "source '$INSTALL_DIR/venv/bin/activate' && pip install -r requirements.txt --quiet && deactivate" || failed=1
+    run_step_live 3 3 "$(t restarting_dsub_service)" bash -c "sudo systemctl restart '$DSUB_SERVICE' && sleep 2" || failed=1
+
+    draw_rule
+    if [ "$failed" = "0" ] && systemctl is-active --quiet "$DSUB_SERVICE"; then
+        echo -e "  ${GREEN}${BOLD}$(t dsub_update_done)${RESET}"
+    else
+        echo -e "  ${RED}$(t install_failed "$DSUB_SERVICE")${RESET}"
+    fi
+}
+
+remove_dedicated_sub() {
+    echo -e "${RED}${BOLD}$(t remove_dsub_warn)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    dsub_cli disable > /dev/null
+    DSUB_SERVICE="${SERVICE_NAME}-sub"
+    sudo systemctl stop "$DSUB_SERVICE" 2>/dev/null || true
+    sudo systemctl disable "$DSUB_SERVICE" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/${DSUB_SERVICE}.service"
+    sudo systemctl daemon-reload
+
+    read -rp "$(t prompt_domain_used_dsub)" DOMAIN
+    if [ -n "$DOMAIN" ]; then
+        sudo rm -f "/etc/nginx/sites-enabled/${DOMAIN}.conf" "/etc/nginx/sites-available/${DOMAIN}.conf"
+        sudo systemctl reload nginx 2>/dev/null || true
+    fi
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        sed -i '/^DEDICATED_SUB_URL=/d;/^DEDICATED_SUB_PORT=/d' "$INSTALL_DIR/.env"
+    fi
+    sudo systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+    echo -e "${GREEN}$(t dsub_removed)${RESET}"
+}
+
+dedicated_sub_status() {
+    local env_file="$INSTALL_DIR/.env" url d svc enabled cert code state
+    url=""
+    [ -f "$env_file" ] && url=$(grep -m1 "^DEDICATED_SUB_URL=" "$env_file" | cut -d= -f2-)
+    d=$(printf '%s' "$url" | sed -E 's#^"?https?://##; s#[/"]+.*$##')
+    if [ -z "$d" ]; then
+        echo -e "${YELLOW}$(t dsub_status_none)${RESET}"
+        return
+    fi
+    svc=$(t ws_no)
+    systemctl is-active --quiet "${SERVICE_NAME}-sub" 2>/dev/null && svc=$(t ws_yes)
+    enabled=$(t ws_no)
+    [ -L "/etc/nginx/sites-enabled/${d}.conf" ] && enabled=$(t ws_yes)
+    cert=$(t ws_no)
+    [ -e "/etc/letsencrypt/live/${d}/fullchain.pem" ] && cert=$(t ws_yes)
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --resolve "${d}:443:127.0.0.1" "https://${d}/healthz" 2>/dev/null)
+    state=$(dsub_cli status | head -1)
+    echo -e "${CYAN}${BOLD}$(t dsub_status_title)${RESET}"
+    echo "  ${d}"
+    echo "    $(t dsub_status_service): ${svc}"
+    echo "    $(t dsub_status_state): ${state:-?}"
+    echo "    $(t ws_status_enabled): ${enabled}"
+    echo "    $(t ws_status_cert): ${cert}"
+    echo "    $(t ws_status_store): ${code:-?}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: install/manage the project-owned local translation runtime.
+# Everything is automated: Argos models + isolated LibreTranslate fallback.
+# ---------------------------------------------------------------------------
+LIBRETRANSLATE_SERVICE="${SERVICE_NAME}-libretranslate"
+
+setup_libretranslate() {
+    section_header "$(t lt_header)"
+    if [ ! -f "$INSTALL_DIR/setup_local_translation.sh" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}🌍 Installing/repairing Argos models and the local LibreTranslate runtime...${RESET}"
+    if SHOPVPN_TRANSLATION_CHOOSE=1 bash "$INSTALL_DIR/setup_local_translation.sh"; then
+        echo -e "${GREEN}${BOLD}$(t lt_done)${RESET}"
+    else
+        echo -e "${RED}$(t lt_pip_failed)${RESET}"
+        return
+    fi
+
+    if [ -d "$INSTALL_DIR" ] && systemctl list-units --full -all 2>/dev/null | grep -q "${SERVICE_NAME}.service"; then
+        sudo systemctl restart "$SERVICE_NAME"
+    fi
+}
+
+remove_libretranslate() {
+    if ! systemctl list-units --full -all 2>/dev/null | grep -q "${LIBRETRANSLATE_SERVICE}.service"; then
+        echo -e "${YELLOW}$(t lt_not_installed)${RESET}"
+        return
+    fi
+
+    echo -e "${RED}${BOLD}$(t lt_remove_warn)${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    sudo systemctl stop "$LIBRETRANSLATE_SERVICE" >/dev/null 2>&1 || true
+    sudo systemctl disable "$LIBRETRANSLATE_SERVICE" >/dev/null 2>&1 || true
+    sudo rm -f "/etc/systemd/system/${LIBRETRANSLATE_SERVICE}.service"
+    sudo systemctl daemon-reload
+    rm -rf "$INSTALL_DIR/translation-venv"
+
+    local ENV_FILE="$INSTALL_DIR/.env"
+    [ -f "$ENV_FILE" ] && sed -i '/^SHOPVPN_LIBRETRANSLATE_URL=/d' "$ENV_FILE"
+
+    if [ -d "$INSTALL_DIR" ] && systemctl list-units --full -all 2>/dev/null | grep -q "${SERVICE_NAME}.service"; then
+        sudo systemctl restart "$SERVICE_NAME"
+    fi
+
+    echo -e "${GREEN}$(t lt_removed)${RESET}"
+}
+
+remove_translation_languages() {
+    section_header "$(t rl_header)"
+    local ENV_FILE="$INSTALL_DIR/.env"
+    if [ ! -f "$ENV_FILE" ] || [ ! -f "$INSTALL_DIR/i18n.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+
+    local saved codes=() names=() code native name
+    saved="$(grep -m1 '^SHOPVPN_TRANSLATION_LANGS=' "$ENV_FILE" | cut -d= -f2- | tr -d ' ')"
+    while IFS='|' read -r code native name; do
+        [ -n "$code" ] || continue
+        case ",$saved," in *",$code,"*) codes+=("$code"); names+=("$native - $name") ;; esac
+    done < <(SHOPVPN_ROOT="$INSTALL_DIR" python3 - <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["SHOPVPN_ROOT"])
+from i18n import LANGUAGE_CATALOG
+for c, m in LANGUAGE_CATALOG.items():
+    if c not in {"fa", "en"}:
+        print(c, m["native_name"], m["name"], sep="|")
+PY
+)
+
+    if [ "${#codes[@]}" -eq 0 ]; then
+        echo -e "${YELLOW}$(t rl_none)${RESET}"
+        return
+    fi
+
+    local i
+    for i in "${!codes[@]}"; do
+        printf '  %2d) %s (%s)\n' "$((i + 1))" "${names[$i]}" "${codes[$i]}"
+    done
+    local answer
+    read -rp "$(t rl_prompt)" answer
+    answer="$(echo "$answer" | sed 's/،/,/g' | tr 'A-Z' 'a-z' | tr ',' ' ')"
+    [ -z "$answer" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    local picked=() tok c
+    if [ "$answer" = "a" ] || [ "$answer" = "all" ]; then
+        picked=("${codes[@]}")
+    else
+        for tok in $answer; do
+            if [[ "$tok" =~ ^[0-9]+$ ]] && [ "$tok" -ge 1 ] && [ "$tok" -le "${#codes[@]}" ]; then
+                picked+=("${codes[$((tok - 1))]}")
+            else
+                for c in "${codes[@]}"; do
+                    [ "$c" = "$tok" ] && picked+=("$c")
+                done
+            fi
+        done
+    fi
+    picked=($(printf '%s\n' "${picked[@]}" | awk 'NF && !seen[$0]++'))
+    if [ "${#picked[@]}" -eq 0 ]; then
+        echo -e "${YELLOW}$(t cancelled)${RESET}"
+        return
+    fi
+
+    echo -e "${RED}${BOLD}$(t rl_warn)${RESET}"
+    echo "  -> ${picked[*]}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    local was_active=0
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        was_active=1
+        sudo systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+
+    local csv
+    csv="$(IFS=,; echo "${picked[*]}")"
+    INSTALL_DIR="$INSTALL_DIR" LANG_CSV="$csv" python3 - <<'PY'
+import glob, os, sqlite3
+root = os.environ["INSTALL_DIR"]
+codes = [c for c in os.environ["LANG_CSV"].split(",") if c and c not in {"fa", "en"}]
+paths = [os.path.join(root, "bot_database.db")] + sorted(glob.glob(os.path.join(root, "reseller_dbs", "*.db")))
+for path in paths:
+    if not os.path.isfile(path):
+        continue
+    conn = sqlite3.connect(path, timeout=30)
+    try:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "languages" not in tables:
+            continue
+        for code in codes:
+            for table in ("translations", "translation_manifests", "translation_history"):
+                if table in tables:
+                    conn.execute(f"DELETE FROM {table} WHERE language_code=?", (code,))
+            conn.execute("UPDATE languages SET enabled=0, generated=0, translation_auto_quarantined=0 WHERE code=?", (code,))
+            if "users" in tables:
+                conn.execute("UPDATE users SET language_code='fa' WHERE language_code=?", (code,))
+            if "web_admins" in tables:
+                conn.execute("UPDATE web_admins SET language_code='fa' WHERE language_code=?", (code,))
+        conn.commit()
+        conn.execute("VACUUM")
+        print("cleaned:", path)
+    except Exception as exc:
+        print("skipped:", path, exc)
+    finally:
+        conn.close()
+PY
+
+    local lang dir base pkg_dirs=()
+    pkg_dirs+=("${XDG_DATA_HOME:-$HOME/.local/share}/argos-translate/packages")
+    pkg_dirs+=("$HOME/.local/share/argos-translate/packages")
+    pkg_dirs+=("$INSTALL_DIR/.translation-home/.local/share/argos-translate/packages")
+    for lang in "${picked[@]}"; do
+        if [ -x "$INSTALL_DIR/venv/bin/argospm" ]; then
+            "$INSTALL_DIR/venv/bin/argospm" remove "translate-en_${lang}" >/dev/null 2>&1 || true
+            "$INSTALL_DIR/venv/bin/argospm" remove "translate-${lang}_en" >/dev/null 2>&1 || true
+        fi
+        for dir in $(printf '%s\n' "${pkg_dirs[@]}" | awk '!seen[$0]++'); do
+            [ -d "$dir" ] || continue
+            for base in "$dir"/*; do
+                [ -d "$base" ] || continue
+                pkg="$(basename "$base")"
+                if [[ "$pkg" =~ ^(translate-)?(en_${lang}|${lang}_en)($|[-_.]) ]]; then
+                    rm -rf "$base"
+                fi
+            done
+        done
+    done
+
+    local remaining="" item
+    for item in ${saved//,/ }; do
+        local keep=1
+        for lang in "${picked[@]}"; do
+            [ "$item" = "$lang" ] && keep=0
+        done
+        [ "$keep" -eq 1 ] && remaining="${remaining:+$remaining,}$item"
+    done
+    if grep -q '^SHOPVPN_TRANSLATION_LANGS=' "$ENV_FILE"; then
+        sed -i "s#^SHOPVPN_TRANSLATION_LANGS=.*#SHOPVPN_TRANSLATION_LANGS=${remaining}#" "$ENV_FILE"
+    else
+        printf '\nSHOPVPN_TRANSLATION_LANGS=%s\n' "$remaining" >> "$ENV_FILE"
+    fi
+
+    local unit="/etc/systemd/system/${LIBRETRANSLATE_SERVICE}.service" load="en,fa"
+    [ -n "$remaining" ] && load="en,fa,${remaining}"
+    if [ -f "$unit" ]; then
+        sudo sed -i "s#--load-only [^ ]*#--load-only ${load}#" "$unit"
+        sudo systemctl daemon-reload
+        sudo systemctl restart "$LIBRETRANSLATE_SERVICE" >/dev/null 2>&1 || true
+    fi
+
+    if [ "$was_active" -eq 1 ]; then
+        sudo systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+    echo -e "${GREEN}${BOLD}$(t rl_done)${RESET}"
+}
+
+setup_userbot() {
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    if [ ! -x "$INSTALL_DIR/venv/bin/python3" ]; then
+        echo -e "${RED}$(t venv_missing)${RESET}"
+        return
+    fi
+    if [ ! -f "$INSTALL_DIR/userbot.py" ]; then
+        echo -e "${RED}$(t ub_need_update)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR" || return
+    echo -e "${CYAN}$(t ub_installing)${RESET}"
+    if ! venv/bin/pip install --quiet "telethon>=1.36.0"; then
+        echo -e "${RED}$(t ub_pip_failed)${RESET}"
+        return
+    fi
+    if venv/bin/python3 userbot.py login; then
+        sudo systemctl restart "$SERVICE_NAME"
+        sleep 1
+        echo -e "${GREEN}$(t ub_login_ok)${RESET}"
+    else
+        echo -e "${RED}$(t ub_login_failed)${RESET}"
+    fi
+}
+
+_ub_ready() {
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"; return 1
+    fi
+    if [ ! -x "$INSTALL_DIR/venv/bin/python3" ]; then
+        echo -e "${RED}$(t venv_missing)${RESET}"; return 1
+    fi
+    if [ ! -f "$INSTALL_DIR/userbot.py" ]; then
+        echo -e "${RED}$(t ub_need_update)${RESET}"; return 1
+    fi
+    cd "$INSTALL_DIR" || return 1
+    echo -e "${CYAN}$(t ub_installing)${RESET}"
+    if ! venv/bin/pip install --quiet "telethon>=1.36.0"; then
+        echo -e "${RED}$(t ub_pip_failed)${RESET}"; return 1
+    fi
+    return 0
+}
+
+setup_scanner_account() {
+    _ub_ready || return
+    if venv/bin/python3 userbot.py login-scanner; then
+        sudo systemctl restart "$SERVICE_NAME"
+        sleep 1
+        echo -e "${GREEN}$(t acc_scanner_ok)${RESET}"
+    else
+        echo -e "${RED}$(t ub_login_failed)${RESET}"
+    fi
+}
+
+setup_shared_account() {
+    _ub_ready || return
+    # اگر هنوز حساب یوزربات نیست، همین‌جا وارد می‌شود؛ بعد حساب اختصاصی اسکنر حذف می‌شود.
+    if ! venv/bin/python3 userbot.py status >/dev/null 2>&1; then
+        if ! venv/bin/python3 userbot.py login; then
+            echo -e "${RED}$(t ub_login_failed)${RESET}"; return
+        fi
+    fi
+    venv/bin/python3 userbot.py logout-scanner >/dev/null 2>&1
+    sudo systemctl restart "$SERVICE_NAME"
+    sleep 1
+    echo -e "${GREEN}$(t acc_both_ok)${RESET}"
+    echo -e "${YELLOW}$(t acc_both_warn)${RESET}"
+}
+
+show_accounts_status() {
+    _ub_ready || return
+    echo -n "userbot : "; venv/bin/python3 userbot.py status
+    echo -n "scanner : "; venv/bin/python3 userbot.py status-scanner
+}
+
+remove_scanner_account() {
+    _ub_ready || return
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+    venv/bin/python3 userbot.py logout-scanner
+    sudo systemctl restart "$SERVICE_NAME"
+    sleep 1
+    echo -e "${GREEN}$(t acc_scanner_removed)${RESET}"
+}
+
+telegram_accounts_menu() {
+    local sub
+    while true; do
+        echo ""
+        menu_section acc_title
+        menu_item 1 acc_1
+        menu_item 2 acc_2
+        menu_item 3 acc_3
+        menu_item 4 acc_4
+        menu_item 5 acc_5 "$RED"
+        menu_item 6 acc_6 "$RED"
+        menu_item 0 acc_back "$DIM"
+        echo ""
+        read -rp "$(t acc_choice)" sub
+        case $sub in
+            1) setup_userbot; pause ;;
+            2) setup_scanner_account; pause ;;
+            3) setup_shared_account; pause ;;
+            4) show_accounts_status; pause ;;
+            5) remove_userbot; pause ;;
+            6) remove_scanner_account; pause ;;
+            0) return ;;
+            *) echo -e "${RED}$(t invalid_choice)${RESET}"; sleep 1 ;;
+        esac
+    done
+}
+
+remove_userbot() {
+    if [ ! -x "$INSTALL_DIR/venv/bin/python3" ] || [ ! -f "$INSTALL_DIR/userbot.py" ]; then
+        echo -e "${RED}$(t ub_need_update)${RESET}"
+        return
+    fi
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+    cd "$INSTALL_DIR" || return
+    venv/bin/python3 userbot.py logout
+    sudo systemctl restart "$SERVICE_NAME"
+    sleep 1
+    echo -e "${GREEN}$(t ub_removed)${RESET}"
+}
+
+install_shell_command() {
+    local bin="/usr/local/bin/${CLI_NAME}"
+    local script="$INSTALL_DIR/manage.sh"
+    [ -f "$script" ] || return 0
+    local content
+    content=$'#!/bin/bash\nif [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then\n    exec sudo env HOME="'"$HOME"$'" bash "'"$script"$'" "$@"\nfi\nexec bash "'"$script"$'" "$@"\n'
+    if [ -f "$bin" ] && [ "$(cat "$bin" 2>/dev/null)" = "${content%$'\n'}" ]; then
+        return 0
+    fi
+    if [ "$(id -u)" -eq 0 ]; then
+        printf '%s' "$content" > "$bin" 2>/dev/null && chmod 755 "$bin" 2>/dev/null
+    else
+        printf '%s' "$content" | sudo tee "$bin" >/dev/null 2>&1 && sudo chmod 755 "$bin" 2>/dev/null
+    fi
+    return 0
+}
+install_shell_command
+
+# ---------------------------------------------------------------------------
+# Web shop setup / راه‌اندازی فروشگاه وب
+# ---------------------------------------------------------------------------
+setup_web_store() {
+    local STORE_SERVICE="${SERVICE_NAME}-store"
+    if [ ! -f "$INSTALL_DIR/web_store/server.py" ] || [ ! -x "$INSTALL_DIR/venv/bin/uvicorn" ]; then
+        echo -e "${YELLOW}$(t ws_need_miniapp)${RESET}"
+        return 1
+    fi
+    read -rp "$(t ws_domain_prompt)" DOMAIN
+    DOMAIN=$(printf '%s' "$DOMAIN" | tr -d '[:space:]')
+    if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+        echo -e "${RED}$(t ws_domain_invalid)${RESET}"; return 1
+    fi
+    echo -e "${CYAN}$(t ws_check_dns)${RESET}"
+    SERVER_IP=$(curl -4 -fsSL --max-time 8 https://ifconfig.me 2>/dev/null || true)
+    DOMAIN_IP=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}')
+    if [ -z "$DOMAIN_IP" ]; then echo -e "${RED}$(t ws_dns_unresolved)${RESET}"; return 1; fi
+    if [ -n "$SERVER_IP" ] && [ "$DOMAIN_IP" != "$SERVER_IP" ]; then
+        echo -e "${YELLOW}$(t ws_ip_mismatch "$DOMAIN_IP" "$SERVER_IP")${RESET}"
+        read -rp "$(t ws_continue_anyway)" CONT
+        [ "$CONT" = "yes" ] || return 1
+    fi
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq || return 1
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y nginx certbot python3-certbot-nginx curl >/dev/null || return 1
+    "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --quiet
+    sudo bash -c "cat > /etc/systemd/system/${STORE_SERVICE}.service" <<EOF
+[Unit]
+Description=ShopVPN Web Store
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/venv/bin/uvicorn web_store.server:app --host 127.0.0.1 --port 8005
+Restart=always
+RestartSec=5
+User=$(whoami)
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$STORE_SERVICE" >/dev/null 2>&1
+    local CONF="/etc/nginx/sites-available/shopvpn-store-${DOMAIN}.conf"
+    if [ -e "$CONF" ]; then
+        echo -e "${YELLOW}$(t ws_conf_exists "$CONF")${RESET}"
+        read -rp "$(t ws_replace_prompt)" CONT
+        [ "$CONT" = "yes" ] || return 1
+    fi
+    sudo tee "$CONF" >/dev/null <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 20m;
+    location / {
+        proxy_pass http://127.0.0.1:8005;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    sudo ln -sfn "$CONF" "/etc/nginx/sites-enabled/shopvpn-store-${DOMAIN}.conf"
+    if ! sudo nginx -t; then echo -e "${RED}$(t ws_nginx_invalid "$CONF")${RESET}"; return 1; fi
+    sudo systemctl reload nginx || return 1
+    read -rp "$(t ws_cert_email_prompt)" CERT_EMAIL
+    if [ -n "$CERT_EMAIL" ]; then
+        sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$CERT_EMAIL" --redirect || return 1
+    else
+        sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --redirect || return 1
+    fi
+    set_env_key SHOPVPN_SEO_SITE_URL "https://$DOMAIN"
+    if ! grep -q "^SHOPVPN_TURNSTILE_SITE_KEY=." "$INSTALL_DIR/.env" 2>/dev/null; then
+        set_env_key SHOPVPN_WEB_ALLOW_NO_TURNSTILE 1
+    fi
+    sudo systemctl restart "$STORE_SERVICE" || { echo -e "${RED}$(t miniapp_restart_failed)${RESET}"; return 1; }
+    echo -e "${GREEN}${BOLD}$(t ws_ready "$DOMAIN")${RESET}"
+    echo -e "${DIM}$(t ws_ports_hint)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Email SMTP setup / تنظیم سرویس ایمیل
+# ---------------------------------------------------------------------------
+setup_email_service() {
+    if [ ! -f "$INSTALL_DIR/.env" ]; then echo -e "${RED}$(t env_missing_install_first)${RESET}"; return 1; fi
+    echo -e "${CYAN}$(t smtp_intro)${RESET}"
+    read -rp "$(t smtp_host_prompt)" SMTP_HOST
+    read -rp "$(t smtp_port_prompt)" SMTP_PORT
+    read -rp "$(t smtp_user_prompt)" SMTP_USER
+    read -rsp "$(t smtp_pass_prompt)" SMTP_PASSWORD; echo
+    read -rp "$(t smtp_from_prompt)" SMTP_FROM
+    read -rp "$(t smtp_ssl_prompt)" SMTP_SSL
+    SMTP_PORT=${SMTP_PORT:-587}; SMTP_FROM=${SMTP_FROM:-$SMTP_USER}
+    if [[ ! "$SMTP_PORT" =~ ^[0-9]+$ ]] || [ -z "$SMTP_HOST" ] || [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASSWORD" ]; then
+        echo -e "${RED}$(t smtp_invalid)${RESET}"; return 1
+    fi
+    set_env_key SHOPVPN_SMTP_HOST "$SMTP_HOST"
+    set_env_key SHOPVPN_SMTP_PORT "$SMTP_PORT"
+    set_env_key SHOPVPN_SMTP_USER "$SMTP_USER"
+    set_env_key SHOPVPN_SMTP_PASSWORD "$SMTP_PASSWORD"
+    set_env_key SHOPVPN_SMTP_FROM "$SMTP_FROM"
+    if [[ "$SMTP_SSL" =~ ^[Yy]$ ]] || [ "$SMTP_PORT" = "465" ]; then set_env_key SHOPVPN_SMTP_SSL 1; else set_env_key SHOPVPN_SMTP_SSL 0; fi
+    if systemctl list-unit-files "${SERVICE_NAME}-miniapp.service" --no-legend 2>/dev/null | grep -q "${SERVICE_NAME}-miniapp.service"; then
+        sudo systemctl restart "${SERVICE_NAME}-miniapp" || { echo -e "${RED}$(t miniapp_restart_failed)${RESET}"; return 1; }
+    fi
+    if systemctl list-unit-files "${SERVICE_NAME}-store.service" --no-legend 2>/dev/null | grep -q "${SERVICE_NAME}-store.service"; then
+        sudo systemctl restart "${SERVICE_NAME}-store" || { echo -e "${RED}$(t miniapp_restart_failed)${RESET}"; return 1; }
+    fi
+    sudo systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+    echo -e "${GREEN}$(t smtp_saved)${RESET}"
+    echo -e "${YELLOW}$(t smtp_fail_hint "$SERVICE_NAME")${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Cloudflare Turnstile / محافظت از فروشگاه وب
+# ---------------------------------------------------------------------------
+setup_web_turnstile() {
+    if [ ! -f "$INSTALL_DIR/.env" ]; then echo -e "${RED}$(t env_missing_install_first)${RESET}"; return 1; fi
+    echo -e "${CYAN}$(t ts_intro)${RESET}"
+    echo -e "${DIM}$(t ts_disable_hint)${RESET}"
+    read -rp "Turnstile Site Key: " TS_SITE
+    read -rsp "Turnstile Secret Key: " TS_SECRET; echo
+    if [ -n "$TS_SITE" ] && [ -z "$TS_SECRET" ]; then echo -e "${RED}$(t ts_secret_required)${RESET}"; return 1; fi
+    if [ -z "$TS_SITE" ] && [ -n "$TS_SECRET" ]; then echo -e "${RED}$(t ts_site_required)${RESET}"; return 1; fi
+    set_env_key SHOPVPN_TURNSTILE_SITE_KEY "$TS_SITE"
+    set_env_key SHOPVPN_TURNSTILE_SECRET_KEY "$TS_SECRET"
+    if systemctl list-unit-files "${SERVICE_NAME}-miniapp.service" --no-legend 2>/dev/null | grep -q "${SERVICE_NAME}-miniapp.service"; then
+        sudo systemctl restart "${SERVICE_NAME}-miniapp" || { echo -e "${RED}$(t miniapp_restart_failed)${RESET}"; return 1; }
+    fi
+    if systemctl list-unit-files "${SERVICE_NAME}-store.service" --no-legend 2>/dev/null | grep -q "${SERVICE_NAME}-store.service"; then
+        sudo systemctl restart "${SERVICE_NAME}-store" || { echo -e "${RED}$(t miniapp_restart_failed)${RESET}"; return 1; }
+    fi
+    echo -e "${GREEN}$(t ts_saved)${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Web shop domain: status / remove / وضعیت و حذف دامنه‌ی فروشگاه وب
+# کانفیگ‌های nginx فروشگاه با نام shopvpn-store-<domain>.conf ساخته می‌شوند.
+# ---------------------------------------------------------------------------
+web_store_domains() {
+    local f d
+    for f in /etc/nginx/sites-available/shopvpn-store-*.conf; do
+        [ -e "$f" ] || continue
+        d=$(basename "$f" .conf)
+        echo "${d#shopvpn-store-}"
+    done
+}
+
+web_store_status() {
+    local d enabled cert svc miniapp_url code_store code_root
+    local env_file="$INSTALL_DIR/.env"
+    mapfile -t DOMAINS < <(web_store_domains)
+    if [ "${#DOMAINS[@]}" -eq 0 ]; then
+        echo -e "${YELLOW}$(t ws_status_none)${RESET}"
+        return
+    fi
+    miniapp_url=""
+    [ -f "$env_file" ] && miniapp_url=$(grep -m1 "^MINIAPP_URL=" "$env_file" | cut -d= -f2-)
+    svc=$(t ws_no)
+    systemctl is-active --quiet "${SERVICE_NAME}-store" 2>/dev/null && svc=$(t ws_yes)
+    echo -e "${CYAN}${BOLD}$(t ws_status_title)${RESET}"
+    for d in "${DOMAINS[@]}"; do
+        enabled=$(t ws_no)
+        [ -L "/etc/nginx/sites-enabled/shopvpn-store-${d}.conf" ] && enabled=$(t ws_yes)
+        cert=$(t ws_no)
+        [ -e "/etc/letsencrypt/live/${d}/fullchain.pem" ] && cert=$(t ws_yes)
+        # بررسی محلی از خود سرور (بدون نیاز به DNS): پاسخ مسیرها با کد HTTP
+        code_store=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --resolve "${d}:443:127.0.0.1" "https://${d}/healthz" 2>/dev/null)
+        code_root=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --resolve "${d}:443:127.0.0.1" "https://${d}/" 2>/dev/null)
+        echo "  ${d}"
+        echo "    $(t ws_status_enabled): ${enabled}"
+        echo "    $(t ws_status_cert): ${cert}"
+        echo "    $(t ws_status_store): ${code_store:-—}"
+        echo "    $(t ws_status_root): ${code_root:-—}"
+    done
+    echo "    MINIAPP_URL: ${miniapp_url:-—}"
+    echo "    $(t ws_status_miniapp_svc): ${svc}"
+}
+
+remove_web_store() {
+    local DOMAIN pick idx d
+    mapfile -t DOMAINS < <(web_store_domains)
+    if [ "${#DOMAINS[@]}" -eq 0 ]; then
+        echo -e "${YELLOW}$(t ws_status_none)${RESET}"
+        return 1
+    fi
+    if [ "${#DOMAINS[@]}" -eq 1 ]; then
+        DOMAIN="${DOMAINS[0]}"
+    else
+        idx=1
+        for d in "${DOMAINS[@]}"; do
+            echo "  [${idx}] ${d}"
+            idx=$((idx + 1))
+        done
+        read -rp "$(t ws_pick_domain)" pick
+        if ! [[ "$pick" =~ ^[0-9]+$ ]] || [ "$pick" -lt 1 ] || [ "$pick" -gt "${#DOMAINS[@]}" ]; then
+            echo -e "${YELLOW}$(t cancelled)${RESET}"; return
+        fi
+        DOMAIN="${DOMAINS[$((pick - 1))]}"
+    fi
+
+    echo -e "${RED}${BOLD}$(t ws_remove_warn "$DOMAIN")${RESET}"
+    read -rp "$(t confirm_prompt)" CONFIRM
+    [ "$CONFIRM" != "yes" ] && { echo -e "${YELLOW}$(t cancelled)${RESET}"; return; }
+
+    sudo rm -f "/etc/nginx/sites-enabled/shopvpn-store-${DOMAIN}.conf" "/etc/nginx/sites-available/shopvpn-store-${DOMAIN}.conf"
+    sudo systemctl reload nginx 2>/dev/null || true
+
+    mapfile -t DOMAINS < <(web_store_domains)
+    if [ "${#DOMAINS[@]}" -eq 0 ]; then
+        sudo systemctl stop "${SERVICE_NAME}-store" 2>/dev/null || true
+        sudo systemctl disable "${SERVICE_NAME}-store" 2>/dev/null || true
+        sudo rm -f "/etc/systemd/system/${SERVICE_NAME}-store.service"
+        sudo systemctl daemon-reload
+    fi
+
+    sudo systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+    echo -e "${GREEN}$(t ws_removed "$DOMAIN")${RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Action: update web shop / عملیات: آپدیت فروشگاه وب
+# ---------------------------------------------------------------------------
+update_web_store() {
+    local STORE_SERVICE="${SERVICE_NAME}-store"
+    if ! systemctl list-units --full -all | grep -q "${STORE_SERVICE}.service"; then
+        echo -e "${RED}$(t store_not_installed)${RESET}"
+        return
+    fi
+    if [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}$(t bot_not_installed)${RESET}"
+        return
+    fi
+    cd "$INSTALL_DIR"
+
+    local failed=0
+    section_header "$(t update_store_header)"
+    run_step_live 1 3 "$(t fetching_latest)" fetch_project_code "$INSTALL_DIR" || failed=1
+    run_step_live 2 3 "$(t updating_packages)" bash -c "source '$INSTALL_DIR/venv/bin/activate' && pip install -r requirements.txt --quiet && deactivate" || failed=1
+    run_step_live 3 3 "$(t restarting_store_service)" bash -c "sudo systemctl restart '$STORE_SERVICE' && sleep 2" || failed=1
+
+    draw_rule
+    if [ "$failed" = "0" ] && systemctl is-active --quiet "$STORE_SERVICE"; then
+        echo -e "  ${GREEN}${BOLD}$(t store_update_done)${RESET}"
+    else
+        echo -e "  ${RED}$(t install_failed "$STORE_SERVICE")${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Main menu / منوی اصلی
+# ---------------------------------------------------------------------------
+while true; do
+    print_banner
+    print_status_line
+    menu_item S menu_store_status "$CYAN"
+    menu_section sec_setup
+    menu_item 1 menu_1
+    menu_item 2 menu_2
+    menu_item 3 menu_3 "$RED"
+    menu_section sec_service
+    menu_item 4 menu_4
+    menu_item 5 menu_5
+    menu_item 6 menu_6
+    menu_item 7 menu_7
+    menu_section sec_store
+    menu_item 8 menu_8
+    menu_item 9 menu_9
+    menu_section sec_webstore
+    menu_item 10 menu_34
+    menu_item 11 menu_store_remove "$RED"
+    menu_item 12 menu_store_update
+    menu_item 13 menu_35
+    menu_item 14 menu_36
+    menu_section sec_miniapp
+    menu_item 15 menu_10
+    menu_item 16 menu_11 "$RED"
+    menu_item 17 menu_12
+    menu_section sec_panel
+    menu_item 18 menu_13
+    menu_item 19 menu_14 "$RED"
+    menu_item 20 menu_15
+    menu_item 21 menu_16
+    menu_section sec_domains
+    menu_item 22 menu_17
+    menu_item 23 menu_18
+    menu_item 24 menu_19 "$RED"
+    menu_item 25 menu_20
+    menu_section sec_api
+    menu_item 26 menu_24
+    menu_item 27 menu_25 "$RED"
+    menu_item 28 menu_26
+    menu_section sec_dsub
+    menu_item 29 menu_37
+    menu_item 30 menu_38
+    menu_item 31 menu_39
+    menu_item 32 menu_40 "$RED"
+    menu_item D menu_dsub_status "$CYAN"
+    menu_section sec_translation
+    menu_item 33 menu_27
+    menu_item 34 menu_28 "$RED"
+    menu_item 35 menu_30 "$RED"
+    menu_item 36 menu_29 "$RED"
+    menu_section sec_advanced
+    menu_item 37 menu_21
+    menu_item 38 menu_22
+    menu_item 39 menu_23
+    menu_section sec_userbot
+    menu_item 40 menu_33
+    draw_rule
+    menu_item L menu_lang "$MAGENTA"
+    menu_item 0 menu_0 "$DIM"
+    draw_rule
+    echo ""
+    read -rp "$(echo -e ${MAGENTA}${BOLD}"  $(t enter_choice_prompt)"${RESET})" choice
+
+    case $choice in
+        1) install_bot; pause ;;
+        2) update_bot; pause ;;
+        3) uninstall_bot; pause ;;
+        4) view_status; pause ;;
+        5) view_logs ;;
+        6) restart_bot; pause ;;
+        7) stop_bot; pause ;;
+        8) show_stats; pause ;;
+        9) edit_env; pause ;;
+        10) setup_web_store; pause ;;
+        11) remove_web_store; pause ;;
+        12) update_web_store; pause ;;
+        13) setup_email_service; pause ;;
+        14) setup_web_turnstile; pause ;;
+        15) setup_miniapp; pause ;;
+        16) remove_miniapp; pause ;;
+        17) update_miniapp; pause ;;
+        18) setup_admin_panel; pause ;;
+        19) remove_admin_panel; pause ;;
+        20) update_admin_panel; pause ;;
+        21) setup_vapid_keys; pause ;;
+        22) setup_panel_proxy; pause ;;
+        23) list_panel_proxies; pause ;;
+        24) remove_panel_proxy; pause ;;
+        25) list_service_domains; pause ;;
+        26) setup_api; pause ;;
+        27) remove_api; pause ;;
+        28) update_api; pause ;;
+        29) setup_dedicated_sub; pause ;;
+        30) toggle_dedicated_sub; pause ;;
+        31) update_dedicated_sub; pause ;;
+        32) remove_dedicated_sub; pause ;;
+        33) setup_libretranslate; pause ;;
+        34) remove_libretranslate; pause ;;
+        35) remove_translation_languages; pause ;;
+        36) factory_reset; pause ;;
+        37) restore_backup_cli; pause ;;
+        38) setup_bot_mode; pause ;;
+        39) change_admin_panel_credentials; pause ;;
+        40) telegram_accounts_menu ;;
+        [Ss]) web_store_status; pause ;;
+        [Dd]) dedicated_sub_status; pause ;;
+        [Ll]) toggle_lang ;;
+        0) echo -e "${CYAN}$(t goodbye)${RESET}"; exit 0 ;;
+        *) echo -e "${RED}$(t invalid_choice)${RESET}"; sleep 1 ;;
+    esac
+done
+#‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
+# 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

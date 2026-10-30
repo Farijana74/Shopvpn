@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<!--‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍-->
+<html lang="fa" dir="rtl" data-theme="{{THEME}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>{{STORE_NAME}}</title>
+<meta name="asset-version" content="{{VERSION}}">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Rajdhani:wght@400;500;600;700&family=Vazirmatn:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Rajdhani:wght@400;500;600;700&family=Vazirmatn:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="style.css?v={{VERSION}}">
+<script src="i18n.js"></script>
+</head>
+<body>
+<div id="app">
+  <div class="grid-fx" aria-hidden="true"></div>
+
+  <header class="topbar {{HEADER_LOGO_CLASS}}">
+    <button id="lang-toggle" type="button" class="lang-toggle" aria-label="Change language">🇬🇧 English</button>
+    <button class="wallet-chip" id="header-wallet-btn" type="button">
+      <svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="6" width="17" height="12.5" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="14.2" r="1.3" fill="currentColor"/></svg>
+      <span id="header-wallet-amount">۰ تومان</span>
+    </button>
+    <div class="topbar-brand">
+      <span class="brand">{{STORE_NAME}}</span>
+      <span class="brand-avatar">{{HEADER_LOGO_HTML}}<span class="brand-avatar-fallback" aria-hidden="true">🤖</span></span>
+    </div>
+  </header>
+
+  <main id="content"></main>
+
+  <nav id="tabbar">
+    <button data-tab="home" class="active">
+      <svg class="ic-outline" viewBox="0 0 24 24" fill="none"><path d="M4 11.5 12 4l8 7.5M6 10v9h5v-5h2v5h5v-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg class="ic-filled" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.2 3 11h2v9h6v-6h2v6h6v-9h2L12 3.2Z"/></svg>
+      <span>خانه</span>
+    </button>
+    <button data-tab="store">
+      <svg class="ic-outline" viewBox="0 0 24 24" fill="none"><path d="M4 8h16l-1.2 10.2a2 2 0 0 1-2 1.8H7.2a2 2 0 0 1-2-1.8L4 8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 8V6a4 4 0 0 1 8 0v2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <svg class="ic-filled" viewBox="0 0 24 24" fill="currentColor"><path d="M8 6a4 4 0 1 1 8 0v1.2h2.4a1 1 0 0 1 1 .9l1.1 10.3a2.4 2.4 0 0 1-2.4 2.6H7.9a2.4 2.4 0 0 1-2.4-2.6L6.6 8.1a1 1 0 0 1 1-.9H10V6Zm2 1.2h4V6a2 2 0 0 0-4 0v1.2Z"/></svg>
+      <span>فروشگاه</span>
+    </button>
+    <button data-tab="services">
+      <svg class="ic-outline" viewBox="0 0 24 24" fill="none"><path d="M12 2 4 6v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10V6l-8-4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.5 12.2 11.3 14l3.2-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg class="ic-filled" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.3 3.4 5.2v6.4c0 5.5 3.7 9.9 8.6 11.5 4.9-1.6 8.6-6 8.6-11.5V5.2L12 1.3Zm-.9 14.4-3.3-3.3 1.4-1.4 1.9 1.9 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+      <span>سرویس‌ها</span>
+    </button>
+    <button data-tab="profile">
+      <svg class="ic-outline" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.8"/><path d="M5 19.5c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <svg class="ic-filled" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7.8" r="3.8"/><path d="M12 12.6c-4.4 0-8 2.9-8 7.4 0 .6.4 1 1 1h14c.6 0 1-.4 1-1 0-4.5-3.6-7.4-8-7.4Z"/></svg>
+      <span>پروفایل</span>
+    </button>
+    <button data-tab="reseller" id="reseller-tab-btn" style="display:none">
+      <svg class="ic-outline" viewBox="0 0 24 24" fill="none"><path d="M12 3 19 6.5v5.2c0 4.1-2.7 7.7-7 9.3-4.3-1.6-7-5.2-7-9.3V6.5L12 3Z" stroke="currentColor" stroke-width="1.8"/><path d="m9.2 12.2 2 2 3.7-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <svg class="ic-filled" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2.1 8.3 4.1v5.1c0 4.9-3.2 9.2-8.3 10.8-5.1-1.6-8.3-5.9-8.3-10.8V6.2L12 2.1Zm-1 14.5 6.1-6.1-1.4-1.4-4.7 4.7-2.1-2.1-1.4 1.4 3.5 3.5Z"/></svg>
+      <span>نمایندگی</span>
+    </button>
+    <button data-tab="admin" id="admin-tab-btn" style="display:none">
+      <svg class="ic-outline" viewBox="0 0 24 24" fill="none"><path d="M12 2 4 6v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10V6l-8-4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.5 12.2 11.3 14l3.2-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg class="ic-filled" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.3 3.4 5.2v6.4c0 5.5 3.7 9.9 8.6 11.5 4.9-1.6 8.6-6 8.6-11.5V5.2L12 1.3Zm-.9 14.4-3.3-3.3 1.4-1.4 1.9 1.9 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+      <span>مدیریت</span>
+    </button>
+  </nav>
+</div>
+<script>
+(function(){
+  const tg=window.Telegram?.WebApp;
+  let LANGS=[];
+  function currentLang(){ const q=new URLSearchParams(location.search).get('lang'); return q || localStorage.getItem('sv-lang') || 'fa'; }
+  async function syncLang(l){
+    try{ if(tg?.initData) await fetch('/api/language',{method:'POST',headers:{'Content-Type':'application/json','X-Init-Data':tg.initData},body:JSON.stringify({language:l})}); }catch(e){ console.debug('language sync failed',e); }
+  }
+  function picker(){
+    let old=document.getElementById('language-picker'); if(old){old.remove();return;}
+    const b=document.getElementById('lang-toggle'); if(!b)return;
+    const box=document.createElement('div'); box.id='language-picker'; box.style.cssText='position:fixed;top:64px;right:12px;z-index:9999;background:var(--card,#fff);border:1px solid rgba(127,127,127,.2);border-radius:14px;padding:8px;box-shadow:0 12px 35px rgba(0,0,0,.2);min-width:170px;';
+    LANGS.forEach(x=>{ const a=document.createElement('button'); a.type='button'; a.textContent=`${x.flag||''} ${x.native_name||x.name}`; a.style.cssText='display:block;width:100%;padding:10px;border:0;background:transparent;text-align:start;border-radius:10px;cursor:pointer;color:inherit;'; a.onclick=()=>setLang(x.code); box.appendChild(a); });
+    document.body.appendChild(box);
+    setTimeout(()=>document.addEventListener('click',function close(e){ if(!box.contains(e.target)&&e.target!==b){box.remove();document.removeEventListener('click',close);} },{once:true}),0);
+  }
+  async function setLang(l){
+    localStorage.setItem('sv-lang',l);
+    await syncLang(l);
+    await window.ShopVPNLoadLanguage?.(l);
+    document.documentElement.lang=l; document.documentElement.dir=(l==='fa'||l==='ar')?'rtl':'ltr';
+    document.getElementById('language-picker')?.remove();
+    window.ShopVPNApplyI18n?.();
+    location.reload();
+  }
+  async function init(){
+    let lang=currentLang();
+    try{
+      if(tg?.initData){ const r=await fetch('/api/languages',{headers:{'X-Init-Data':tg.initData}}); if(r.ok) LANGS=await r.json(); }
+      if(!LANGS.length) LANGS=[{code:'fa',native_name:'\u0641\u0627\u0631\u0633\u06cc',flag:'🇮🇷'},{code:'en',native_name:'English',flag:'🇬🇧'}];
+      if(tg?.initData){ const r=await fetch('/api/me',{headers:{'X-Init-Data':tg.initData}}); if(r.ok){ const me=await r.json(); if(me.language) lang=me.language; } }
+    }catch(e){ console.debug('language bootstrap failed',e); }
+    if(!LANGS.some(x=>x.code===lang)) lang=LANGS[0]?.code||'fa';
+    localStorage.setItem('sv-lang',lang);
+    document.documentElement.lang=lang; document.documentElement.dir=(lang==='fa'||lang==='ar')?'rtl':'ltr';
+    await window.ShopVPNLoadLanguage?.(lang);
+    const b=document.getElementById('lang-toggle'); if(b){ const cur=LANGS.find(x=>x.code===lang); b.textContent=`${cur?.flag||''} ${cur?.native_name||cur?.name||lang}`; b.onclick=picker; }
+  }
+  document.addEventListener('DOMContentLoaded',init);
+})();
+</script>
+
+<script>document.addEventListener('DOMContentLoaded',()=>window.ShopVPNApplyI18n?.());</script>
+<script src="app.js?v={{VERSION}}"></script>
+</body>
+</html>
+<!--‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍-->
+<!-- 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 -->

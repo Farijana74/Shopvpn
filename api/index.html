@@ -1,0 +1,25 @@
+<!doctype html>
+<!--‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍-->
+<html lang="fa" dir="rtl">
+<head><meta charset="utf-8"><title>ShopVPN API</title>
+<style>body{font-family:system-ui;max-width:900px;margin:40px auto;padding:0 20px;line-height:1.9}code,pre{background:#f4f4f4;padding:4px;border-radius:6px}pre{padding:14px;overflow:auto}</style>
+</head>
+<body>
+<h1>ShopVPN Integration API</h1>
+<p>احراز هویت با هدر <code>Token</code> انجام می‌شود. توکن را با دستور <code>/token2</code> در ربات ادمین بسازید.</p>
+<h2>Scopeها</h2><ul><li><code>read</code>: محصولات، پنل‌ها، دسته‌ها، تخفیف‌ها و تنظیمات مجاز.</li><li><code>users</code>: خواندن کاربران.</li><li><code>orders</code>: خواندن سفارش‌ها و پرداخت‌ها.</li><li><code>orders:write</code>: برای API عمومی صادر نمی‌شود؛ بنابراین توکن read-only هرگز نمی‌تواند سفارش را تأیید کند.</li></ul>
+<h2>محدودیت و لاگ</h2><p>هر توکن حداکثر ۶۰ درخواست در دقیقه دارد (قابل تنظیم با متغیر <code>API_RATE_LIMIT_PER_MINUTE</code>)؛ بیشتر از آن پاسخ <code>429</code> با هدر <code>Retry-After</code> برمی‌گردد. همه‌ی درخواست‌ها در <code>logs/api_access.log</code> ثبت می‌شوند.</p>
+<h2>درخواست</h2>
+<pre>POST /api
+Token: shp_xxxxxxxxx
+Content-Type: application/json
+
+{"action":"products","limit":20,"offset":0}</pre>
+<h2>پاسخ</h2>
+<pre>{"status":true,"msg":"ok","obj":[...]}</pre>
+<h2>Actionها</h2>
+<p><code>users</code>، <code>orders</code>، <code>payments</code>، <code>products</code>، <code>panels</code>، <code>categories</code>، <code>discounts</code>، <code>settings</code></p>
+<p>مستندات تعاملی OpenAPI نیز در <code>/api/docs</code> در دسترس است.</p>
+</body></html>
+<!--‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍-->
+<!-- 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 -->

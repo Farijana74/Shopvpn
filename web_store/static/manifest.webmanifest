@@ -1,0 +1,13 @@
+{
+  "name": "ShopVPN",
+  "short_name": "ShopVPN",
+  "description": "خرید سریع سرویس VPN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#070A1A",
+  "theme_color": "#070A1A",
+  "icons": [
+    {"src": "/assets/pwa-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}

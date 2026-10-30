@@ -1,0 +1,26 @@
+aiogram>=3.30.0
+python-dotenv>=1.0.0
+qrcode[pil]>=7.4.2
+Pillow>=10.0.0
+arabic-reshaper>=3.0.0
+python-bidi>=0.4.2
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+aiohttp>=3.9
+aiohttp_socks>=0.9.1
+aiodns>=3.2
+psutil>=5.9
+pywebpush>=2.0.0
+asyncssh>=2.14.0
+google-genai>=0.5.0
+PyJWT>=2.8.0
+cryptography>=41.0.0
+telethon>=1.36.0
+
+# Automatic multi-language translation
+# NOTE: argostranslate is intentionally NOT listed here. It pulls in several GB of
+# dependencies (torch, stanza, ...). setup_local_translation.sh installs it only
+# when the user answers "y" to the local translation prompt.
+# Optional public fallback providers; only used when SHOPVPN_TRANSLATION_ALLOW_PUBLIC_APIS=1.
+deep-translator>=1.11.4
