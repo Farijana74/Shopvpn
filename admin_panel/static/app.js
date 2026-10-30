@@ -3468,6 +3468,10 @@ function productProvisionFieldsHtml(panelServers, sshNodes = [], prefill = null)
   const target = prefill && prefill.provision_ssh_node_id ? (prefill.provision_server_id ? 'both' : 'ssh') : 'vpn';
   const durUnlimited = !!(prefill && prefill.duration_days === 0);
   const volUnlimited = !!(prefill && prefill.auto_provision_volume_gb === 0);
+  const selectedServerId = prefill && prefill.provision_server_id ? Number(prefill.provision_server_id) : Number((panelServers[0] || {}).id || 0);
+  const selectedServer = panelServers.find(s => Number(s.id) === selectedServerId);
+  const selectedDeliveryMode = (prefill && prefill.delivery_mode) || 'normal';
+  const showDeliveryMode = isDirect && target !== 'ssh' && selectedServer && selectedServer.panel_type === '3xui';
   return `
     <div class="form-row" style="gap:12px;align-items:center">
       <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="prod-source" value="bank" ${isDirect ? '' : 'checked'}> بانک کانفیگ</label>
@@ -3475,7 +3479,8 @@ function productProvisionFieldsHtml(panelServers, sshNodes = [], prefill = null)
     </div>
     <div id="prod-direct-fields" class="form-grid" style="display:${isDirect ? '' : 'none'}">
       <label class="field"><span>نوع مقصد</span><select class="input" id="prod-target-type"><option value="vpn" ${target === 'vpn' ? 'selected' : ''}>پنل VPN</option>${sshNodes.length || (prefill && prefill.provision_ssh_node_id) ? `<option value="ssh" ${target === 'ssh' ? 'selected' : ''}>نود SSH (Linux Agent)</option><option value="both" ${target === 'both' ? 'selected' : ''}>ترکیبی VPN + SSH (حجم و زمان مشترک)</option>` : ''}</select></label>
-      <div id="prod-vpn-fields" style="display:${target === 'ssh' ? 'none' : ''}"><label class="field"><span>پنل VPN</span><select class="input" id="prod-server">${panelServers.map(s => `<option value="${s.id}" ${prefill && Number(prefill.provision_server_id) === Number(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label></div>
+      <div id="prod-vpn-fields" style="display:${target === 'ssh' ? 'none' : ''}"><label class="field"><span>پنل VPN</span><select class="input" id="prod-server">${panelServers.map(s => `<option value="${s.id}" data-panel-type="${esc(s.panel_type || '')}" ${prefill && Number(prefill.provision_server_id) === Number(s.id) ? 'selected' : (!prefill && Number(s.id) === selectedServerId ? 'selected' : '')}>${esc(s.name)}</option>`).join('')}</select></label></div>
+      <div id="prod-delivery-wrap" style="display:${showDeliveryMode ? '' : 'none'}"><label class="field"><span>روش تحویل لینک</span><select class="input" id="prod-delivery-mode"><option value="normal" ${selectedDeliveryMode === 'normal' ? 'selected' : ''}>عادی</option><option value="happ" ${selectedDeliveryMode === 'happ' ? 'selected' : ''}>Happ</option><option value="both" ${selectedDeliveryMode === 'both' ? 'selected' : ''}>هر دو</option></select><span class="card-sub">در صورت خاموش‌بودن Happ در پنل، لینک عادی ارسال می‌شود.</span></label></div>
       <div id="prod-ssh-fields" style="display:${(target === 'ssh' || target === 'both') ? '' : 'none'}"><label class="field"><span>نود SSH</span><select class="input" id="prod-ssh-node">${sshNodes.map(n => `<option value="${n.id}" ${prefill && Number(prefill.provision_ssh_node_id) === Number(n.id) ? 'selected' : ''}>${esc(n.name)} · ${esc(n.host || '')}</option>`).join('')}</select><span class="card-sub">فقط Linux Agent فعال با حسابداری معتبر پشتیبانی می‌شود.</span></label></div>
       <label class="field field-row"><span>♾ مدت اعتبار نامحدود</span><input type="checkbox" id="prod-duration-unlimited" ${durUnlimited ? 'checked' : ''}></label>
       <label class="field"><span>حجم (GB) — ۰ = نامحدود</span><input class="input" id="prod-volume" type="number" min="0" step="1" placeholder="حجم (گیگابایت)" value="${prefill && prefill.auto_provision_volume_gb != null ? prefill.auto_provision_volume_gb : ''}" ${volUnlimited ? 'disabled' : ''}></label>
@@ -3484,16 +3489,28 @@ function productProvisionFieldsHtml(panelServers, sshNodes = [], prefill = null)
 }
 
 function wireProductProvisionToggle(b) {
+  const syncDeliveryModeVisibility = () => {
+    const source = $('input[name="prod-source"]:checked', b)?.value || 'bank';
+    const target = $('#prod-target-type', b)?.value || 'vpn';
+    const serverType = $('#prod-server', b)?.selectedOptions?.[0]?.dataset?.panelType || '';
+    const wrap = $('#prod-delivery-wrap', b);
+    if (wrap) wrap.style.display = source === 'direct' && target !== 'ssh' && serverType === '3xui' ? '' : 'none';
+  };
   $$('input[name="prod-source"]', b).forEach(r => r.addEventListener('change', () => {
     const df = $('#prod-direct-fields', b);
     if (df) df.style.display = $('input[name="prod-source"]:checked', b).value === 'direct' ? '' : 'none';
+    syncDeliveryModeVisibility();
   }));
   const targetType = $('#prod-target-type', b);
   if (targetType) targetType.addEventListener('change', () => {
     const t = targetType.value;
     if ($('#prod-vpn-fields', b)) $('#prod-vpn-fields', b).style.display = t === 'ssh' ? 'none' : '';
     if ($('#prod-ssh-fields', b)) $('#prod-ssh-fields', b).style.display = (t === 'ssh' || t === 'both') ? '' : 'none';
+    syncDeliveryModeVisibility();
   });
+  const serverSelect = $('#prod-server', b);
+  if (serverSelect) serverSelect.addEventListener('change', syncDeliveryModeVisibility);
+  syncDeliveryModeVisibility();
   const durUnlimitedCb = $('#prod-duration-unlimited', b);
   if (durUnlimitedCb) {
     const durInput = $('#prod-duration', b);
@@ -3514,8 +3531,10 @@ function readProductProvisionFields(b) {
   const durationUnlimited = isDirect && durUnlimitedCb && durUnlimitedCb.checked;
   const durInput = $('#prod-duration', b);
   const duration_days = durationUnlimited ? 0 : (Number(durInput ? durInput.value : 0) || 30);
-  if (!isDirect) return { ok: true, source: 'bank', provision_server_id: null, provision_ssh_node_id: null, auto_provision_volume_gb: null, duration_days };
+  if (!isDirect) return { ok: true, source: 'bank', provision_server_id: null, provision_ssh_node_id: null, auto_provision_volume_gb: null, duration_days, delivery_mode: 'normal' };
   const target = $('#prod-target-type', b)?.value || 'vpn';
+  const selectedPanelType = $('#prod-server', b)?.selectedOptions?.[0]?.dataset?.panelType || '';
+  const delivery_mode = selectedPanelType === '3xui' ? ($('#prod-delivery-mode', b)?.value || 'normal') : 'normal';
   const volUnlimitedCb = $('#prod-volume-unlimited', b);
   const volumeUnlimited = volUnlimitedCb && volUnlimitedCb.checked;
   const auto_provision_volume_gb = volumeUnlimited ? 0 : Number($('#prod-volume', b).value);
@@ -3527,16 +3546,16 @@ function readProductProvisionFields(b) {
     const provision_ssh_node_id = Number($('#prod-ssh-node', b)?.value || 0);
     if (!provision_server_id) { toast('یک پنل VPN فعال انتخاب کنید.', true); return { ok: false }; }
     if (!provision_ssh_node_id) { toast('یک نود SSH فعال انتخاب کنید.', true); return { ok: false }; }
-    return { ok: true, source: 'direct', provision_server_id, provision_ssh_node_id, auto_provision_volume_gb, duration_days };
+    return { ok: true, source: 'direct', provision_server_id, provision_ssh_node_id, auto_provision_volume_gb, duration_days, delivery_mode };
   }
   if (target === 'ssh') {
     const provision_ssh_node_id = Number($('#prod-ssh-node', b)?.value || 0);
     if (!provision_ssh_node_id) { toast('یک نود SSH فعال انتخاب کنید.', true); return { ok: false }; }
-    return { ok: true, source: 'direct', provision_server_id: null, provision_ssh_node_id, auto_provision_volume_gb, duration_days };
+    return { ok: true, source: 'direct', provision_server_id: null, provision_ssh_node_id, auto_provision_volume_gb, duration_days, delivery_mode: 'normal' };
   }
   const provision_server_id = Number($('#prod-server', b)?.value || 0);
   if (!provision_server_id) { toast('یک پنل VPN فعال انتخاب کنید.', true); return { ok: false }; }
-  return { ok: true, source: 'direct', provision_server_id, provision_ssh_node_id: null, auto_provision_volume_gb, duration_days };
+  return { ok: true, source: 'direct', provision_server_id, provision_ssh_node_id: null, auto_provision_volume_gb, duration_days, delivery_mode };
 }
 
 // روش‌های پرداخت مجاز حین «ساخت» محصول جدید (پیش‌فرض: همه تیک‌خورده = بدون
@@ -3642,6 +3661,7 @@ function openProductEditModal(product, categories, panelServers, sshNodes) {
         category_id: Number($('#pe-cat', b).value), name, price: disc.price, compare_price: disc.compare_price, discount_days: disc.discount_days, discount_max_uses: disc.discount_max_uses,
         description: $('#pe-desc', b).value, duration_days: prov.duration_days,
         source: prov.source,
+        delivery_mode: prov.delivery_mode,
       };
       if (prov.source === 'direct') {
         payload.provision_server_id = prov.provision_server_id;
@@ -3753,7 +3773,7 @@ async function renderCatalog() {
           category_id: Number($('#prod-cat', b).value), name, price: disc.price, compare_price: disc.compare_price, discount_days: disc.discount_days, discount_max_uses: disc.discount_max_uses,
           description: $('#prod-desc', b).value, duration_days: prov.duration_days,
           provision_server_id: prov.provision_server_id, provision_ssh_node_id: prov.provision_ssh_node_id,
-          auto_provision_volume_gb: prov.auto_provision_volume_gb, payment_methods,
+          auto_provision_volume_gb: prov.auto_provision_volume_gb, delivery_mode: prov.delivery_mode, payment_methods,
         });
         toast('محصول اضافه شد.'); close(); renderCatalog();
       } catch (e) { handleErr(e); }

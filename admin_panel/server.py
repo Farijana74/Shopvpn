@@ -1461,6 +1461,9 @@ def api_app_config(admin=Depends(get_current_admin)):
                      "nullable": True, "depends_on": "is_auto_provision"},
                     {"key": "auto_provision_volume_gb", "label": "حجم (گیگ، ۰=نامحدود)", "type": "number",
                      "depends_on": "is_auto_provision"},
+                    {"key": "delivery_mode", "label": "روش تحویل Happ", "type": "select",
+                     "options": [["normal", "عادی"], ["happ", "Happ"], ["both", "هر دو"]],
+                     "depends_on": "is_auto_provision"},
                 ],
             },
             "edit_form": {
@@ -1478,6 +1481,8 @@ def api_app_config(admin=Depends(get_current_admin)):
                      "options_source": "/api/panel-servers-lite", "option_value_key": "id", "option_label_key": "name",
                      "nullable": True},
                     {"key": "auto_provision_volume_gb", "label": "حجم (گیگ، فقط اتصال مستقیم)", "type": "number"},
+                    {"key": "delivery_mode", "label": "روش تحویل Happ", "type": "select",
+                     "options": [["normal", "عادی"], ["happ", "Happ"], ["both", "هر دو"]]},
                 ],
             },
         })
@@ -3830,6 +3835,7 @@ class ProductBody(BaseModel):
     auto_provision_volume_gb: Optional[int] = None
     provision_server_id: Optional[int] = None
     provision_ssh_node_id: Optional[int] = None
+    delivery_mode: str = "normal"
     payment_methods: Optional[List[str]] = None
     compare_price: Optional[int] = None  # قیمت قبل از تخفیف (نمایشی)
     discount_days: Optional[int] = None  # مدت اعتبار تخفیف (روز)؛ 0 = بدون محدودیت زمانی
@@ -3846,8 +3852,9 @@ def api_products(admin=Depends(require_permission("catalog"))):
 
 @app.get("/api/panel-servers-lite")
 def api_panel_servers_lite(admin=Depends(require_permission("catalog"))):
-    """لیست سبک پنل‌ها (فقط id/name) برای انتخاب پنل موقع ساخت محصول اتصال مستقیم."""
-    return [{"id": s["id"], "name": s["name"]} for s in db.get_panel_servers(active_only=True)]
+    """لیست پنل‌های فعال برای انتخاب سرور و تشخیص پشتیبانی Happ در فرم محصول."""
+    return [{"id": s["id"], "name": s["name"], "panel_type": s["panel_type"]}
+            for s in db.get_panel_servers(active_only=True)]
 
 @app.get("/api/ssh/nodes-lite")
 def api_ssh_nodes_lite(admin=Depends(require_permission("catalog")), _fa=Depends(require_full_access_tenant)):
@@ -3875,17 +3882,23 @@ def api_reorder_products(body: ProductReorderBody, admin=Depends(require_permiss
 def api_add_product(body: ProductBody, admin=Depends(require_permission("catalog"))):
     if body.duration_days < 0:
         raise HTTPException(400, tr("مدت اعتبار نامعتبر است."))
+    if body.delivery_mode not in ("normal", "happ", "both"):
+        raise HTTPException(400, "روش تحویل نامعتبر است.")
     # هر دو مقصد همزمان مجاز است: محصول ترکیبی VPN+SSH با سهمیه مشترک.
     if body.provision_server_id:
         vpn_server = db.get_panel_server(body.provision_server_id)
         if not vpn_server or not vpn_server["is_active"]:
             raise HTTPException(400, "پنل VPN فعال پیدا نشد.")
+        if body.delivery_mode != "normal" and vpn_server["panel_type"] != "3xui":
+            raise HTTPException(400, "روش تحویل Happ فقط برای پنل 3X-UI پشتیبانی می‌شود.")
     ssh_node = None
     if body.provision_ssh_node_id:
         ssh_node = next((n for n in db.list_ssh_nodes(active_only=True) if int(n["id"]) == int(body.provision_ssh_node_id)), None)
         if not ssh_node or ssh_node.get("node_type") != "linux":
             raise HTTPException(400, "فقط نود Linux Agent فعال برای محصول SSH پشتیبانی می‌شود.")
     direct_target = bool(body.provision_server_id or body.provision_ssh_node_id)
+    if body.delivery_mode != "normal" and not body.provision_server_id:
+        raise HTTPException(400, "روش تحویل Happ فقط برای محصولات متصل به پنل 3X-UI پشتیبانی می‌شود.")
     if body.duration_days == 0 and not direct_target:
         raise HTTPException(400, tr("مدت نامحدود فقط برای محصولات با اتصال مستقیم ممکن است."))
     if direct_target:
@@ -3906,6 +3919,7 @@ def api_add_product(body: ProductBody, admin=Depends(require_permission("catalog
         body.provision_server_id, payment_methods=body.payment_methods,
         compare_price=max(int(body.compare_price or 0), 0),
         provision_ssh_node_id=body.provision_ssh_node_id,
+        delivery_mode=body.delivery_mode,
     )
     if int(body.compare_price or 0) > 0 and (body.discount_days is not None or body.discount_max_uses is not None):
         db.edit_product(pid, compare_price=int(body.compare_price),
@@ -3927,6 +3941,7 @@ class ProductEditBody(BaseModel):
     source: Optional[str] = None
     provision_server_id: Optional[int] = None
     provision_ssh_node_id: Optional[int] = None
+    delivery_mode: Optional[str] = None
     auto_provision_volume_gb: Optional[int] = None
     compare_price: Optional[int] = None  # 0 یعنی حذف تخفیف
     discount_days: Optional[int] = None
@@ -3938,6 +3953,18 @@ def api_edit_product(product_id: int, body: ProductEditBody, admin=Depends(requi
     old_product = db.get_product(product_id)
     if not old_product:
         raise HTTPException(status_code=404, detail=tr("محصول یافت نشد."))
+
+    if body.delivery_mode is not None and body.delivery_mode not in ("normal", "happ", "both"):
+        raise HTTPException(status_code=400, detail="روش تحویل نامعتبر است.")
+    effective_delivery_server_id = (
+        body.provision_server_id if body.provision_server_id is not None else old_product["provision_server_id"]
+    )
+    if body.delivery_mode in ("happ", "both"):
+        if body.source == "bank":
+            raise HTTPException(status_code=400, detail="روش تحویل Happ فقط برای محصول خودکار 3X-UI است.")
+        delivery_server = db.get_panel_server(effective_delivery_server_id) if effective_delivery_server_id else None
+        if not delivery_server or delivery_server["panel_type"] != "3xui":
+            raise HTTPException(status_code=400, detail="روش تحویل Happ فقط برای پنل 3X-UI پشتیبانی می‌شود.")
 
     if body.category_id is not None and not db.get_category(body.category_id):
         raise HTTPException(status_code=404, detail=tr("دسته‌بندی یافت نشد."))
@@ -4035,6 +4062,7 @@ def api_edit_product(product_id: int, body: ProductEditBody, admin=Depends(requi
         compare_price=(max(int(body.compare_price), 0) if body.compare_price is not None else ...),
         discount_days=(max(int(body.discount_days), 0) if body.discount_days is not None else ...),
         discount_max_uses=(max(int(body.discount_max_uses), 0) if body.discount_max_uses is not None else ...),
+        delivery_mode=(body.delivery_mode if body.delivery_mode is not None else ...),
     )
     db.log_admin_action(admin["id"], "product_edit", f"#{product_id} (پنل وب - {admin['username']})", "product", product_id)
     return {"ok": True}

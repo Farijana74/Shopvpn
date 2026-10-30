@@ -12,6 +12,7 @@ finalize_paid_topup داشت. تفاوت‌ها فقط در نام لاگر بو
 import logging
 
 from config_delivery import deliver_config_to_user
+from happ_delivery import get_product_delivery_links
 from panel_providers import get_provider
 from reseller_auto_provision import provision_auto_config, ProvisionError
 from direct_panel_provision import provision_direct, ProvisionError as DirectProvisionError
@@ -119,32 +120,8 @@ async def finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None) -> 
                 db.release_order_claim(order_id)
                 return tr(f"⚠️ پرداخت تایید شد ولی ساخت خودکار کانفیگ ناموفق بود: {e}\nبا پشتیبانی تماس بگیرید.")
             db.approve_order_auto(order_id)
-            delivery_mode = product["delivery_mode"] if "delivery_mode" in product.keys() else "normal"
-            if delivery_mode not in ("normal", "happ", "both"):
-                delivery_mode = "normal"
-            links = []
             configured_link_count = len(prov_results)
-            for item in prov_results:
-                normal_link = item["subscription_url"]
-                happ_link = None
-                server_id = item.get("panel_server_id")
-                if delivery_mode in ("happ", "both") and server_id:
-                    try:
-                        server = db.get_panel_server(server_id)
-                        if server and server["panel_type"] == "3xui":
-                            provider = get_provider(server)
-                            get_happ = getattr(provider, "get_happ_link", None)
-                            if get_happ:
-                                happ_link = await get_happ(item["username"])
-                    except Exception:
-                        # Happ is optional; never log credentials or subscription links.
-                        logger.warning("Happ link generation failed for order #%s", order_id)
-                if delivery_mode == "happ" and happ_link:
-                    links.append(happ_link)
-                else:
-                    links.append(normal_link)
-                    if delivery_mode == "both" and happ_link:
-                        links.append(happ_link)
+            links = await get_product_delivery_links(db, product, prov_results, order_id)
         else:
             results = db.take_unused_configs(order["product_id"], order["user_id"], quantity)
             if not results:
