@@ -381,6 +381,7 @@ const NAV = [
 
   // محصولات و بازاریابی
   { key: 'catalog', label: 'محصولات و بانک کانفیگ', icon: 'catalog', role: 'catalog', section: 'محصولات و بازاریابی' },
+  { key: 'happ-delivery', label: 'تحویل Happ', icon: 'catalog', role: 'catalog', section: 'محصولات و بازاریابی' },
   { key: 'discounts', label: 'کدهای تخفیف', icon: 'discounts', role: 'discounts', section: 'محصولات و بازاریابی' },
   { key: 'broadcast', label: 'پیام همگانی', icon: 'broadcast', role: 'broadcast', section: 'محصولات و بازاریابی' },
   { key: 'banners', label: 'بنرها', icon: 'catalog', role: 'settings', section: 'محصولات و بازاریابی' },
@@ -932,6 +933,7 @@ async function renderPage(tab) {
       case 'topups': return await renderTopups();
       case 'users': return await renderUsers();
       case 'catalog': return await renderCatalog();
+      case 'happ-delivery': return await renderHappDelivery();
       case 'discounts': return await renderDiscounts();
       case 'tickets': return await renderTickets();
       case 'support': return await renderSupport();
@@ -3471,7 +3473,7 @@ function productProvisionFieldsHtml(panelServers, sshNodes = [], prefill = null)
   const selectedServerId = prefill && prefill.provision_server_id ? Number(prefill.provision_server_id) : Number((panelServers[0] || {}).id || 0);
   const selectedServer = panelServers.find(s => Number(s.id) === selectedServerId);
   const selectedDeliveryMode = (prefill && prefill.delivery_mode) || 'normal';
-  const showDeliveryMode = isDirect && target !== 'ssh' && selectedServer && selectedServer.panel_type === '3xui';
+  const showDeliveryMode = isDirect && target === 'vpn' && selectedServer && selectedServer.panel_type === '3xui';
   return `
     <div class="form-row" style="gap:12px;align-items:center">
       <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="prod-source" value="bank" ${isDirect ? '' : 'checked'}> بانک کانفیگ</label>
@@ -3480,7 +3482,7 @@ function productProvisionFieldsHtml(panelServers, sshNodes = [], prefill = null)
     <div id="prod-direct-fields" class="form-grid" style="display:${isDirect ? '' : 'none'}">
       <label class="field"><span>نوع مقصد</span><select class="input" id="prod-target-type"><option value="vpn" ${target === 'vpn' ? 'selected' : ''}>پنل VPN</option>${sshNodes.length || (prefill && prefill.provision_ssh_node_id) ? `<option value="ssh" ${target === 'ssh' ? 'selected' : ''}>نود SSH (Linux Agent)</option><option value="both" ${target === 'both' ? 'selected' : ''}>ترکیبی VPN + SSH (حجم و زمان مشترک)</option>` : ''}</select></label>
       <div id="prod-vpn-fields" style="display:${target === 'ssh' ? 'none' : ''}"><label class="field"><span>پنل VPN</span><select class="input" id="prod-server">${panelServers.map(s => `<option value="${s.id}" data-panel-type="${esc(s.panel_type || '')}" ${prefill && Number(prefill.provision_server_id) === Number(s.id) ? 'selected' : (!prefill && Number(s.id) === selectedServerId ? 'selected' : '')}>${esc(s.name)}</option>`).join('')}</select></label></div>
-      <div id="prod-delivery-wrap" style="display:${showDeliveryMode ? '' : 'none'}"><label class="field"><span>روش تحویل لینک</span><select class="input" id="prod-delivery-mode"><option value="normal" ${selectedDeliveryMode === 'normal' ? 'selected' : ''}>عادی</option><option value="happ" ${selectedDeliveryMode === 'happ' ? 'selected' : ''}>Happ</option><option value="both" ${selectedDeliveryMode === 'both' ? 'selected' : ''}>هر دو</option></select><span class="card-sub">در صورت خاموش‌بودن Happ در پنل، لینک عادی ارسال می‌شود.</span></label></div>
+      <div id="prod-delivery-wrap" style="display:${showDeliveryMode ? '' : 'none'}"><label class="field"><span>روش تحویل لینک</span><select class="input" id="prod-delivery-mode"><option value="normal" ${selectedDeliveryMode === 'normal' ? 'selected' : ''}>عادی</option><option value="happ" ${selectedDeliveryMode === 'happ' ? 'selected' : ''}>Happ Crypt5</option><option value="both" ${selectedDeliveryMode === 'both' ? 'selected' : ''}>هر دو</option></select><span class="card-sub">لینک Crypt5 از API پنل سنایی دریافت می‌شود؛ قابلیت Happ باید در پنل فعال باشد. در حالت Happ خطا باعث ارسال لینک عادی نمی‌شود.</span></label></div>
       <div id="prod-ssh-fields" style="display:${(target === 'ssh' || target === 'both') ? '' : 'none'}"><label class="field"><span>نود SSH</span><select class="input" id="prod-ssh-node">${sshNodes.map(n => `<option value="${n.id}" ${prefill && Number(prefill.provision_ssh_node_id) === Number(n.id) ? 'selected' : ''}>${esc(n.name)} · ${esc(n.host || '')}</option>`).join('')}</select><span class="card-sub">فقط Linux Agent فعال با حسابداری معتبر پشتیبانی می‌شود.</span></label></div>
       <label class="field field-row"><span>♾ مدت اعتبار نامحدود</span><input type="checkbox" id="prod-duration-unlimited" ${durUnlimited ? 'checked' : ''}></label>
       <label class="field"><span>حجم (GB) — ۰ = نامحدود</span><input class="input" id="prod-volume" type="number" min="0" step="1" placeholder="حجم (گیگابایت)" value="${prefill && prefill.auto_provision_volume_gb != null ? prefill.auto_provision_volume_gb : ''}" ${volUnlimited ? 'disabled' : ''}></label>
@@ -3556,6 +3558,60 @@ function readProductProvisionFields(b) {
   const provision_server_id = Number($('#prod-server', b)?.value || 0);
   if (!provision_server_id) { toast('یک پنل VPN فعال انتخاب کنید.', true); return { ok: false }; }
   return { ok: true, source: 'direct', provision_server_id, provision_ssh_node_id: null, auto_provision_volume_gb, duration_days, delivery_mode };
+}
+
+async function renderHappDelivery() {
+  const [categories, products, panelServers] = await Promise.all([
+    apiGet('/categories'), apiGet('/products'), apiGet('/panel-servers-lite'),
+  ]);
+  const categoryNames = new Map(categories.map(c => [Number(c.id), c.name]));
+  const serverTypes = new Map(panelServers.map(s => [Number(s.id), s.panel_type]));
+  const modeLabel = mode => ({ normal: 'عادی', happ: 'Happ', both: 'هر دو' }[mode] || 'عادی');
+  const isHappEligible = p => !!(p.is_auto_provision && p.provision_server_id && !p.provision_ssh_node_id && serverTypes.get(Number(p.provision_server_id)) === '3xui');
+
+  setContent(`
+    <div class="page-head"><div><h1>تحویل Happ</h1><p>روش تحویل را برای یک محصول یا همهٔ محصولات سازگار در یک دسته‌بندی تنظیم کن.</p></div></div>
+    <div class="card" style="max-width:760px">
+      <div class="form-grid">
+        <label class="field"><span>اعمال روی</span><select class="input" id="happ-scope"><option value="product">یک محصول</option><option value="category">دسته‌بندی</option></select></label>
+        <label class="field"><span id="happ-target-label">محصول</span><select class="input" id="happ-target"></select></label>
+        <label class="field"><span>روش تحویل</span><select class="input" id="happ-mode"><option value="normal">عادی</option><option value="happ">Happ Crypt5</option><option value="both">هر دو</option></select></label>
+        <p class="card-sub" id="happ-scope-help">برای Happ Crypt5، محصول باید خودکار و VPN خالص متصل به پنل 3X-UI باشد. قابلیت Happ و API مربوط به آن باید در پنل فعال باشد.</p>
+        <button class="btn btn-primary" id="happ-save">ذخیرهٔ روش تحویل</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px"><h3>وضعیت فعلی محصولات</h3><div class="table-wrap"><table><thead><tr><th>محصول</th><th>دسته</th><th>تأمین</th><th>روش تحویل</th></tr></thead><tbody>
+      ${products.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(categoryNames.get(Number(p.category_id)) || '')}</td><td>${isHappEligible(p) ? '3X-UI خودکار' : (p.is_auto_provision ? 'خودکار، ناسازگار با Happ' : 'بانک کانفیگ')}</td><td>${modeLabel(p.delivery_mode)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">محصولی ثبت نشده است.</td></tr>'}
+    </tbody></table></div></div>
+  `);
+
+  const scope = $('#happ-scope');
+  const target = $('#happ-target');
+  const targetLabel = $('#happ-target-label');
+  const help = $('#happ-scope-help');
+  const refreshTargets = () => {
+    const byCategory = scope.value === 'category';
+    targetLabel.textContent = byCategory ? 'دسته‌بندی' : 'محصول';
+    target.innerHTML = byCategory
+      ? categories.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')
+      : products.map(p => `<option value="${p.id}">${esc(p.name)} · ${esc(categoryNames.get(Number(p.category_id)) || 'بدون دسته')}</option>`).join('');
+    help.textContent = byCategory
+      ? 'روش انتخابی روی محصولات فعلی دسته اعمال می‌شود؛ برای Happ Crypt5 فقط محصولات خودکار VPN خالص متصل به 3X-UI تغییر می‌کنند و بقیه رد می‌شوند. قابلیت Happ و API آن باید در پنل فعال باشد.'
+      : 'برای Happ Crypt5، محصول باید VPN خالص خودکار متصل به پنل فعال 3X-UI باشد و قابلیت Happ در پنل فعال باشد.';
+  };
+  scope.addEventListener('change', refreshTargets);
+  refreshTargets();
+  $('#happ-save').addEventListener('click', async () => {
+    if (!target.value) return toast('یک محصول یا دسته‌بندی انتخاب کن.', true);
+    try {
+      const result = await apiPost('/happ-delivery/apply', {
+        scope: scope.value, target_id: Number(target.value), delivery_mode: $('#happ-mode').value,
+      });
+      const skippedText = result.skipped_count ? `؛ ${result.skipped_count} محصول ناسازگار تغییری نکرد` : '';
+      toast(`روش تحویل برای ${result.updated_count} محصول ذخیره شد${skippedText}.`);
+      await renderHappDelivery();
+    } catch (e) { handleErr(e); }
+  });
 }
 
 // روش‌های پرداخت مجاز حین «ساخت» محصول جدید (پیش‌فرض: همه تیک‌خورده = بدون

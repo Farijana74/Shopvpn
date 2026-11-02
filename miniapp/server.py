@@ -104,6 +104,7 @@ from panel_providers import (
 from reseller_auto_provision import provision_auto_config, provision_test_config, is_volume_credit_bot, ProvisionError
 from test_config_provision import provision_test_plan, format_plan_amount, ProvisionError as TestPlanProvisionError
 from direct_panel_provision import provision_direct, ProvisionError as DirectProvisionError
+from happ_delivery import HappDeliveryError, get_product_delivery_links, validate_happ_product
 from renewal_engine import execute_renewal, RenewalError
 from user_limit import price_for_users as _ul_price_for_users, renewal_users as _ul_renewal_users
 from service_refund import (
@@ -2294,17 +2295,21 @@ async def api_create_order(body: OrderCreate, request: Request, auth=Depends(req
         if order["final_price"] <= 0:
             if product["is_auto_provision"]:
                 try:
+                    await asyncio.to_thread(validate_happ_product, db, product)
                     if product["provision_server_id"] or product["provision_ssh_node_id"]:
                         prov_results = await provision_direct(db, product, quantity, user_id=tg_id, order_id=order_id)
                     else:
                         prov_results = await provision_auto_config(db, product, quantity, user_id=tg_id, order_id=order_id)
+                    delivery_links = await get_product_delivery_links(db, product, prov_results, order_id)
+                except HappDeliveryError as exc:
+                    return {"status": "pending", "order_id": order_id, "detail": str(exc)}
                 except (ProvisionError, DirectProvisionError) as e:
                     db.reject_order(order_id)
                     raise HTTPException(status_code=409, detail=str(e))
                 db.approve_order_auto(order_id)
                 await report_order_completed(tenant, db, order_id, "wallet")
                 db.reward_referrer_if_first_purchase(tg_id, order["final_price"] or total_price)
-                links = [dedicated_sub.dedicated_link_for_upstream(db, r["subscription_url"]) for r in prov_results]
+                links = [dedicated_sub.dedicated_link_for_upstream(db, link) if link.startswith(("https://", "http://")) else link for link in delivery_links]
                 return {
                     "status": "approved", "order_id": order_id,
                     "link": links[0], "links": links,
@@ -2637,11 +2642,13 @@ async def api_abangateway_webhook(request: Request, tenant: Tenant = Depends(get
             return {"status": "ok"}
         quantity = order["quantity"] or 1
         try:
+            await asyncio.to_thread(validate_happ_product, db, product)
             if product["provision_server_id"] or product["provision_ssh_node_id"]:
                 prov_results = await provision_direct(db, product, quantity, user_id=order["user_id"], order_id=order_id)
             else:
                 prov_results = await provision_auto_config(db, product, quantity, user_id=order["user_id"], order_id=order_id)
-        except (ProvisionError, DirectProvisionError) as e:
+            delivery_links = await get_product_delivery_links(db, product, prov_results, order_id)
+        except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
             db.release_order_claim(order_id)
             admin_ids = db.list_admins()
             async with aiohttp.ClientSession() as session:
@@ -2673,7 +2680,7 @@ async def api_abangateway_webhook(request: Request, tenant: Tenant = Depends(get
         except Exception:
             pass
         asyncio.create_task(deliver_config_to_user_web(
-            order["user_id"], product["name"], [r["subscription_url"] for r in prov_results],
+            order["user_id"], product["name"], delivery_links,
             final_price=order["final_price"], order_id=order_id, db=db, bot_token=tenant.bot_token,
         ))
         return {"status": "ok"}
@@ -2915,11 +2922,13 @@ async def api_blupal_webhook(request: Request, tenant: Tenant = Depends(get_tena
             return {"status": "ok"}
         quantity = order["quantity"] or 1
         try:
+            await asyncio.to_thread(validate_happ_product, db, product)
             if product["provision_server_id"] or product["provision_ssh_node_id"]:
                 prov_results = await provision_direct(db, product, quantity, user_id=order["user_id"], order_id=order_id)
             else:
                 prov_results = await provision_auto_config(db, product, quantity, user_id=order["user_id"], order_id=order_id)
-        except (ProvisionError, DirectProvisionError) as e:
+            delivery_links = await get_product_delivery_links(db, product, prov_results, order_id)
+        except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
             db.release_order_claim(order_id)
             admin_ids = db.list_admins()
             async with aiohttp.ClientSession() as session:
@@ -2951,7 +2960,7 @@ async def api_blupal_webhook(request: Request, tenant: Tenant = Depends(get_tena
         except Exception:
             pass
         asyncio.create_task(deliver_config_to_user_web(
-            order["user_id"], product["name"], [r["subscription_url"] for r in prov_results],
+            order["user_id"], product["name"], delivery_links,
             final_price=order["final_price"], order_id=order_id, db=db, bot_token=tenant.bot_token,
         ))
         return {"status": "ok"}
@@ -3820,11 +3829,13 @@ async def _complete_generic_gateway_payment(db: Database, tenant: "Tenant", invo
         if not db.claim_order(order_id):
             return
         try:
+            await asyncio.to_thread(validate_happ_product, db, product)
             if product["provision_server_id"] or product["provision_ssh_node_id"]:
                 prov_results = await provision_direct(db, product, quantity, user_id=order["user_id"], order_id=order_id)
             else:
                 prov_results = await provision_auto_config(db, product, quantity, user_id=order["user_id"], order_id=order_id)
-        except (ProvisionError, DirectProvisionError) as e:
+            delivery_links = await get_product_delivery_links(db, product, prov_results, order_id)
+        except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
             db.release_order_claim(order_id)
             for admin_id in db.list_admins():
                 await _notify(
@@ -3838,7 +3849,7 @@ async def _complete_generic_gateway_payment(db: Database, tenant: "Tenant", invo
         db.reward_referrer_if_first_purchase(order["user_id"], order["final_price"] or product["price"])
         await _notify(order["user_id"], f"✅ پرداخت تایید شد!\n📦 محصول: {product['name']}")
         asyncio.create_task(deliver_config_to_user_web(
-            order["user_id"], product["name"], [r["subscription_url"] for r in prov_results],
+            order["user_id"], product["name"], delivery_links,
             final_price=order["final_price"], order_id=order_id, db=db, bot_token=tenant.bot_token,
         ))
         return
@@ -4316,11 +4327,13 @@ async def api_plisio_webhook(request: Request, tenant: Tenant = Depends(get_tena
                     return {"status": "ok"}
                 quantity = order["quantity"] or 1
                 try:
+                    await asyncio.to_thread(validate_happ_product, db, product)
                     if product["provision_server_id"] or product["provision_ssh_node_id"]:
                         prov_results = await provision_direct(db, product, quantity, user_id=order["user_id"], order_id=order_id)
                     else:
                         prov_results = await provision_auto_config(db, product, quantity, user_id=order["user_id"], order_id=order_id)
-                except (ProvisionError, DirectProvisionError) as e:
+                    delivery_links = await get_product_delivery_links(db, product, prov_results, order_id)
+                except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
                     db.release_order_claim(order_id)
                     admin_ids = db.list_admins()
                     async with aiohttp.ClientSession() as session:
@@ -4352,7 +4365,7 @@ async def api_plisio_webhook(request: Request, tenant: Tenant = Depends(get_tena
                 except Exception:
                     pass
                 asyncio.create_task(deliver_config_to_user_web(
-                    order["user_id"], product["name"], [r["subscription_url"] for r in prov_results],
+                    order["user_id"], product["name"], delivery_links,
                     final_price=order["final_price"], order_id=order_id, db=db, bot_token=tenant.bot_token,
                 ))
                 return {"status": "ok"}

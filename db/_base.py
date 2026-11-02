@@ -181,6 +181,18 @@ class DatabaseBase:
 
 
     def init_db(self, owner_id: int):
+        """Initialize/migrate the schema, retrying transient SQLite lock races.
+
+        The bot and the admin panel are separate processes that open the same
+        SQLite database during startup.  A brief write lock while one process
+        applies idempotent schema migrations must not leave the other service
+        in a restart loop (or behind nginx as a 502).
+        """
+        return self._sqlite_retry(
+            lambda: self._init_db_once(owner_id), attempts=5, delay=0.5,
+        )
+
+    def _init_db_once(self, owner_id: int):
         """owner_id: آیدی عددی کسی که مالک/ادمین اصلی همین یک نمونه از بات است
         (برای بات اصلی همان مالک بات، برای هر بات نمایندگی همان نماینده)."""
         with self._get_conn() as conn:
@@ -1643,23 +1655,25 @@ class DatabaseBase:
             # چه در نصب تازه و چه در ارتقای نصب‌های قدیمی‌تر که این ستون را نداشتند.
             conn.execute("UPDATE admins SET role='owner' WHERE telegram_id=?", (owner_id,))
 
-                # مهاجرت زبان کاربران برای نصب‌های قدیمی.
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN language_code TEXT DEFAULT 'fa'")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc).lower():
-                raise
-        conn.execute("UPDATE users SET language_code='fa' WHERE language_code IS NULL OR language_code=''")
+        # Commit language migrations before scanning source files; otherwise
+        # this process holds SQLite's writer lock throughout the scan.
+        with self._get_conn() as conn:
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN language_code TEXT DEFAULT 'fa'")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+            conn.execute("UPDATE users SET language_code='fa' WHERE language_code IS NULL OR language_code=''")
 
-        # آیا کاربر خودش زبان را انتخاب کرده؟ برای کاربران قبل از این مهاجرت
-        # (که قبلاً وارد بات شده‌اند) روی ۱ گذاشته می‌شود تا دوباره سوال نشوند؛
-        # فقط کاربران تازه (پیش‌فرض ۰) در /start اول زبان را می‌پرسند.
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN language_selected INTEGER DEFAULT 0")
-            conn.execute("UPDATE users SET language_selected=1")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc).lower():
-                raise
+            # آیا کاربر خودش زبان را انتخاب کرده؟ برای کاربران قبل از این مهاجرت
+            # (که قبلاً وارد بات شده‌اند) روی ۱ گذاشته می‌شود تا دوباره سوال نشوند؛
+            # فقط کاربران تازه (پیش‌فرض ۰) در /start اول زبان را می‌پرسند.
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN language_selected INTEGER DEFAULT 0")
+                conn.execute("UPDATE users SET language_selected=1")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
 # قابلیت ۵۰: هر بار این نمونه از بات بالا می‌آید، کد را برای فراخوانی‌های
         # get_text(...) اسکن می‌کند تا متن‌های جدید خودکار در پنل وب ظاهر شوند

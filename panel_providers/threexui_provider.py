@@ -209,9 +209,14 @@ class ThreeXUIProvider(BasePanelProvider):
                     if resp.status >= 400:
                         raise PanelError("دریافت شناسهٔ کلاینت برای Happ ناموفق بود.")
                     client_data = await resp.json()
+                if not isinstance(client_data, dict):
+                    raise PanelError("پاسخ کلاینت Happ از پنل معتبر نیست.")
                 if client_data.get("success") is False:
                     raise PanelError("پنل کلاینت را برای Happ پیدا نکرد.")
-                record = (client_data.get("obj") or {}).get("client") or {}
+                obj = client_data.get("obj")
+                record = obj.get("client") if isinstance(obj, dict) else None
+                if not isinstance(record, dict):
+                    raise PanelError("اطلاعات کلاینت Happ از پنل معتبر نیست.")
                 client_id = int(record.get("id") or 0)
                 if client_id < 1:
                     raise PanelError("شناسهٔ معتبر کلاینت برای Happ از پنل دریافت نشد.")
@@ -221,9 +226,12 @@ class ThreeXUIProvider(BasePanelProvider):
                     happ_data = await resp.json()
             except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError) as exc:
                 raise PanelError("دریافت لینک Happ از پنل ناموفق بود.") from exc
+        if not isinstance(happ_data, dict):
+            raise PanelError("پاسخ Happ از پنل معتبر نیست.")
         if happ_data.get("success") is False:
             raise PanelError("تولید لینک Happ در پنل ناموفق بود.")
-        link = (happ_data.get("obj") or {}).get("encryptedLink")
+        obj = happ_data.get("obj")
+        link = obj.get("encryptedLink") if isinstance(obj, dict) else None
         if not isinstance(link, str) or not re.fullmatch(r"happ://crypt5/[^\s\x00-\x1f\x7f]+", link):
             raise PanelError("قالب لینک Happ دریافتی از پنل معتبر نیست.")
         return link

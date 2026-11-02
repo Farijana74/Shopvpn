@@ -73,6 +73,7 @@ from panel_providers import get_provider, PanelError, PanelUsernameTakenError
 import leak_index
 from reseller_auto_provision import provision_auto_config, provision_test_config, provision_reseller_fixed_product, is_volume_credit_bot, ProvisionError
 from direct_panel_provision import provision_direct, planned_usernames, ProvisionError as DirectProvisionError
+from happ_delivery import HappDeliveryError, get_product_delivery_links, validate_happ_product
 from test_config_provision import provision_test_plan, format_plan_amount, ProvisionError as TestPlanProvisionError
 from notification_i18n import send_telegram
 from i18n import set_language, reset_language, language_label, normalize_language, is_language_enabled, tr, language_scope
@@ -2201,11 +2202,12 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
                 if product["is_auto_provision"]:
                     try:
+                        await asyncio.to_thread(validate_happ_product, db, product)
                         if product["provision_server_id"] or product["provision_ssh_node_id"]:
                             prov_results = await provision_direct(db, product, quantity, user_id=call.from_user.id, order_id=order_id)
                         else:
                             prov_results = await provision_auto_config(db, product, quantity, user_id=call.from_user.id, order_id=order_id)
-                    except (ProvisionError, DirectProvisionError) as e:
+                    except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
                         (await asyncio.to_thread(db.reject_order, order_id))
                         await _notify_admins_of_order(bot, order_id)
                         await _safe_edit(
@@ -2214,8 +2216,15 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                         )
                         await call.answer()
                         return
-                    (await asyncio.to_thread(db.approve_order_auto, order_id))
-                    links = [r["subscription_url"] for r in prov_results]
+                    try:
+                        links = await get_product_delivery_links(db, product, prov_results, order_id)
+                    except HappDeliveryError as exc:
+                        await _notify_admins_of_order(bot, order_id)
+                        await _safe_edit(call.message, f"⚠️ پرداخت ثبت شد؛ سفارش برای تلاش مجدد باقی ماند. {exc}")
+                        await call.answer()
+                        return
+                    if not await asyncio.to_thread(db.approve_order_auto, order_id):
+                        raise RuntimeError("automatic order approval failed")
                 else:
                     results = (await asyncio.to_thread(db.take_unused_configs, product_id, call.from_user.id, quantity))
                     if not results:
@@ -8113,17 +8122,24 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         try:
             if product["is_auto_provision"]:
                 try:
+                    await asyncio.to_thread(validate_happ_product, db, product)
                     if product["provision_server_id"] or product["provision_ssh_node_id"]:
                         prov_results = await provision_direct(db, product, quantity, user_id=user_id, order_id=order_id)
                     else:
                         prov_results = await provision_auto_config(db, product, quantity, user_id=user_id, order_id=order_id)
-                except (ProvisionError, DirectProvisionError) as e:
+                except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
                     await asyncio.to_thread(db.reject_order, order_id)
                     await _notify_admins_of_order(bot, order_id)
                     await message.answer(tr(f"⛔️ {e}\nمبلغ کسرشده از کیف پول شما به‌طور کامل بازگردانده شد."))
                     return
-                await asyncio.to_thread(db.approve_order_auto, order_id)
-                links = [r["subscription_url"] for r in prov_results]
+                try:
+                    links = await get_product_delivery_links(db, product, prov_results, order_id)
+                except HappDeliveryError as exc:
+                    await _notify_admins_of_order(bot, order_id)
+                    await message.answer(tr(f"⚠️ پرداخت ثبت شد؛ سفارش برای تلاش مجدد باقی ماند. {exc}"))
+                    return
+                if not await asyncio.to_thread(db.approve_order_auto, order_id):
+                    raise RuntimeError("automatic order approval failed")
             else:
                 results = await asyncio.to_thread(db.take_unused_configs, product_id, user_id, quantity)
                 if not results:

@@ -16,6 +16,7 @@ from logging.handlers import RotatingFileHandler
 from config import BOT_TOKEN, OWNER_ID, DB_PATH, BOT_MODE, resolve_db_path
 from database import Database
 from bot_manager import BotManager
+from service_lifecycle import run_service
 
 os.makedirs("logs", exist_ok=True)
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
@@ -52,8 +53,9 @@ async def main():
     # of user selection instead of producing mixed-language UI.
     try:
         main_translation_db = Database(DB_PATH)
-        main_translation_db.init_db(owner_id=OWNER_ID)
+        await asyncio.to_thread(main_translation_db.init_db, owner_id=OWNER_ID)
     except Exception:
+        main_translation_db = None
         logger.exception("Automatic language synchronization for the main bot failed.")
 
     # ۱. بات اصلی
@@ -62,13 +64,14 @@ async def main():
     # Restart=always/RestartSec=5 اجرا می‌شود، این باعث یک چرخه‌ی کرش سریع‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
     # می‌شد که می‌توانست چند دقیقه طول بکشد تا خودش تمام شود.
     try:
-        await manager.start_bot(BOT_TOKEN, DB_PATH, OWNER_ID, is_main_bot=True)
+        await manager.start_bot(BOT_TOKEN, DB_PATH, OWNER_ID, is_main_bot=True, initialized_db=main_translation_db)
         logger.info("بات اصلی راه‌اندازی شد.")
     except Exception:
         logger.exception("راه‌اندازی بات اصلی ناموفق بود.")
 
     # ۲. تمام بات‌های نمایندگیِ فعال (ثبت‌شده از پنل مدیریت بات اصلی)
     main_db = Database(DB_PATH)
+    main_translation_db = main_translation_db or main_db
     # سهمیه‌ی مشترک VPN/SSH برای دیتابیس اصلی و هر tenant جداگانه reconcile می‌شود.
     # اگر pool ای وجود نداشته باشد، worker هیچ تغییری روی سرویس‌ها اعمال نمی‌کند.
     from quota_reconciler import QuotaReconciler
@@ -166,7 +169,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(run_service(main))
     except KeyboardInterrupt:
         print("\nبرنامه با Ctrl+C متوقف شد.")
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍

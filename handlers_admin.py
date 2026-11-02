@@ -75,7 +75,7 @@ from panel_providers import (
 )
 from reseller_auto_provision import provision_auto_config, get_credit_bot_local_panel_id, ProvisionError
 from direct_panel_provision import provision_direct, ProvisionError as DirectProvisionError
-from happ_delivery import get_product_delivery_links
+from happ_delivery import HappDeliveryError, get_product_delivery_links, validate_happ_product
 from renewal_engine import execute_renewal, RenewalError
 from states import (
     AdminAIChat,
@@ -3487,6 +3487,12 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         product = (await asyncio.to_thread(db.get_product, order["product_id"]))
 
         if product and product["is_auto_provision"]:
+            try:
+                await asyncio.to_thread(validate_happ_product, db, product)
+            except HappDeliveryError as exc:
+                await asyncio.to_thread(db.release_order_claim, order_id)
+                await call.answer(f"⛔️ {exc} لینک عادی ارسال نمی‌شود.", show_alert=True)
+                return
             quantity = order["quantity"] or 1
             try:
                 if product["provision_server_id"] or product["provision_ssh_node_id"]:
@@ -3497,7 +3503,19 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                 await asyncio.to_thread(db.release_order_claim, order_id)
                 await call.answer(f"⛔️ {e}", show_alert=True)
                 return
-            (await asyncio.to_thread(db.approve_order_auto, order_id))
+            try:
+                delivery_links = await get_product_delivery_links(db, product, prov_results, order_id)
+            except HappDeliveryError:
+                await asyncio.to_thread(db.release_order_claim, order_id)
+                await call.answer(
+                    "⛔️ لینک Happ تولید نشد؛ لینک معمولی ارسال نشده و سفارش برای تلاش مجدد نگه داشته شد.",
+                    show_alert=True,
+                )
+                return
+            if not (await asyncio.to_thread(db.approve_order_auto, order_id)):
+                await asyncio.to_thread(db.release_order_claim, order_id)
+                await call.answer("⛔️ تایید سفارش انجام نشد؛ دوباره وضعیت سفارش را بررسی کنید.", show_alert=True)
+                return
             (await asyncio.to_thread(db.log_admin_action, 
                 call.from_user.id, "order_approve",
                 f"سفارش #{order_id} (خودکار) | کاربر {order['user_id']} | محصول «{product['name']}» | "
@@ -3507,7 +3525,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                 await send_telegram(bot, db, order["user_id"], f"✅ خرید شما تایید شد!\n📦 محصول: {product['name']}")
                 await deliver_config_to_user(
                     bot, order["user_id"], product["name"],
-                    await get_product_delivery_links(db, product, prov_results, order_id),
+                    delivery_links,
                     final_price=order["final_price"], order_id=order_id, db=db,
                 )
                 await _notify_user_inline_menu(bot, order["user_id"])

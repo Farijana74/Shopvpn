@@ -447,6 +447,32 @@ class CatalogMixin:
         with self._get_conn() as conn:
             conn.execute(f"UPDATE products SET {', '.join(fields)} WHERE id=?", values)
 
+    def set_category_products_delivery_mode(self, category_id: int, delivery_mode: str) -> tuple:
+        """Apply a delivery mode to every product in a category, while only
+        applying Happ modes to active, directly provisioned 3X-UI products."""
+        if delivery_mode not in ("normal", "happ", "both"):
+            raise ValueError("روش تحویل نامعتبر است.")
+        with self._get_conn() as conn:
+            if not conn.execute("SELECT 1 FROM categories WHERE id=?", (category_id,)).fetchone():
+                raise ValueError("دسته‌بندی یافت نشد.")
+            if delivery_mode == "normal":
+                cur = conn.execute("UPDATE products SET delivery_mode=? WHERE category_id=?",
+                                   (delivery_mode, category_id))
+                return cur.rowcount, 0
+            eligible = conn.execute(
+                "SELECT p.id FROM products p JOIN panel_servers s ON s.id=p.provision_server_id "
+                "WHERE p.category_id=? AND p.is_auto_provision=1 AND p.provision_ssh_node_id IS NULL "
+                "AND s.panel_type='3xui' AND s.is_active=1",
+                (category_id,),
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM products WHERE category_id=?", (category_id,)).fetchone()[0]
+            ids = [int(row["id"]) for row in eligible]
+            if ids:
+                marks = ",".join("?" for _ in ids)
+                conn.execute(f"UPDATE products SET delivery_mode=? WHERE id IN ({marks})",
+                             [delivery_mode, *ids])
+            return len(ids), int(total) - len(ids)
+
 
     def set_product_user_limit(self, product_id: int, extra_user_price: int, max_users: int,
                                base_users: int = None):

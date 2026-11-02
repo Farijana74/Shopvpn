@@ -69,6 +69,7 @@ from reseller_auto_provision import provision_auto_config, is_volume_credit_bot,
 from service_refund import quote_service_refund, refund_quote_text, grant_service_refund_credit, refund_result_text
 from service_alerts import send_service_alert_sync
 from direct_panel_provision import provision_direct, ProvisionError as DirectProvisionError
+from happ_delivery import HappDeliveryError, get_product_delivery_links, validate_happ_product
 from stock_alerts import check_and_notify_low_stock
 import ai_support
 from renewal_engine import execute_renewal, RenewalError
@@ -2901,11 +2902,13 @@ async def api_approve_order(order_id: int, admin=Depends(require_permission("ord
 
     if product and product["is_auto_provision"]:
         try:
+            await asyncio.to_thread(validate_happ_product, db, product)
             if product["provision_server_id"] or product["provision_ssh_node_id"]:
                 results = await provision_direct(db, product, quantity, user_id=order["user_id"], order_id=order_id)
             else:
-                results = await provision_auto_config(db, product, quantity)
-        except (ProvisionError, DirectProvisionError) as e:
+                results = await provision_auto_config(db, product, quantity, user_id=order["user_id"], order_id=order_id)
+            links = await get_product_delivery_links(db, product, results, order_id)
+        except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
             await asyncio.to_thread(db.release_order_claim, order_id)
             raise HTTPException(400, str(e))
         (await asyncio.to_thread(db.approve_order_auto, order_id))
@@ -2914,7 +2917,6 @@ async def api_approve_order(order_id: int, admin=Depends(require_permission("ord
             f"سفارش #{order_id} (خودکار) | کاربر {order['user_id']} | محصول «{product['name']}» (پنل وب - {admin['username']})",
             "order", order_id,
         ))
-        links = [r["subscription_url"] for r in results]
         await notify_user(order["user_id"], "✅ خرید شما تایید شد!")
         asyncio.create_task(deliver_config_to_user_web(
             order["user_id"], product["name"], links,
@@ -3863,6 +3865,44 @@ def api_ssh_nodes_lite(admin=Depends(require_permission("catalog")), _fa=Depends
             for n in db.list_ssh_nodes(active_only=True) if n.get("node_type") == "linux"]
 
 
+class HappDeliveryApplyBody(BaseModel):
+    scope: str
+    target_id: int
+    delivery_mode: str
+
+
+@app.post("/api/happ-delivery/apply")
+def api_apply_happ_delivery(body: HappDeliveryApplyBody, admin=Depends(require_permission("catalog"))):
+    if body.delivery_mode not in ("normal", "happ", "both"):
+        raise HTTPException(400, "روش تحویل نامعتبر است.")
+    if admin["tenant"] and body.delivery_mode in ("happ", "both"):
+        raise HTTPException(403, "تنظیم Happ فقط برای محصولات بات اصلی مجاز است.")
+    if body.scope == "product":
+        product = db.get_product(body.target_id)
+        if not product:
+            raise HTTPException(404, "محصول یافت نشد.")
+        if body.delivery_mode in ("happ", "both"):
+            server_id = product["provision_server_id"]
+            server = db.get_panel_server(server_id) if server_id else None
+            if not product["is_auto_provision"] or not server or not server["is_active"] or server["panel_type"] != "3xui":
+                raise HTTPException(400, "Happ فقط برای محصول خودکار متصل به پنل فعال 3X-UI قابل انتخاب است.")
+        db.edit_product(body.target_id, delivery_mode=body.delivery_mode)
+        updated, skipped = 1, 0
+    elif body.scope == "category":
+        try:
+            updated, skipped = db.set_category_products_delivery_mode(body.target_id, body.delivery_mode)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if body.delivery_mode in ("happ", "both") and updated == 0:
+            raise HTTPException(400, "این دسته محصول خودکار متصل به پنل فعال 3X-UI ندارد.")
+    else:
+        raise HTTPException(400, "دامنهٔ انتخاب نامعتبر است.")
+    db.log_admin_action(admin["id"], "happ_delivery_apply",
+                        f"scope={body.scope}, target_id={body.target_id}, mode={body.delivery_mode}, updated={updated}, skipped={skipped}",
+                        "product")
+    return {"ok": True, "updated_count": updated, "skipped_count": skipped}
+
+
 class ProductReorderBody(BaseModel):
     category_id: int
     product_ids: List[int]
@@ -3897,8 +3937,8 @@ def api_add_product(body: ProductBody, admin=Depends(require_permission("catalog
         if not ssh_node or ssh_node.get("node_type") != "linux":
             raise HTTPException(400, "فقط نود Linux Agent فعال برای محصول SSH پشتیبانی می‌شود.")
     direct_target = bool(body.provision_server_id or body.provision_ssh_node_id)
-    if body.delivery_mode != "normal" and not body.provision_server_id:
-        raise HTTPException(400, "روش تحویل Happ فقط برای محصولات متصل به پنل 3X-UI پشتیبانی می‌شود.")
+    if body.delivery_mode != "normal" and (not body.provision_server_id or body.provision_ssh_node_id):
+        raise HTTPException(400, "Happ فقط برای محصول خودکار VPN متصل به پنل 3X-UI مجاز است؛ محصول ترکیبی VPN+SSH پشتیبانی نمی‌شود.")
     if body.duration_days == 0 and not direct_target:
         raise HTTPException(400, tr("مدت نامحدود فقط برای محصولات با اتصال مستقیم ممکن است."))
     if direct_target:
@@ -3959,9 +3999,14 @@ def api_edit_product(product_id: int, body: ProductEditBody, admin=Depends(requi
     effective_delivery_server_id = (
         body.provision_server_id if body.provision_server_id is not None else old_product["provision_server_id"]
     )
+    effective_delivery_ssh_node_id = (
+        body.provision_ssh_node_id if body.provision_ssh_node_id is not None else old_product["provision_ssh_node_id"]
+    )
     if body.delivery_mode in ("happ", "both"):
         if body.source == "bank":
             raise HTTPException(status_code=400, detail="روش تحویل Happ فقط برای محصول خودکار 3X-UI است.")
+        if effective_delivery_ssh_node_id:
+            raise HTTPException(status_code=400, detail="Happ برای محصول ترکیبی VPN+SSH پشتیبانی نمی‌شود.")
         delivery_server = db.get_panel_server(effective_delivery_server_id) if effective_delivery_server_id else None
         if not delivery_server or delivery_server["panel_type"] != "3xui":
             raise HTTPException(status_code=400, detail="روش تحویل Happ فقط برای پنل 3X-UI پشتیبانی می‌شود.")

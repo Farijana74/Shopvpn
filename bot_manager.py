@@ -434,14 +434,15 @@ class BotManager:
         except Exception:
             logger.warning("ست‌کردن Menu Button ناموفق بود.", exc_info=True)
 
-    async def start_bot(self, token: str, db_path: str, owner_id: int, is_main_bot: bool = False) -> bool:
+    async def start_bot(self, token: str, db_path: str, owner_id: int, is_main_bot: bool = False, initialized_db=None) -> bool:
         """یک بات جدید (اصلی یا نمایندگی) را با دیتابیس مستقل خودش راه‌اندازی می‌کند.
         اگر توکن از قبل در حال اجرا باشد، کاری نمی‌کند و False برمی‌گرداند."""
         if token in self.instances:
             return False
 
-        db = Database(db_path)
-        db.init_db(owner_id=owner_id)
+        db = initialized_db if initialized_db is not None else Database(db_path)
+        if initialized_db is None:
+            await asyncio.to_thread(db.init_db, owner_id=owner_id)
         # Dedicated reseller bots are intentionally a near-complete copy of the
         # main bot.  The only missing capability is the main-bot-only reseller
         # management section (create/approve/manage other full resellers).
@@ -547,7 +548,7 @@ class BotManager:
                     "delete_webhook برای db_path=%s ناموفق بود؛ راه‌اندازی بات ادامه می‌یابد.",
                     db_path, exc_info=True,
                 )
-            task = asyncio.create_task(dp.start_polling(bot))
+            task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
         await self._sync_menu_button(bot, db)
         reminder_task = asyncio.create_task(renewal_reminder_loop(bot, db))
         connect_alert_task = asyncio.create_task(connect_alert_loop(bot, db))
@@ -662,7 +663,7 @@ class BotManager:
             if not tasks:
                 await asyncio.sleep(1)
                 continue
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for d in done:
                 exc = d.exception() if not d.cancelled() else None
                 token = next((t for t, inst in self.instances.items() if inst["task"] is d), None)
@@ -685,6 +686,16 @@ class BotManager:
         while True:
             await asyncio.sleep(interval)
             try:
+                # Recover the main bot too: previously only reseller bots were
+                # restarted, leaving the process alive with its main bot stopped.
+                if main_bot_token not in self.instances:
+                    from config import OWNER_ID
+                    try:
+                        await self.start_bot(
+                            main_bot_token, main_db.db_path, OWNER_ID, is_main_bot=True
+                        )
+                    except Exception:
+                        logger.exception("راه‌اندازی مجدد بات اصلی ناموفق بود؛ دوباره تلاش می‌شود.")
                 rows = main_db.list_reseller_bots()
                 # نکته (باگ قبلی): نماینده‌های «بدون بات واقعی» (بات_choice=none/inline_link)
                 # با has_live_bot=0 و یک توکن قلابی (مثل "no-bot:123:456") ثبت می‌شوند تا

@@ -12,7 +12,7 @@ finalize_paid_topup داشت. تفاوت‌ها فقط در نام لاگر بو
 import logging
 
 from config_delivery import deliver_config_to_user
-from happ_delivery import get_product_delivery_links
+from happ_delivery import HappDeliveryError, get_product_delivery_links, validate_happ_product
 from panel_providers import get_provider
 from reseller_auto_provision import provision_auto_config, ProvisionError
 from direct_panel_provision import provision_direct, ProvisionError as DirectProvisionError
@@ -112,6 +112,11 @@ async def finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None) -> 
         quantity = order["quantity"] or 1
         if product and product["is_auto_provision"]:
             try:
+                validate_happ_product(db, product)
+            except HappDeliveryError as exc:
+                db.release_order_claim(order_id)
+                return tr(f"⚠️ تنظیم تحویل Happ این محصول معتبر نیست؛ هیچ لینک عادی ارسال نشد. {exc}")
+            try:
                 if product["provision_server_id"] or product["provision_ssh_node_id"]:
                     prov_results = await provision_direct(db, product, quantity, user_id=order["user_id"], order_id=order_id)
                 else:
@@ -119,9 +124,18 @@ async def finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None) -> 
             except (ProvisionError, DirectProvisionError) as e:
                 db.release_order_claim(order_id)
                 return tr(f"⚠️ پرداخت تایید شد ولی ساخت خودکار کانفیگ ناموفق بود: {e}\nبا پشتیبانی تماس بگیرید.")
-            db.approve_order_auto(order_id)
             configured_link_count = len(prov_results)
-            links = await get_product_delivery_links(db, product, prov_results, order_id)
+            try:
+                links = await get_product_delivery_links(db, product, prov_results, order_id)
+            except HappDeliveryError as exc:
+                # Provisioning is idempotent by order ID, so leaving the order
+                # pending allows a retry without creating a second client.
+                db.release_order_claim(order_id)
+                logger.error("Happ-only delivery deferred for order #%s", order_id)
+                return tr(f"⚠️ پرداخت ثبت شد اما لینک Happ آماده نشد. لینک معمولی ارسال نشده است؛ سفارش برای تلاش مجدد نگه داشته شد. {exc}")
+            if not db.approve_order_auto(order_id):
+                db.release_order_claim(order_id)
+                return tr("⚠️ تایید سفارش کامل نشد؛ برای جلوگیری از تحویل تکراری، با پشتیبانی تماس بگیرید.")
         else:
             results = db.take_unused_configs(order["product_id"], order["user_id"], quantity)
             if not results:

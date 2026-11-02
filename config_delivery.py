@@ -327,6 +327,9 @@ async def collect_service_info(link: str, product_name: str = "") -> dict:
     پروتکل و نام از کانفیگ‌های داخل ساب، حجم و مدت از هدر subscription-userinfo.
     هر مقداری که پیدا نشود None می‌ماند و در پیام نمایش داده نمی‌شود (هیچ‌وقت عدد حدسی نشان نمی‌دهیم)."""
     is_sub = link.startswith(("http://", "https://"))
+    is_happ = isinstance(link, str) and re.fullmatch(
+        r"happ://crypt[45]/[^\s\x00-\x1f\x7f]+", link
+    ) is not None
     configs, info = [], {}
     if is_sub:
         res = await asyncio.gather(
@@ -334,13 +337,14 @@ async def collect_service_info(link: str, product_name: str = "") -> dict:
         )
         configs = res[0] if isinstance(res[0], list) else []
         info = res[1] if isinstance(res[1], dict) and res[1].get("ok") else {}
-    elif link.startswith(_CONFIG_SCHEMES):
+    elif is_happ or link.startswith(_CONFIG_SCHEMES):
         configs = [link]
 
     first = configs[0] if configs else None
     name = _remark_of(first) or (info.get("title") or "").strip() or (product_name or "").strip() or None
     return {
         "is_sub": is_sub,
+        "is_happ": is_happ,
         "sub_url": link if is_sub else None,
         "configs": configs,
         "protocol": _protocol_of(first),
@@ -376,6 +380,11 @@ def build_delivery_message(svc: dict, idx: int, total: int, sub_link_on: bool,
         if sub_link_on:
             link_lines.append(f"🌐 subscription : <code>{_h(svc['sub_url'])}</code>")
             link_lines += [f"🔁 subscription : <code>{_h(u)}</code>" for u in alternates]
+    elif svc.get("is_happ"):
+        # Happ is a user-selected delivery format, so generic config/subscription
+        # visibility switches must not silently remove the requested link.
+        for c in svc["configs"]:
+            link_lines.append(f"📲 Happ : <code>{_h(c)}</code>")
     elif sub_link_on or individual_on:
         for c in svc["configs"]:
             link_lines.append(f"💝 config : <code>{_h(c)}</code>")
