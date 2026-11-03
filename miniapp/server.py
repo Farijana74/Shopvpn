@@ -1392,11 +1392,27 @@ class TestConfigClaim(BaseModel):
 
 
 @app.get("/api/test-config")
-def api_test_config_status(auth=Depends(get_verified_user)):
+async def api_test_config_status(auth=Depends(get_verified_user)):
     tg_id, db, _ = auth
     user = db.get_user(tg_id)
     used = bool(user and user["test_used"] >= MAX_TEST_PER_USER)
     link = None
+    if db.get_setting('managed_reseller_bot_id',''):
+        from managed_trials import trial_policy
+        from service_delivery import service_delivery_links
+        central=Database(db.get_setting('managed_root_db_path',''))
+        try:policy=trial_policy(central)
+        finally:central.close()
+        row=await asyncio.to_thread(db.get_test_custom_config_for_user,tg_id) if used else None
+        if row:
+            try:
+                links=await service_delivery_links(db,row)
+                link=links[0] if links else None
+            except HappDeliveryError:link=None
+        enabled=bool(policy.get('enabled'))
+        return {'enabled':enabled,'used':used,'available':int(enabled),'link':link,
+                'plans':[{'id':0,'name':'تست','volume_mb':policy['volume_mb'],'duration_hours':policy['hours'],
+                          'amount_label':f"{policy['volume_mb']} MB / {policy['hours']} h"}] if enabled else []}
     if used:
         row = db.get_test_custom_config_for_user(tg_id)
         if row:
@@ -1455,6 +1471,16 @@ async def api_test_config_claim(payload: TestConfigClaim, auth=Depends(require_j
     tg_id, db, tenant = auth
     if db.get_setting("test_enabled", "1") != "1":
         raise HTTPException(status_code=400, detail=tr("در حال حاضر امکان دریافت کانفیگ تست غیرفعال است."))
+    if db.get_setting('managed_reseller_bot_id',''):
+        from managed_trials import provide_trial
+        from managed_resellers import AgencyError
+        try:
+            product,items=await provide_trial(db,tg_id)
+            links=await get_product_delivery_links(db,product,items)
+        except (AgencyError,HappDeliveryError) as exc:
+            raise HTTPException(status_code=409,detail=str(exc)) from None
+        rendered=[link if link.startswith('happ://') else dedicated_sub.dedicated_link_for_upstream(db,link) for link in links]
+        return {'link':rendered[0],'links':rendered}
     user = db.get_user(tg_id)
     if user and user["test_used"] >= MAX_TEST_PER_USER:
         raise HTTPException(status_code=400, detail=tr("شما قبلاً کانفیگ تست خود را دریافت کرده‌اید."))

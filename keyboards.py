@@ -2076,6 +2076,8 @@ def admin_panel_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🎨 تنظیمات دکمه‌ها و منو",callback_data="adm_cat:appearance")],
             [InlineKeyboardButton(text="👋 تغییر پیام خوش‌آمدگویی",callback_data="adm_edit_welcome")],
             [InlineKeyboardButton(text="📢 ارسال پیام همگانی",callback_data="adm_broadcast")],
+            [InlineKeyboardButton(text="📢 عضویت اجباری کانال",callback_data="adm_forcejoin_menu")],
+            [InlineKeyboardButton(text="📤 تنظیمات ارسال کانفیگ و متن بعد از تحویل",callback_data="adm_delivery_settings")],
             [InlineKeyboardButton(text="📂 مدیریت دسته‌بندی‌ها",callback_data="adm_categories")],
             [InlineKeyboardButton(text="⬅️ منوی اصلی",callback_data="acct:main_menu")]])
     entries = []

@@ -3325,6 +3325,20 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await message.answer(db.get_text('handlers_user.auto_e61183a5', 'در حال حاضر امکان دریافت کانفیگ تست غیرفعال است.'))
             return
 
+        if db.get_setting('managed_reseller_bot_id',''):
+            from managed_trials import provide_trial
+            from managed_resellers import AgencyError
+            from happ_delivery import get_product_delivery_links, HappDeliveryError
+            try:
+                product,items=await provide_trial(db,message.from_user.id)
+                links=await get_product_delivery_links(db,product,items)
+                for link in links:
+                    await _send_test_config_link(message,link,'🧪 کانفیگ تست شما:')
+                await _send_test_success_message(message,username=items[0]['username'])
+            except (AgencyError,HappDeliveryError) as exc:
+                await message.answer(f'⛔️ {exc}')
+            return
+
         user = (await asyncio.to_thread(db.get_user, message.from_user.id))
         if user and user["test_used"] >= MAX_TEST_PER_USER:
             await message.answer(db.get_text('handlers_user.auto_6aacb1a2', 'شما قبلاً کانفیگ تست خود را دریافت کرده\u200cاید. هر کاربر فقط یک بار مجاز به دریافت کانفیگ تست است.'))
@@ -3420,6 +3434,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     async def cb_user_test_plan_pick(call: CallbackQuery):
         if (await asyncio.to_thread(db.get_setting, "test_enabled", "1")) != "1":
             await call.answer(db.get_text('handlers_user.auto_e61183a5', 'در حال حاضر امکان دریافت کانفیگ تست غیرفعال است.'), show_alert=True)
+            return
+        if db.get_setting('managed_reseller_bot_id',''):
+            await call.answer()
+            await get_test_config(call.message.model_copy(update={'from_user':call.from_user}))
             return
         plan_id = int(call.data.split(":", 1)[1])
         plan = (await asyncio.to_thread(db.get_test_config_plan, plan_id))

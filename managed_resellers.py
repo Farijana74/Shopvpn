@@ -20,10 +20,15 @@ def install_schema(conn):
     )
     for statement in statements:
         conn.execute(statement)
+    conn.execute('CREATE TABLE IF NOT EXISTS managed_trials (user_id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL, policy TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'pending\')')
     conn.execute('CREATE TABLE IF NOT EXISTS managed_sale_notices (request_key TEXT NOT NULL, admin_id INTEGER NOT NULL, PRIMARY KEY(request_key,admin_id))')
     columns={row[1] for row in conn.execute('PRAGMA table_info(managed_purchases)')}
-    if 'root_notified' not in columns:
-        conn.execute('ALTER TABLE managed_purchases ADD COLUMN root_notified INTEGER NOT NULL DEFAULT 1')
+    for name,definition in [('is_trial','INTEGER NOT NULL DEFAULT 0'),('root_notified','INTEGER NOT NULL DEFAULT 1')]:
+        if name not in columns:
+            try:
+                conn.execute(f'ALTER TABLE managed_purchases ADD COLUMN {name} {definition}')
+            except sqlite3.OperationalError as exc:
+                if 'duplicate column name' not in str(exc).lower():raise
     if 'prepaid_qty' not in columns:
         try:
             conn.execute('ALTER TABLE managed_purchases ADD COLUMN prepaid_qty INTEGER DEFAULT 0')
@@ -212,6 +217,13 @@ def sync_bot(root, bot_id):
                     with root._get_conn() as central:
                         central.execute('INSERT INTO managed_notices(bot_id,product_id,old_price,new_price) VALUES(?,?,?,?)', (bot_id,source['id'],old['managed_buy_price'],purchase_price))
                 changed += 1
+        from managed_trials import trial_policy as read_trial_policy
+        policy=read_trial_policy(root)
+        local.set_setting('test_enabled','1' if policy.get('enabled') else '0')
+        if local.get_setting('managed_referral_label_migrated','') != '1':
+            if local.get_setting('btn_referral','') in ('🤝 زیرمجموعه‌گیری من','زیرمجموعه‌گیری','زیر مجموعه گیری'):
+                local.set_setting('btn_referral','🤝 دعوت دوستان')
+            local.set_setting('managed_referral_label_migrated','1')
         local.set_setting('btn_custom_config_text', root.get_setting('btn_custom_config_text', root.get_setting('btn_custom_config','🛠 حجم دلخواه')))
         return changed
     finally:
@@ -239,8 +251,8 @@ def validate_edit(db, product_id, changes):
             raise AgencyError('قیمت فروش کمتر از قیمت تأمین مجاز نیست.')
 
 
-def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Fraction(1,1), extra_per_unit=0):
-    if not isinstance(quantity,int) or isinstance(quantity,bool) or quantity < 1 or cost_factor < 0 or extra_per_unit < 0 or (cost_factor == 0 and extra_per_unit == 0):
+def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Fraction(1,1), extra_per_unit=0, *, allow_zero=False):
+    if not isinstance(quantity,int) or isinstance(quantity,bool) or quantity < 1 or cost_factor < 0 or extra_per_unit < 0 or (cost_factor == 0 and extra_per_unit == 0 and not allow_zero):
         raise AgencyError('تعداد یا ضریب قیمت نامعتبر است.')
     def cost(value):
         exact=Fraction(int(value)*quantity)*cost_factor+Fraction(extra_per_unit)*quantity
@@ -311,7 +323,7 @@ def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Frac
         conn.close()
 
 
-async def provision(local_db, product, quantity, user_id, order_id):
+async def provision(local_db, product, quantity, user_id, order_id, *, trial_policy=None):
     from direct_panel_provision import provision_direct
     if order_id is None or user_id is None:
         raise AgencyError('سفارش معتبر برای تأمین نمایندگی لازم است.')
@@ -323,12 +335,16 @@ async def provision(local_db, product, quantity, user_id, order_id):
         original=root.get_product(product['upstream_product_id'])
         if not original:
             raise AgencyError('محصول بالادست حذف شده است؛ پشتیبانی باید بررسی کند.')
+        if trial_policy:
+            original={**dict(original),'auto_provision_volume_gb':trial_policy['volume_mb']/1024,
+                      'duration_days':trial_policy['hours']/24,'base_users':1,'max_users':1,'extra_user_price':0,
+                      'provision_ssh_node_id':None}
         with root._get_conn() as conn:
             funded=conn.execute("SELECT 1 FROM managed_purchases WHERE request_key=? AND status!='refunded'",(f'{bot_id}:{order_id}',)).fetchone()
         current_cost=rate(root,bot_id,product['upstream_product_id']) if not funded else 0
-        if not funded and int(product['price']) < current_cost:
+        if not trial_policy and not funded and int(product['price']) < current_cost:
             raise AgencyError('نرخ تأمین تغییر کرده؛ ابتدا محصولات را بروزرسانی کنید.')
-        if not funded:
+        if not trial_policy and not funded:
             current=local_db.get_product(product['id'])
             category=local_db.get_category(current['category_id']) if current else None
             if not current or not current['is_active'] or (category and not category['is_active']):
@@ -337,15 +353,20 @@ async def provision(local_db, product, quantity, user_id, order_id):
         if not local_order or local_order['user_id'] != user_id:
             raise AgencyError('مالکیت سفارش معتبر نیست.')
         from user_limit import order_user_limit
-        users=order_user_limit(local_order,product)
+        users=1 if trial_policy else order_user_limit(local_order,product)
         base_users=int(original['base_users'] or 0)
         maximum=int(original['max_users'] or base_users)
         if users and maximum and users > maximum:
             raise AgencyError('تعداد کاربر بالاتر از حد مجاز محصول بالادست است.')
         extra=max(0,int(users or base_users)-base_users)*int(original['extra_user_price'] or 0)
-        if not funded and int(local_order['base_price']) < (current_cost+extra)*quantity:
+        if not trial_policy and not funded and int(local_order['base_price']) < (current_cost+extra)*quantity:
             raise AgencyError('قیمت سفارش از نرخ تأمین جدید کمتر است؛ ابتدا قیمت‌ها را بروزرسانی کنید.')
-        purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],quantity,Fraction(1,1),extra)
+        if trial_policy:
+            purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],1,Fraction(0,1),trial_policy['cost'],allow_zero=True)
+            with root._get_conn() as conn:
+                conn.execute('UPDATE managed_purchases SET is_trial=1 WHERE request_key=?',(f'{bot_id}:{order_id}',))
+        else:
+            purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],quantity,Fraction(1,1),extra)
         with root._get_conn() as conn:
             conn.execute('UPDATE orders SET config_name=COALESCE(config_name,?),user_limit=? WHERE id=?',(f'a{bot_id}o{purchase}',users,purchase))
             ledger=conn.execute('SELECT status FROM managed_purchases WHERE request_key=?',(f'{bot_id}:{order_id}',)).fetchone()
@@ -404,12 +425,12 @@ async def provision(local_db, product, quantity, user_id, order_id):
 async def notify_root_sales(root, bot):
     """Retry pending sale notices without resending to admins already notified."""
     with root._get_conn() as conn:
-        sales=conn.execute("SELECT p.request_key,p.bot_id,p.local_order_id,p.root_order_id,b.bot_username,b.owner_telegram_id,o.product_id,o.quantity,o.wallet_used,o.is_renewal FROM managed_purchases p JOIN reseller_bots b ON b.id=p.bot_id JOIN orders o ON o.id=p.root_order_id WHERE p.status='completed' AND p.root_notified=0 ORDER BY p.root_order_id LIMIT 50").fetchall()
+        sales=conn.execute("SELECT p.request_key,p.bot_id,p.local_order_id,p.root_order_id,b.bot_username,b.owner_telegram_id,o.product_id,o.quantity,o.wallet_used,o.is_renewal,p.is_trial FROM managed_purchases p JOIN reseller_bots b ON b.id=p.bot_id JOIN orders o ON o.id=p.root_order_id WHERE p.status='completed' AND p.root_notified=0 ORDER BY p.root_order_id LIMIT 50").fetchall()
     admins=[uid for uid in root.list_admins() if root.is_senior_admin(uid)]
     for sale in sales:
         product=root.get_product(sale['product_id'])
         name=product['name'] if product else str(sale['product_id'])
-        text=(f"🛒 {'تمدید' if sale['is_renewal'] else 'خرید'} از ربات نماینده\n"
+        text=(f"🛒 {'تست' if sale['is_trial'] else ('تمدید' if sale['is_renewal'] else 'خرید')} از ربات نماینده\n"
               f"ربات: @{sale['bot_username']}\nمالک نماینده: {sale['owner_telegram_id']}\n"
               f"محصول: {name}\nتعداد: {sale['quantity']}\n"
               f"سفارش نماینده: {sale['local_order_id']}\nسفارش تأمین اصلی: {sale['root_order_id']}\n"

@@ -15,6 +15,7 @@ class AgencyFlow(StatesGroup):
     discount=State()
     token=State()
     owner=State()
+    trials=State()
 
 
 def create_agency_router(local, is_main_bot):
@@ -52,6 +53,7 @@ def create_agency_router(local, is_main_bot):
                  [Button(text='➕ ثبت نماینده طلایی',callback_data='agency:add')]]
         if is_main_bot:
             rows += [[Button(text='💰 تعیین نرخ پایه تأمین محصول',callback_data='agency:wholesale')]]
+            rows += [[Button(text='🧪 تنظیم تست نماینده‌ها',callback_data='agency:trials')]]
         rows += [[Button(text='⬅️ منوی اصلی',callback_data='acct:main_menu')]]
         return rows
 
@@ -78,6 +80,17 @@ def create_agency_router(local, is_main_bot):
             if action=='home':
                 await state.clear()
                 await display(call,'مدیریت نمایندگی طلایی',home_rows())
+            elif action in ('trials','trials_off'):
+                if not is_main_bot or not root.is_senior_admin(call.from_user.id):raise AgencyError('تنظیم حجم و هزینه تست فقط در اختیار مدیر ارشد ربات اصلی است.')
+                from managed_trials import trial_policy,POLICY_KEY
+                import json
+                policy=trial_policy(root)
+                if action=='trials_off':
+                    policy['enabled']=False
+                    root.set_setting(POLICY_KEY,json.dumps(policy))
+                await state.set_state(AgencyFlow.trials)
+                status='فعال' if policy.get('enabled') else 'غیرفعال'
+                await display(call,f"تست نماینده‌ها: {status}\nمحصول پایه: {policy.get('product_id','—')} | حجم: {policy.get('volume_mb','—')} مگابایت | مدت: {policy.get('hours','—')} ساعت | هزینه هر تست: {policy.get('cost','—')} تومان\n\nشناسه محصول پایه مجاز نماینده‌ها، حجم مگابایت، مدت ساعت و هزینه تومان را با فاصله بفرستید. مثال: 12 512 24 1000\nتست برای مشتری رایگان است؛ هزینه از کیف پول زنجیره نماینده‌ها کسر می‌شود. هزینه صفر نیز مجاز است.",[[Button(text='غیرفعال‌کردن تست نماینده‌ها',callback_data='agency:trials_off')],[Button(text='بازگشت',callback_data='agency:home')]])
             elif action=='transactions':
                 with root._get_conn() as conn:
                     if is_main_bot:
@@ -193,6 +206,18 @@ def create_agency_router(local, is_main_bot):
             await call.answer()
         except (AgencyError,ValueError,IndexError,TypeError) as exc:
             await call.answer(str(exc),show_alert=True)
+
+    @router.message(AgencyFlow.trials)
+    async def trial_settings_message(message,state):
+        if not is_main_bot or not authorized(message.from_user.id) or not root.is_senior_admin(message.from_user.id):return
+        from managed_trials import configure_trials
+        try:
+            values=list(map(int,(message.text or '').split()))
+            if len(values)!=4:raise AgencyError('چهار عدد بفرستید: شناسه محصول، حجم مگابایت، مدت ساعت، هزینه تومان.')
+            await asyncio.to_thread(configure_trials,root,*values)
+            await state.clear()
+            await message.answer('✅ حجم، مدت و هزینه تست نماینده‌ها ذخیره و فعال شد.',reply_markup=Markup(inline_keyboard=home_rows()))
+        except ValueError as exc:await message.answer(str(exc))
 
     @router.message(AgencyFlow.price)
     async def price_message(message,state):
