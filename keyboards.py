@@ -2736,7 +2736,7 @@ def admin_categories_kb(categories) -> InlineKeyboardMarkup:
         state_icon = "🟢" if cat["is_active"] else "🔴"
         rows.append(
             [
-                InlineKeyboardButton(text=f"{state_icon} {cat['name']}", callback_data="noop", icon_custom_emoji_id=cat["icon_custom_emoji_id"] if "icon_custom_emoji_id" in cat.keys() else None),
+                InlineKeyboardButton(text=f"{state_icon} {cat['name']}", callback_data="noop", icon_custom_emoji_id=(cat["icon_custom_emoji_id"] or None) if "icon_custom_emoji_id" in cat.keys() else None),
                 InlineKeyboardButton(text=tr("✏️ تغییر نام"), callback_data=f"adm_cat_rename:{cat['id']}"),
                 InlineKeyboardButton(text=tr("تغییر وضعیت"), callback_data=f"adm_cat_toggle:{cat['id']}"),
                 InlineKeyboardButton(text=tr("🗑حذف"), callback_data=f"adm_cat_del:{cat['id']}"),

@@ -373,45 +373,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             raise
 
     async def replace_admin_view(call: CallbackQuery, text: str, reply_markup=None, parse_mode=None) -> bool:
-        """تغییر منوی ادمین روی همان پیام؛ ترجیحاً بدون حذف/ارسال مجدد پیام.
-
-        قبلاً فقط سه پیام خطای خاص («message is not modified»، «message can't
-        be edited»، «message to edit not found») مدیریت می‌شدند و بقیه‌ی
-        خطاهای TelegramBadRequest (مثل ویرایش یک پیام عکس/رسید که متن ندارد،
-        یا پیامی که خیلی قدیمی شده) کل هندلر را کرش می‌کرد؛ چون بعد از آن
-        call.answer() اجرا نمی‌شد، دکمه از دید ادمین هیچ واکنشی نشان نمی‌داد
-        («منو برنمی‌گرده»). حالا برای هر خطای غیرمنتظره‌ای، به‌جای کرش، پیام
-        قبلی حذف و منوی جدید به‌صورت پیام تازه ارسال می‌شود تا ناوبری همیشه کار
-        کند."""
-        if call.message is None:
-            return False
-
+        from admin_navigation import replace_view
         reply_markup = admin_help.attach_button(call.from_user.id, reply_markup)
-        kwargs = {"reply_markup": reply_markup}
-        if parse_mode is not None:
-            kwargs["parse_mode"] = parse_mode
-
-        try:
-            await call.message.edit_text(text, **kwargs)
-            return True
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                return False
-        except Exception:
-            pass
-
-        # Fallback: ویرایش به هر دلیلی ممکن نشد؛ پیام قبلی را حذف (در صورت
-        # امکان) و همان منو را به‌عنوان پیام تازه بفرست تا ادمین همیشه منو
-        # را ببیند.
-        try:
-            await call.message.delete()
-        except Exception:
-            pass
-        try:
-            await call.message.answer(text, **kwargs)
-        except Exception:
-            return False
-        return True
+        return await replace_view(call, text, reply_markup, parse_mode)
 
     async def _track_admin_section(handler, event: CallbackQuery, data: dict):
         if admin_only(event.from_user.id):
@@ -525,7 +489,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await state.clear()
         try:
             categories = (await asyncio.to_thread(db.get_categories, active_only=False))
-            await replace_admin_view(call, tr("📂 مدیریت دسته‌بندی‌ها:"), kb.admin_categories_kb(categories))
+            shown = await replace_admin_view(call, tr("📂 مدیریت دسته‌بندی‌ها:"), kb.admin_categories_kb(categories))
+            if not shown:
+                return await call.answer("نمایش دسته‌بندی‌ها ناموفق بود؛ منوی قبلی حفظ شد. دوباره تلاش کنید.", show_alert=True)
             await call.answer()
         except Exception:
             await call.answer(db.get_text('handlers_admin.auto_9a43de7a', '⚠️ بارگذاری دسته\u200cبندی\u200cها ناموفق بود. دوباره تلاش کنید.'), show_alert=True)

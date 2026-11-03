@@ -75,7 +75,7 @@ def without_custom_icons(method):
     markup = getattr(method, 'reply_markup', None)
     if not isinstance(markup, InlineKeyboardMarkup):
         return None
-    if not any(button.icon_custom_emoji_id for row in markup.inline_keyboard for button in row):
+    if not any(button.icon_custom_emoji_id is not None for row in markup.inline_keyboard for button in row):
         return None
     result = method.model_copy(deep=True)
     for row in result.reply_markup.inline_keyboard:

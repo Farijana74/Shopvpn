@@ -235,7 +235,7 @@ class TranslatingBot(Bot):
                 return await send(outgoing, request_timeout=request_timeout)
             except TelegramBadRequest as exc:
                 error = str(exc).lower()
-                fallback = without_custom_icons(outgoing) if any(part in error for part in ("custom_emoji", "custom emoji", "premium")) else None
+                fallback = without_custom_icons(outgoing) if any(part in error for part in ("custom_emoji", "custom emoji", "premium", "document_invalid", "document invalid", "emoji_id_invalid")) else None
                 if fallback is None:
                     raise
                 return await send(fallback, request_timeout=request_timeout)
