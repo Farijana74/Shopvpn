@@ -154,10 +154,10 @@ class CatalogMixin:
             return [r["uid"] for r in rows]
 
 
-    def add_category(self, name: str) -> int:
+    def add_category(self, name: str, icon_custom_emoji_id: str = None) -> int:
         def op():
             with self._get_conn() as conn:
-                cur = conn.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+                cur = conn.execute("INSERT INTO categories (name,icon_custom_emoji_id) VALUES (?,?)", (name,icon_custom_emoji_id))
                 return cur.lastrowid
         return self._sqlite_retry(op)
 
@@ -179,9 +179,12 @@ class CatalogMixin:
         return self._sqlite_retry(op)
 
 
-    def edit_category(self, cat_id: int, name: str):
+    def edit_category(self, cat_id: int, name: str, icon_custom_emoji_id: str = None):
         with self._get_conn() as conn:
-            conn.execute("UPDATE categories SET name=? WHERE id=?", (name, cat_id))
+            if icon_custom_emoji_id is None:
+                conn.execute("UPDATE categories SET name=? WHERE id=?", (name, cat_id))
+            else:
+                conn.execute("UPDATE categories SET name=?,icon_custom_emoji_id=? WHERE id=?", (name, icon_custom_emoji_id, cat_id))
 
 
     def delete_category(self, cat_id: int):

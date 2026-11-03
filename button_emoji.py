@@ -27,3 +27,15 @@ def button_icon(db, style_key):
     key = style_key.removesuffix('_style') + '_icon_custom_emoji_id'
     value = str(db.get_setting(key, '') or '').strip()
     return value if re.fullmatch(r'[0-9]{1,32}', value) else None
+
+
+def message_button_label(message):
+    """Extract a native button icon; entity offsets count UTF-16 code units."""
+    text = message.text or ''
+    for entity in message.entities or []:
+        if entity.type == 'custom_emoji' and entity.custom_emoji_id:
+            raw = text.encode('utf-16-le')
+            start, end = entity.offset * 2, (entity.offset + entity.length) * 2
+            label = (raw[:start] + raw[end:]).decode('utf-16-le').strip()
+            return label or text.strip(), validate_icon(entity.custom_emoji_id)
+    return text.strip(), ''

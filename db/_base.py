@@ -1771,6 +1771,8 @@ class DatabaseBase:
 
 
     def _migrate_columns(self, conn):
+        if not self._column_exists(conn, "categories", "icon_custom_emoji_id"):
+            conn.execute("ALTER TABLE categories ADD COLUMN icon_custom_emoji_id TEXT")
         if self._column_exists(conn, "ssh_accounts", "id") and not self._column_exists(conn, "ssh_accounts", "credential_enc"):
             conn.execute("ALTER TABLE ssh_accounts ADD COLUMN credential_enc TEXT")
         if self._column_exists(conn, "ssh_accounts", "id") and not self._column_exists(conn, "ssh_accounts", "custom_config_id"):

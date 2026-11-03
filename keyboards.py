@@ -31,11 +31,11 @@ from i18n import tr
 # منوی اصلی (Reply Keyboard)
 # ---------------------------------------------------------------------------
 
-def _styled_button(text: str, style_value: str) -> KeyboardButton:
+def _styled_button(text: str, style_value: str, custom_icon=None) -> KeyboardButton:
     """می‌سازد یک دکمه با رنگ دلخواه (ویژگی style در Bot API 9.4 به بعد).
     مقدار خالی یعنی رنگ پیش‌فرض (خاکستری)."""
     style = style_value if style_value in ("primary", "success", "danger") else None
-    return KeyboardButton(text=text, style=style)
+    return KeyboardButton(text=text, style=style, icon_custom_emoji_id=custom_icon)
 
 
 def _miniapp_url(db, language: str = "") -> str:
@@ -254,7 +254,7 @@ def main_menu_kb(db, is_admin: bool, is_reseller: bool = False, is_main_bot: boo
 
     items = _menu_items(db, is_admin, is_reseller, is_main_bot, show_reseller_request, show_commission_reseller_request)
     item_rows = _menu_item_rows(db, items)
-    rows = [[_styled_button(tr(text), style) for _key, text, style in row] for row in item_rows]
+    rows = [[_styled_button(tr(text), style, button_icon(db, f"{key}_style")) for key, text, style in row] for row in item_rows]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -355,7 +355,10 @@ def categories_kb(db, categories, is_main_bot: bool = True) -> InlineKeyboardMar
         text = db.get_setting("btn_custom_config_text", "🛠 حجم دلخواه")
         rows.append([_styled_inline(db, text, "custom_config_start", "btn_custom_config_style")])
     for cat in categories:
-        rows.append([_styled_inline(db, f"{cat['name']}", f"cat:{cat['id']}", "btn_cat_select_style")])
+        button = _styled_inline(db, f"{cat['name']}", f"cat:{cat['id']}", "btn_cat_select_style")
+        if 'icon_custom_emoji_id' in cat.keys() and cat['icon_custom_emoji_id']:
+            button.icon_custom_emoji_id = cat['icon_custom_emoji_id']
+        rows.append([button])
     back_text = db.get_setting("btn_buy_back_text", "⬅️ بازگشت")
     rows.append([_styled_inline(db, back_text, "back_main", "btn_buy_back_style")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -2733,7 +2736,7 @@ def admin_categories_kb(categories) -> InlineKeyboardMarkup:
         state_icon = "🟢" if cat["is_active"] else "🔴"
         rows.append(
             [
-                InlineKeyboardButton(text=f"{state_icon} {cat['name']}", callback_data="noop"),
+                InlineKeyboardButton(text=f"{state_icon} {cat['name']}", callback_data="noop", icon_custom_emoji_id=cat["icon_custom_emoji_id"] if "icon_custom_emoji_id" in cat.keys() else None),
                 InlineKeyboardButton(text=tr("✏️ تغییر نام"), callback_data=f"adm_cat_rename:{cat['id']}"),
                 InlineKeyboardButton(text=tr("تغییر وضعیت"), callback_data=f"adm_cat_toggle:{cat['id']}"),
                 InlineKeyboardButton(text=tr("🗑حذف"), callback_data=f"adm_cat_del:{cat['id']}"),

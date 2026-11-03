@@ -171,6 +171,8 @@ def sync_bot(root, bot_id):
                 category_name = category['name'] if category else 'محصولات'
                 cat = conn.execute('SELECT id FROM categories WHERE name=?', (category_name,)).fetchone()
                 cat_id = cat[0] if cat else conn.execute('INSERT INTO categories(name) VALUES(?)', (category_name,)).lastrowid
+                if category and 'icon_custom_emoji_id' in category.keys():
+                    conn.execute('UPDATE categories SET icon_custom_emoji_id=? WHERE id=?',(category['icon_custom_emoji_id'],cat_id))
                 server = root.get_panel_server(source['provision_server_id']) if source['provision_server_id'] else None
                 if not server:
                     active = False

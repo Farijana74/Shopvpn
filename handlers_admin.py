@@ -583,7 +583,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
     async def process_rename_category(message: Message, state: FSMContext):
         if not senior_admin_only(message.from_user.id):
             return
-        name = (message.text or "").strip()
+        from button_emoji import message_button_label
+        name, custom_icon = message_button_label(message)
         if not name or len(name) > 100:
             await message.answer("نام دسته‌بندی باید بین ۱ تا ۱۰۰ کاراکتر باشد.")
             return
@@ -593,7 +594,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await state.clear()
             await message.answer("دسته‌بندی یافت نشد.")
             return
-        await asyncio.to_thread(db.edit_category, cat_id, name)
+        await asyncio.to_thread(db.edit_category, cat_id, name, custom_icon)
         await asyncio.to_thread(db.log_admin_action, message.from_user.id, "category_edit", name)
         await state.clear()
         categories = await asyncio.to_thread(db.get_categories, active_only=False)
@@ -611,7 +612,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
     async def process_add_category(message: Message, state: FSMContext):
         if not admin_only(message.from_user.id):
             return
-        name = (message.text or "").strip()
+        from button_emoji import message_button_label
+        name, custom_icon = message_button_label(message)
         if not name:
             await message.answer(db.get_text('handlers_admin.auto_b1eeb37b', 'لطفاً نام دسته\u200cبندی را وارد کنید.'))
             return
@@ -619,7 +621,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await message.answer(db.get_text('handlers_admin.auto_72f54ac8', 'نام دسته\u200cبندی نباید بیشتر از ۱۰۰ کاراکتر باشد.'))
             return
         try:
-            (await asyncio.to_thread(db.add_category, name))
+            (await asyncio.to_thread(db.add_category, name, custom_icon))
             (await asyncio.to_thread(db.log_admin_action, message.from_user.id, "category_add", f"دسته‌بندی «{name}»"))
             await state.clear()
             await message.answer(db.get_text('handlers_admin.auto_83f1db24', '✅ دسته\u200cبندی اضافه شد.'), reply_markup=kb.admin_category_kb(db, is_main_bot, "products"))
@@ -10454,9 +10456,17 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
 
     @router.message(AdminEditButton.waiting_text)
     async def process_edit_button(message: Message, state: FSMContext):
+        if not full_admin_only(message.from_user.id):
+            return
+        from button_emoji import message_button_label
+        label, custom_icon = message_button_label(message)
+        if not label:
+            return await message.answer("متن دکمه را همراه ایموجی دلخواه بفرستید.")
         data = await state.get_data()
         key = data["setting_key"]
-        (await asyncio.to_thread(db.set_setting, key, message.text.strip()))
+        (await asyncio.to_thread(db.set_setting, key, label))
+        icon_setting = key.removesuffix("_text") + "_icon_custom_emoji_id"
+        (await asyncio.to_thread(db.set_setting, icon_setting, custom_icon))
         await state.clear()
         await message.answer(db.get_text('handlers_admin.auto_7eda6762', '✅ متن دکمه به\u200cروزرسانی شد.'), reply_markup=kb.admin_edit_buttons_kb(db))
 
