@@ -1420,6 +1420,11 @@ class CatalogMixin:
                  expires_at, source, product_id, int(bool(start_on_first_use)), reseller_product_id, user_limit),
             )
             new_id = cur.lastrowid
+            conn.execute(
+                "UPDATE custom_configs SET delivery_mode=COALESCE(("
+                "SELECT p.delivery_mode FROM orders o JOIN products p ON p.id=o.product_id "
+                "WHERE o.id=?), 'normal') WHERE id=?", (order_id, new_id),
+            )
         self.add_custom_config_history(new_id, "purchase", f"{volume_gb} گیگ / {duration_days} روز")
         if order_id:
             try:

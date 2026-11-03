@@ -74,6 +74,7 @@ import leak_index
 from reseller_auto_provision import provision_auto_config, provision_test_config, provision_reseller_fixed_product, is_volume_credit_bot, ProvisionError
 from direct_panel_provision import provision_direct, planned_usernames, ProvisionError as DirectProvisionError
 from happ_delivery import HappDeliveryError, get_product_delivery_links, validate_happ_product
+from service_delivery import service_delivery_mode, service_delivery_links, rotate_service_credentials
 from test_config_provision import provision_test_plan, format_plan_amount, ProvisionError as TestPlanProvisionError
 from notification_i18n import send_telegram
 from i18n import set_language, reset_language, language_label, normalize_language, is_language_enabled, tr, language_scope
@@ -4078,10 +4079,12 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         return ""
 
     def _item_has_individual_links(item) -> bool:
+        if item["kind"] == "custom" and service_delivery_mode(db, item["custom"]) == "happ":
+            return False
         link = _item_sub_link(item)
         return str(link).startswith(("http://", "https://"))
 
-    async def _my_orders_item_text(item) -> str:
+    async def _my_orders_item_text(item, refresh=False) -> str:
         kind = item["kind"]
         if kind == "config":
             cfg, o, pname = item["config"], item["order"], item["product_name"]
@@ -4098,8 +4101,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if kind == "custom":
             cc = item["custom"]
             sub_url = cc["subscription_url"]
-            server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if cc["panel_server_id"] else None
-            if server and server["is_active"]:
+            server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if refresh and cc["panel_server_id"] else None
+            if refresh and server and server["is_active"]:
                 try:
                     provider = get_provider(server)
                     fresh = await provider.get_user(cc["username"])
@@ -4131,11 +4134,25 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             elif cc["expires_at"]:
                 text += f"📅 انقضا: {to_jalali_str(cc['expires_at'], with_time=True)}\n"
             if sub_url:
-                shown_url = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, sub_url)
-                text += f"🔗 `{shown_url}`\n"
-                info = await fetch_sub_info(sub_url)
-                text += f"\n{format_sub_info_fa(info)}"
-                if str(sub_url).startswith(("http://", "https://")):
+                service = {**dict(cc), "subscription_url": sub_url}
+                try:
+                    links = await service_delivery_links(db, service)
+                except HappDeliveryError as exc:
+                    # Keep the card usable without exposing the normal URL.
+                    return text + "\n" + str(exc)
+                for link in links:
+                    if link.startswith("happ://"):
+                        text += f"📲 Happ: `{link}`\n"
+                    else:
+                        shown_url = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link)
+                        text += f"🔗 `{shown_url}`\n"
+                try:
+                    info = await asyncio.wait_for(fetch_sub_info(sub_url), timeout=3)
+                    text += f"\n{format_sub_info_fa(info)}"
+                except Exception:
+                    # Usage information is optional; do not delay the link card.
+                    pass
+                if _item_has_individual_links(item):
                     text += "\n\n📋 برای دیدن کانفیگ‌های تکی این لینک، دکمه‌ی «کانفیگ‌های تکی» پایین را بزنید."
             return text
         # kind == "order": سفارشی بدون کانفیگ فعلی (در انتظار بررسی/رد‌شده)
@@ -4144,7 +4161,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         return f"📦 سفارش #{o['id']} | {escape_md(pname)}\nوضعیت: {_MO_STATUS_MAP.get(o['status'], o['status'])}"
 
     async def _show_my_orders_list(target, user_tg_id: int, edit: bool):
-        items = _my_orders_items(user_tg_id)
+        items = await asyncio.to_thread(_my_orders_items, user_tg_id)
         if not items:
             text = "شما تاکنون سفارشی ثبت نکرده‌اید."
             if edit:
@@ -4167,7 +4184,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data.startswith("mo_v:"))
     async def cb_my_orders_view(call: CallbackQuery):
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item:
             await call.answer(db.get_text('handlers_user.auto_848eae5d', 'این مورد یافت نشد (شاید قبلاً حذف شده).'), show_alert=True)
             await _show_my_orders_list(call.message, call.from_user.id, edit=True)
@@ -4199,13 +4216,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         ویرایش پیام در تلگرام بی‌اثر به‌نظر برسد؛ برای همین همیشه یک پیام
         تاییدیه‌ی جدا (toast) هم نشان می‌دهیم تا کاربر مطمئن شود کاری انجام شد."""
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item:
             await call.answer(db.get_text('handlers_user.auto_848eae5d', 'این مورد یافت نشد (شاید قبلاً حذف شده).'), show_alert=True)
             await _show_my_orders_list(call.message, call.from_user.id, edit=True)
             return
         try:
-            text = await _my_orders_item_text(item)
+            text = await _my_orders_item_text(item, refresh=True)
         except Exception:
             logging.getLogger("handlers_user").exception(
                 "بروزرسانی اطلاعات سرویس (cb_id=%s) برای کاربر %s ناموفق بود.", cb_id, call.from_user.id,
@@ -4232,7 +4249,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_848eae5d', 'این مورد یافت نشد (شاید قبلاً حذف شده).'), show_alert=True)
             await _show_my_orders_list(call.message, call.from_user.id, edit=True)
@@ -4354,12 +4371,12 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         """دکمه‌ی واحد «کانفیگ‌های تکی»: فقط با زدن همین دکمه، تمام لینک‌های
         تکیِ این سرویس (نه از همان ابتدا) به‌صورت یک پیام جدا ارسال می‌شوند."""
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item:
             await call.answer(db.get_text('handlers_user.auto_848eae5d', 'این مورد یافت نشد (شاید قبلاً حذف شده).'), show_alert=True)
             return
         link = _item_sub_link(item)
-        if not link.startswith(("http://", "https://")):
+        if not _item_has_individual_links(item) or not link.startswith(("http://", "https://")):
             await call.answer(db.get_text('handlers_user.auto_fc8d34f5', 'کانفیگ تکی\u200cای برای این لینک موجود نیست.'), show_alert=True)
             return
         await call.answer()
@@ -4385,7 +4402,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] not in ("config", "custom"):
             await call.answer(db.get_text('handlers_user.auto_848eae5d', 'این مورد یافت نشد (شاید قبلاً حذف شده).'), show_alert=True)
             await _show_my_orders_list(call.message, call.from_user.id, edit=True)
@@ -4483,7 +4500,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item:
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -4491,11 +4508,18 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if item["kind"] == "config":
             link = item["config"]["link"]
         elif item["kind"] == "custom":
-            link = item["custom"]["subscription_url"]
+            await call.answer()
+            try:
+                links = await service_delivery_links(db, item["custom"])
+                link = links[-1] if links else None
+            except HappDeliveryError as exc:
+                await call.message.answer(str(exc))
+                return
         if not link:
             await call.answer(db.get_text('handlers_user.auto_4e32a60a', 'لینکی برای ساخت کیوآر پیدا نشد.'), show_alert=True)
             return
-        await call.answer()
+        if item["kind"] != "custom":
+            await call.answer()
         link = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link)
         photo = BufferedInputFile(build_qr_bytes(link, db=db), filename="config_qr.png")
         await bot.send_photo(call.from_user.id, photo, caption=tr("⬜ کیوآر کانفیگ شما"))
@@ -4506,7 +4530,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -4528,7 +4552,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         cb_id = call.data.split(":", 1)[1]
         user_tg_id = call.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_848eae5d', 'این مورد یافت نشد (شاید قبلاً حذف شده).'), show_alert=True)
             await _show_my_orders_list(call.message, user_tg_id, edit=True)
@@ -4544,24 +4568,22 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         await call.answer()
         try:
             provider = get_provider(server)
-            result = await provider.revoke_credentials(cc["username"])
-        except PanelError as e:
+            result = await rotate_service_credentials(db, cc, provider)
+        except (PanelError, HappDeliveryError) as e:
             await _safe_edit(
                 call.message, f"⛔️ قطع دسترسی ناموفق بود: {e}",
                 reply_markup=kb.my_order_error_back_kb(),
             )
             return
-        if result.subscription_url:
-            (await asyncio.to_thread(db.update_custom_config_subscription_url, cc["id"], result.subscription_url))
         leak_index.schedule_refresh(db, cc["id"])
         (await asyncio.to_thread(db.add_custom_config_history, cc["id"], "cut_access", "دسترسی قطع و لینک جدید صادر شد"))
-        item2 = _find_my_orders_item(user_tg_id, cb_id)
+        item2 = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if item2:
             text = await _my_orders_item_text(item2)
             await _safe_edit(
                 call.message, "✅ دسترسی قبلی قطع شد و لینک جدید صادر شد.\n\n" + text,
                 parse_mode="Markdown",
-                reply_markup=kb.service_detail_kb(db, cb_id, item2["kind"], True, **_svc_kb_kwargs(item2)),
+                reply_markup=kb.service_detail_kb(db, cb_id, item2["kind"], True, _item_has_individual_links(item2), **_svc_kb_kwargs(item2)),
             )
         else:
             await _safe_edit(call.message, db.get_text('handlers_user.auto_1061be58', '✅ دسترسی قبلی قطع شد و لینک جدید صادر شد.'))
@@ -4572,7 +4594,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     # -----------------------------------------------------------------------
 
     async def _refresh_service_card(target, user_tg_id: int, cb_id: str, prefix_text: str = None):
-        item2 = _find_my_orders_item(user_tg_id, cb_id)
+        item2 = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item2:
             await target.answer(db.get_text('handlers_user.auto_91b523c7', 'این مورد دیگر یافت نشد.'))
             return
@@ -4594,7 +4616,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         cb_id = call.data.split(":", 1)[1]
         user_tg_id = call.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -4626,7 +4648,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -4662,7 +4684,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await message.answer(db.get_text('handlers_user.auto_4b7b8e98', '❌ نامعتبر است. فقط حروف انگلیسی، عدد و آندرلاین، بین ۳ تا ۲۰ کاراکتر.'))
             return
         user_tg_id = message.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] != "custom":
             await state.clear()
             await message.answer(db.get_text('handlers_user.auto_91b523c7', 'این مورد دیگر یافت نشد.'))
@@ -4703,7 +4725,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         cb_id = call.data.split(":", 1)[1]
         user_tg_id = call.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -4747,7 +4769,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -4792,7 +4814,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         _, cb_id, target_id_s = call.data.split(":", 2)
         target_id = int(target_id_s)
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom" or _is_test_item(item):
             await call.answer(db.get_text('handlers_user.auto_ad118aee', 'این سرویس قابل انتقال نیست.'), show_alert=True)
             return
@@ -4829,7 +4851,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         _, cb_id, target_id_s = call.data.split(":", 2)
         target_id = int(target_id_s)
         user_tg_id = call.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] != "custom" or _is_test_item(item):
             await call.answer(db.get_text('handlers_user.auto_ad118aee', 'این سرویس قابل انتقال نیست.'), show_alert=True)
             return
@@ -4946,7 +4968,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         except Exception:
             logging.getLogger("handlers_user").exception("location transfer history log failed")
 
-        item2 = _find_my_orders_item(user_tg_id, cb_id)
+        item2 = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if item2:
             text = await _my_orders_item_text(item2)
             await _safe_edit(
@@ -4964,7 +4986,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -4996,7 +5018,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if not target_user:
             await message.answer(db.get_text('handlers_user.auto_d037e5c6', '❌ این کاربر بات را استارت نکرده یا آی\u200cدی نادرست است.'))
             return
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] != "custom":
             await state.clear()
             await message.answer(db.get_text('handlers_user.auto_91b523c7', 'این مورد دیگر یافت نشد.'))
@@ -5017,7 +5039,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         _, cb_id, target_id_s = call.data.split(":", 2)
         target_id = int(target_id_s)
         user_tg_id = call.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_7e65dc98', 'این مورد یافت نشد (شاید قبلاً حذف/منتقل شده).'), show_alert=True)
             await _show_my_orders_list(call.message, user_tg_id, edit=True)
@@ -5051,7 +5073,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -5125,7 +5147,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                     except Exception:
                         pass
                 await edit_fn(result_text)
-                item2 = _find_my_orders_item(user_tg_id, cb_id)
+                item2 = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
                 if item2:
                     text = await _my_orders_item_text(item2)
                     deletable = item2["kind"] in ("config", "custom")
@@ -5188,7 +5210,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if (await asyncio.to_thread(db.get_setting, toggle_key, "1")) != "1":
             await call.answer(db.get_text('handlers_user.auto_b151f395', 'این قابلیت غیرفعال است.'), show_alert=True)
             return
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] not in ("config", "custom"):
             await call.answer(db.get_text('handlers_user.auto_6bf10f8b', 'این مورد یافت نشد.'), show_alert=True)
             return
@@ -5289,7 +5311,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data.startswith("svc_users:"))
     async def cb_service_users(call: CallbackQuery, state: FSMContext):
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         info = ul.service_upgrade_info(db, item["custom"]) if item and item["kind"] == "custom" else None
         if not info:
             await call.answer(db.get_text('handlers_user.auto_66ddb16b', 'افزایش کاربر برای این سرویس در دسترس نیست.'), show_alert=True)
@@ -5314,7 +5336,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_ec3a51ff', 'درخواست نامعتبر است.'), show_alert=True)
             return
         user_tg_id = call.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         info = ul.service_upgrade_info(db, item["custom"]) if item and item["kind"] == "custom" else None
         if not info or not info["current"] < users <= info["max_users"]:
             await call.answer(db.get_text('handlers_user.auto_f4122f85', 'این گزینه در دسترس نیست.'), show_alert=True)
@@ -5339,7 +5361,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         _, mode, cb_id, product_id = parts[:4]
         users = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
         user_tg_id = call.from_user.id
-        item = _find_my_orders_item(user_tg_id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, user_tg_id, cb_id)
         if not item or item["kind"] not in ("config", "custom"):
             await call.answer(db.get_text('handlers_user.auto_848eae5d', 'این مورد یافت نشد (شاید قبلاً حذف شده).'), show_alert=True)
             return
@@ -8275,7 +8297,15 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if not item:
             await message.answer(db.get_text('handlers_user.auto_e6ba8f93', '⛔️ این سرویس دیگر یافت نشد.'))
             return
-        link = _item_sub_link(item)
+        if item["kind"] == "custom":
+            try:
+                links = await service_delivery_links(db, item["custom"])
+                link = links[-1] if links else None
+            except HappDeliveryError as exc:
+                await message.answer(str(exc))
+                return
+        else:
+            link = _item_sub_link(item)
         if not link:
             await message.answer(db.get_text('handlers_user.auto_1e7d994f', '⛔️ لینکی برای ساخت کیوآر پیدا نشد.'))
             return
@@ -8290,7 +8320,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await message.answer(db.get_text('handlers_user.auto_e6ba8f93', '⛔️ این سرویس دیگر یافت نشد.'))
             return
         link = _item_sub_link(item)
-        if not link.startswith(("http://", "https://")):
+        if not _item_has_individual_links(item) or not link.startswith(("http://", "https://")):
             await message.answer(db.get_text('handlers_user.auto_fd563df7', '⛔️ کانفیگ تکی\u200cای برای این سرویس موجود نیست.'))
             return
         try:
@@ -8444,7 +8474,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data.startswith("svc_disruption:"))
     async def cb_service_disruption(call: CallbackQuery, bot: Bot):
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_d52e4662', 'سرویس یافت نشد.'), show_alert=True)
             return
@@ -8476,7 +8506,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data.startswith("svc_rate:"))
     async def cb_service_rate(call: CallbackQuery):
         cb_id = call.data.split(":", 1)[1]
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom":
             await call.answer(db.get_text('handlers_user.auto_d52e4662', 'سرویس یافت نشد.'), show_alert=True)
             return
@@ -8494,7 +8524,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data.startswith("svc_rate_set:"))
     async def cb_service_rate_set(call: CallbackQuery):
         _, cb_id, value_s = call.data.split(":", 2)
-        item = _find_my_orders_item(call.from_user.id, cb_id)
+        item = await asyncio.to_thread(_find_my_orders_item, call.from_user.id, cb_id)
         if not item or item["kind"] != "custom" or _is_test_item(item):
             await call.answer(db.get_text('handlers_user.auto_d52e4662', 'سرویس یافت نشد.'), show_alert=True)
             return

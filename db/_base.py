@@ -1571,6 +1571,13 @@ class DatabaseBase:
                 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
             self._migrate_columns(conn)
+            # Preserve the delivery format on existing product-backed services.
+            conn.execute(
+                "UPDATE custom_configs SET delivery_mode=COALESCE(("
+                "SELECT p.delivery_mode FROM orders o JOIN products p ON p.id=o.product_id "
+                "WHERE o.id=custom_configs.order_id), 'normal') "
+                "WHERE delivery_mode IS NULL"
+            )
 
             # Keep a manifest row for every known language. The manifest is the
             # versioned source-of-truth for automatic translation synchronization.
@@ -1962,6 +1969,7 @@ class DatabaseBase:
             ("custom_configs", "renewal_reminder_sent", "INTEGER DEFAULT 0"),
             ("custom_configs", "volume_reminder_sent", "INTEGER DEFAULT 0"),
             ("custom_configs", "source", "TEXT DEFAULT 'custom_config'"),
+            ("custom_configs", "delivery_mode", "TEXT"),
             ("custom_configs", "reseller_product_id", "INTEGER"),
             ("custom_configs", "enabled", "INTEGER DEFAULT 1"),
             ("custom_configs", "auto_renew", "INTEGER DEFAULT 0"),
