@@ -47,6 +47,9 @@ async def get_product_delivery_links(db, product, provisioned_items, order_id=No
     Happ-only mode fails closed: it never substitutes a subscription URL. In
     ``both`` mode the normal link remains available if Happ generation fails.
     """
+    if provisioned_items and provisioned_items[0].get("_managed_delivery_mode"):
+        product = {**dict(product), "delivery_mode": provisioned_items[0]["_managed_delivery_mode"],
+                   "provision_server_id": provisioned_items[0]["panel_server_id"]}
     try:
         mode = product["delivery_mode"] if "delivery_mode" in product.keys() else "normal"
     except (AttributeError, KeyError, TypeError):

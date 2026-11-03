@@ -340,7 +340,7 @@ DEFAULT_SETTINGS = {
     "custom_config_duration_days": "30",  # فعلاً ثابت؛ در آینده قابل انتخاب کاربر می‌شود
     "test_config_panel_volume_gb": "1",     # فقط وقتی یک سرور برای «کانفیگ تست» فعال باشد
     "test_config_panel_duration_days": "1",
-    "btn_custom_config": "🛠 ساخت کانفیگ شخصی",
+    "btn_custom_config": "🛠 حجم دلخواه",
     "btn_custom_config_style": "primary",
     "adm_panel_servers_style": "",
     "adm_ssh_menu_style": "",
@@ -498,7 +498,7 @@ ACCOUNT_HUB_META = {
 DEFAULT_ACCOUNT_HUB_ORDER = ["acct_orders", "acct_tutorial", "acct_referral", "acct_wallet", "acct_lootbox", "acct_add_service", "acct_merge"]
 
 BUYFLOW_META = {
-    "btn_custom_config": {"label": "ساخت کانفیگ شخصی", "default_text": "🛠 ساخت کانفیگ شخصی"},
+    "btn_custom_config": {"label": "ساخت کانفیگ شخصی", "default_text": "🛠 حجم دلخواه"},
     "btn_buy_continue": {"label": "ادامه و ارسال رسید", "default_text": "✅ ادامه و ارسال رسید"},
     "btn_enter_code": {"label": "وارد کردن کد تخفیف", "default_text": "🎟 وارد کردن کد تخفیف"},
     "btn_buy_back": {"label": "بازگشت (مسیر خرید)", "default_text": "⬅️ بازگشت"},

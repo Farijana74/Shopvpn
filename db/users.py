@@ -314,6 +314,8 @@ class UsersMixin:
         """
         if is_main_bot:
             return True
+        if self.get_setting("managed_reseller_bot_id", ""):
+            return False
         try:
             role = self.get_setting("bot_role", "")
             if role == "full_reseller":

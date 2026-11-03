@@ -18,6 +18,7 @@ from i18n import tr
 """
 
 import asyncio
+import logging
 import html as html_lib
 import math
 import os
@@ -475,6 +476,11 @@ async def deliver_config_to_user(
     if db is not None and order_id is not None:
         from gift_card_handlers import deliver_gift_order
         if await deliver_gift_order(bot, db, order_id):
+            from menu_restore import restore_main_menu
+            try:
+                await restore_main_menu(bot, db, user_tg_id)
+            except Exception:
+                logging.getLogger(__name__).warning("Restoring gift menu failed for user %s", user_tg_id)
             return
     if isinstance(links, str):
         links = [links]
@@ -513,5 +519,10 @@ async def deliver_config_to_user(
             await tutorial.send_device_picker(bot, user_tg_id, db)
         except Exception:
             pass
+        from menu_restore import restore_main_menu
+        try:
+            await restore_main_menu(bot, db, user_tg_id)
+        except Exception:
+            logging.getLogger(__name__).warning("Restoring post-delivery menu failed for user %s", user_tg_id)
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 # 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

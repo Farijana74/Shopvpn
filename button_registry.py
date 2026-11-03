@@ -17,6 +17,7 @@
 
 import database as dbmod
 import keyboards as kb
+from button_emoji import icon_key, validate_icon
 
 STYLE_CHOICES = ("", "primary", "success", "danger")
 
@@ -252,6 +253,9 @@ def build_registry(db) -> dict:
             "items": items, "note": scr["note"], "user_screen": True,
         }))
 
+    for group in groups:
+        for item in group["items"]:
+            item["icon_custom_emoji_id"] = db.get_setting(icon_key(group["key"], item["key"]), "")
     categories = [{"key": c[0], "label": c[1]} for c in kb.ADMIN_PANEL_CATEGORIES]
     return {"groups": groups, "style_options": _style_options(), "admin_categories": categories}
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
@@ -282,15 +286,19 @@ def _group_valid_keys(db, group: str):
 _TEXT_ONLY_GROUPS = set()  # دیگر گروهی که فقط ترتیب داشته باشد و متن/رنگ نداشته باشد، وجود ندارد
 
 
-def update_item(db, group: str, key: str, text: str = None, style: str = None, enabled: bool = None):
+def update_item(db, group: str, key: str, text: str = None, style: str = None, enabled: bool = None, icon_custom_emoji_id: str = None):
     valid = _group_valid_keys(db, group)
     if key not in valid:
         raise ValueError("کلید نامعتبر برای این گروه")
+    if icon_custom_emoji_id is not None:
+        icon_custom_emoji_id = validate_icon(icon_custom_emoji_id)
     if group in _TEXT_ONLY_GROUPS:
         raise ValueError("این گروه فقط قابل جابجایی است، متن/رنگ ندارد")
     if style is not None and style not in STYLE_CHOICES:
         raise ValueError("رنگ نامعتبر")
 
+    if icon_custom_emoji_id is not None:
+        db.set_setting(icon_key(group, key), icon_custom_emoji_id)
     if group in kb.USER_SCREENS:
         meta = next(i for i in kb.USER_SCREENS[group]["items"] if i[0] == key)
         if text is not None:

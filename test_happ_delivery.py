@@ -75,6 +75,12 @@ class HappDeliveryTests(unittest.IsolatedAsyncioTestCase):
         await get_product_delivery_links(_Db(), self.product, self.items, 12)
         self.provider.get_happ_link.assert_awaited_once_with("client-1")
 
+    async def test_managed_service_uses_authoritative_happ_mode(self):
+        self.items[0]['_managed_delivery_mode']='happ'
+        links=await get_product_delivery_links(_Db(),{**self.product,'delivery_mode':'normal','provision_server_id':99},self.items,12)
+        self.assertEqual(links,['happ://crypt5/test-encrypted-payload'])
+        self.provider.get_happ_link.assert_awaited_once_with('client-1')
+
     async def test_normal_mode_does_not_call_panel(self):
         await get_product_delivery_links(_Db(), {**self.product, "delivery_mode": "normal"}, self.items)
         self.provider.get_happ_link.assert_not_awaited()

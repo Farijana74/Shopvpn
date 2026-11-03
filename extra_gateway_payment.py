@@ -17,7 +17,8 @@ import exchange_rate
 import extra_gateway_clients as clients
 import extra_gateway_registry as registry
 import report_router
-from config import API_BASE_URL
+from config import API_BASE_URL, ADMIN_PANEL_URL
+from payment_urls import payment_base, return_url, start_url
 
 logger = logging.getLogger("extra_gateway_payment")
 
@@ -63,7 +64,15 @@ def _to_float(value) -> float:
 def is_configured(db, key: str) -> bool:
     if missing_fields(db, key):
         return False
-    return bool(API_BASE_URL) or not spec(key)["needs_base_url"]
+    if not spec(key)["needs_base_url"]:
+        return True
+    if key == "nowpayments" and not API_BASE_URL:
+        return False
+    try:
+        payment_base(API_BASE_URL, ADMIN_PANEL_URL, db.get_setting("zarinpal_callback_base_url", "") if key == "zarinpal" else "")
+        return True
+    except ValueError:
+        return False
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 
 
@@ -79,10 +88,13 @@ def available_keys(db, is_main_bot: bool = True) -> list:
     return [k for k in registry.GATEWAY_ORDER if is_available(db, k, is_main_bot)]
 
 
-def callback_url(tenant_id: str, key: str) -> str:
-    if not API_BASE_URL:
-        raise ExtraGatewayError("آدرس مینی‌اپ (MINIAPP_URL) روی سرور تنظیم نشده است.")
-    return f"{API_BASE_URL}/api/pay-return/{key}?b={tenant_id or ''}"
+def callback_url(tenant_id: str, key: str, db=None) -> str:
+    override = db.get_setting("zarinpal_callback_base_url", "") if db is not None and key == "zarinpal" else ""
+    try:
+        base = payment_base(API_BASE_URL, ADMIN_PANEL_URL, override)
+    except ValueError as exc:
+        raise ExtraGatewayError(str(exc)) from None
+    return return_url(base, key, tenant_id)
 
 
 def ipn_url(tenant_id: str) -> str:
@@ -163,23 +175,23 @@ async def create_invoice_for(db, tenant_id: str, tg_id: int, gateway: str, kind:
         elif gateway == "zarinpal":
             created = await clients.zarinpal_create(
                 db.get_setting("zarinpal_merchant_id", "").strip(), amount_toman,
-                callback_url(tenant_id, gateway), order_name, order_number,
+                callback_url(tenant_id, gateway, db), order_name, order_number,
             )
         elif gateway == "aqayepardakht":
             created = await clients.aqayepardakht_create(
                 db.get_setting("aqayepardakht_pin", "").strip(), amount_toman,
-                callback_url(tenant_id, gateway), order_name, order_number,
+                callback_url(tenant_id, gateway, db), order_name, order_number,
             )
         elif gateway == "tetra98":
             created = await clients.tetra98_create(
                 db.get_setting("tetra98_api_key", "").strip(), amount_toman,
-                callback_url(tenant_id, gateway), order_name, order_number,
+                callback_url(tenant_id, gateway, db), order_name, order_number,
             )
         elif gateway == "cubepay":
             payable = cubepay_payable(db, amount_toman)
             created = await clients.cubepay_create(
                 db.get_setting("cubepay_token", "").strip(), payable,
-                callback_url(tenant_id, gateway), order_name, order_number, tg_id,
+                callback_url(tenant_id, gateway, db), order_name, order_number, tg_id,
             )
         else:
             try:
@@ -193,6 +205,9 @@ async def create_invoice_for(db, tenant_id: str, tg_id: int, gateway: str, kind:
     except clients.GatewayError as e:
         raise ExtraGatewayError(str(e))
 
+    if gateway == "zarinpal":
+        base = payment_base(API_BASE_URL, ADMIN_PANEL_URL, db.get_setting("zarinpal_callback_base_url", ""))
+        created["payment_url"] = start_url(base, created["remote_id"], tenant_id)
     invoice_id = await asyncio.to_thread(
         db.create_extra_invoice, gateway, kind, ref_id, tg_id, amount_toman, payable,
         created["remote_id"], order_number, created["payment_url"], created["meta"],

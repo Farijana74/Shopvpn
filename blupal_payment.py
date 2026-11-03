@@ -25,7 +25,8 @@ API Key) ثبت می‌شود. برای پشتیبانی از چند فروشگ�
 
 import logging
 
-from config import BLUPAL_API_KEY, API_BASE_URL
+from config import BLUPAL_API_KEY, API_BASE_URL, ADMIN_PANEL_URL
+from payment_urls import payment_base
 import blupal_client
 from config_delivery import deliver_config_to_user
 from panel_providers import get_provider
@@ -80,9 +81,12 @@ from payment_base import toman_to_rial, rial_to_toman  # noqa: F401
 def webhook_url_hint(tenant_id: str) -> str:
     """آدرسی که ادمین باید در داشبورد بلوپال (تنظیمات API Key → Webhook URL)
     وارد کند، فقط برای نمایش؛ چیزی را خودکار در بلوپال ثبت نمی‌کند."""
-    if not API_BASE_URL:
+    try:
+        base = payment_base(API_BASE_URL, ADMIN_PANEL_URL)
+    except ValueError:
         return ""
-    return f"{API_BASE_URL}/api/webhooks/blupal?b={tenant_id or ''}"
+    from urllib.parse import urlencode
+    return f"{base}/api/webhooks/blupal?" + urlencode({"b": tenant_id or ""})
 
 
 async def create_invoice_for(db, tenant_id: str, tg_id: int, kind: str, ref_id: int,
@@ -114,6 +118,9 @@ async def create_invoice_for(db, tenant_id: str, tg_id: int, kind: str, ref_id: 
         raise BluPalPaymentError("پاسخ درگاه پرداخت ناقص بود (بدون شناسه‌ی فاکتور).")
 
     payment_url = data.get("payment_link")
+    from urllib.parse import urlsplit
+    if not isinstance(payment_url, str) or urlsplit(payment_url).scheme not in ("http", "https") or not urlsplit(payment_url).hostname:
+        raise BluPalPaymentError("پاسخ بلوپال لینک پرداخت معتبر ندارد.")
     db.create_blupal_invoice(
         invoice_id=str(invoice_id), kind=kind, ref_id=ref_id, user_id=tg_id,
         amount_toman=amount_toman, amount_rial=amount_rial,
@@ -149,7 +156,7 @@ async def try_verify_and_finalize(db, invoice_row) -> str:
     except blupal_client.BluPalError as e:
         return f"error:{e}"
 
-    remote_status = _REMOTE_STATUS_MAP.get(remote.get("status"), None)
+    remote_status = _REMOTE_STATUS_MAP.get(str(remote.get("status") or "").upper(), None)
 
     if remote_status in ("expired", "cancelled"):
         db.update_blupal_invoice_status(invoice_id, remote_status)
@@ -157,6 +164,15 @@ async def try_verify_and_finalize(db, invoice_row) -> str:
 
     if remote_status != "paid":
         return "not_paid_yet"
+
+    if remote.get("invoice_id") is not None and str(remote["invoice_id"]) != str(invoice_id):
+        return "error:شناسه فاکتور دریافتی از بلوپال مطابقت ندارد."
+    if remote.get("amount") is not None:
+        try:
+            if int(remote["amount"]) != int(invoice_row["amount_rial"]):
+                return "error:مبلغ پرداخت با فاکتور مطابقت ندارد."
+        except (TypeError, ValueError):
+            return "error:مبلغ دریافتی از بلوپال معتبر نیست."
 
     # علامت‌گذاری یک‌بارمصرف: اگر بین لحظه‌ی خواندن وضعیت و این‌جا، یک مسیر دیگر
     # (مثلاً وب‌هوک) هم‌زمان همین فاکتور را completed کرده باشد، claim دومی هیچ‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
@@ -175,6 +191,10 @@ def extract_invoice_id_from_webhook(body: dict) -> str:
     """شناسه‌ی فاکتور را از بدنه‌ی وب‌هوک بلوپال استخراج می‌کند. خودِ محتوای بدنه
     هرگز به‌عنوان منبع حقیقتِ وضعیت پرداخت استفاده نمی‌شود (نگاه کن به
     try_verify_and_finalize) - فقط برای پیدا کردن شناسه است."""
+    if not isinstance(body, dict):
+        return None
+    if isinstance(body.get("data"), dict):
+        body = body["data"]
     val = body.get("invoice_id")
     if val is not None:
         return str(val)

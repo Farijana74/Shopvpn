@@ -187,6 +187,9 @@ def resolve_tenant_by_slug(slug: str) -> Optional[Tenant]:
         bot_token=row["bot_token"], backup_dir=os.path.join(os.path.dirname(resolved_path), "backups"),
     )
 
+from public_payment_routes import public_payment_router
+app.include_router(public_payment_router(resolve_tenant_by_slug))
+
 # ---------------------------------------------------- live push notifier --
 # یک تسک پس‌زمینه‌ی سبک که هر چند ثانیه دیتابیس را برای سفارش/شارژ/تیکت جدید
 # چک می‌کند و برای ادمین‌های مربوطه Push می‌فرستد؛ چون پنل وب مستقل است و
@@ -839,8 +842,9 @@ def require_full_access_tenant(admin=Depends(get_current_admin)):
     دسترس‌اند. تا قبل از این‌که پنل وب برای نماینده باز شود، همین که کاربر به این پنل وارد
     می‌شد یعنی حتماً سطح ۱ بود؛ حالا که سطح ۲ هم می‌تواند پنل وب داشته باشد، owner پنل او از چک
     require_permission معمولی عبور می‌کند (owner همیشه مجاز است) و باید همین‌جا صریحاً مسدود شود."""
-    # Dedicated reseller tenants are full-access tenants; the separate
-    # ``resellers`` permission remains main-tenant-only via require_permission.
+    tenant = _current_tenant.get()
+    if tenant.bot_id is not None and tenant.db.get_setting("managed_reseller_bot_id", ""):
+        raise HTTPException(403, "پنل و مشخصات فنی محصولات این نمایندگی فقط از بالادست مدیریت می‌شود.")
     return admin
 
 
@@ -1724,7 +1728,7 @@ def api_app_config(admin=Depends(get_current_admin)):
                     {"key": "abangateway_webhook_secret", "label": "کلید مخفی وب‌هوک آبان گیت‌وی", "type": "password"},
                 ]}, {"title": "💳 بلوپال (کارت به کارت خودکار)", "fields": [
                     {"key": "blupal_payment_enabled", "label": "فعال بودن درگاه بلوپال", "type": "bool"},
-                    {"key": "blupal_api_key", "label": "کلید API بلوپال", "type": "password"},
+                    {"key": "blupal_api_key", "label": "کلید API بلوپال", "type": "password", "hint": "آدرس وب‌هوک را در بلوپال ثبت کنید: دامنه عمومی همین پنل + /api/webhooks/blupal"},
                 ]}, {"title": "⭐ NoapayBot - استارز تلگرام (تایید آنی)", "fields": [
                     {"key": "noapay_payment_enabled", "label": "فعال بودن درگاه NoapayBot", "type": "bool"},
                     {"key": "noapay_api_key", "label": "کلید API NoapayBot", "type": "password"},
@@ -3808,7 +3812,12 @@ def api_add_category(body: CategoryBody, admin=Depends(require_permission("catal
 
 @app.put("/api/categories/{cat_id}")
 def api_edit_category(cat_id: int, body: CategoryBody, admin=Depends(require_permission("catalog"))):
-    db.edit_category(cat_id, body.name)
+    name = body.name.strip()
+    if not name or len(name) > 100:
+        raise HTTPException(400, "نام دسته‌بندی باید بین ۱ تا ۱۰۰ کاراکتر باشد.")
+    if not db.get_category(cat_id):
+        raise HTTPException(404, "دسته‌بندی یافت نشد.")
+    db.edit_category(cat_id, name)
     db.log_admin_action(admin["id"], "category_edit", body.name, "category", cat_id)
     return {"ok": True}
 
@@ -7429,11 +7438,16 @@ def api_menu_order_get(admin=Depends(require_permission("settings"))):
         # (break_set is None)، null برمی‌گردد تا فرانت‌اند بداند هنوز از حالت
         # قدیمی «تعداد ستون ثابت» استفاده می‌شود.
         item["break_before"] = (key in break_set) if break_set is not None else None
+        item["icon_custom_emoji_id"] = settings.get(f"{key}_icon_custom_emoji_id", "")
         result.append(item)
     return result
 
 
+from button_emoji import icon_key, validate_icon
+
+
 class MenuButtonToggle(BaseModel):
+    icon_custom_emoji_id: Optional[str] = None
     key: str
     enabled: Optional[bool] = None
     text: Optional[str] = None
@@ -7445,6 +7459,12 @@ def _apply_menu_button_toggles(buttons: Optional[list[MenuButtonToggle]]):
         meta = MENU_BUTTON_META.get(btn.key)
         if not meta:
             continue
+        if btn.icon_custom_emoji_id is not None:
+            try:
+                icon = validate_icon(btn.icon_custom_emoji_id)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+            db.set_setting(icon_key("main_menu", btn.key), icon)
         if meta["toggle_key"] and btn.enabled is not None:
             db.set_setting(meta["toggle_key"], "1" if btn.enabled else "0")
         if btn.text is not None and meta.get("has_text"):
@@ -7499,6 +7519,7 @@ def api_buttons_registry(admin=Depends(require_permission("settings"))):
 
 
 class ButtonItemUpdateBody(BaseModel):
+    icon_custom_emoji_id: Optional[str] = None
     group: str
     key: str
     text: Optional[str] = None
@@ -7509,7 +7530,7 @@ class ButtonItemUpdateBody(BaseModel):
 @app.post("/api/buttons/item")
 def api_buttons_update_item(body: ButtonItemUpdateBody, admin=Depends(require_permission("settings"))):
     try:
-        button_registry.update_item(db, body.group, body.key, text=body.text, style=body.style, enabled=body.enabled)
+        button_registry.update_item(db, body.group, body.key, text=body.text, style=body.style, enabled=body.enabled, icon_custom_emoji_id=body.icon_custom_emoji_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
     db.log_admin_action(

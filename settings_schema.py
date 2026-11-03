@@ -148,13 +148,13 @@ SETTINGS_FORM_SECTIONS = [
                 ],
             },
             {
-                "title": "کانفیگ شخصی/سفارشی",
+                "title": "حجم دلخواه",
                 "fields": [
-                    {"key": "custom_config_enabled", "label": "فعال بودن ساخت کانفیگ شخصی", "type": "bool"},
+                    {"key": "custom_config_enabled", "label": "فعال بودن حجم دلخواه", "type": "bool"},
                     {"key": "custom_config_min_gb", "label": "حداقل حجم مجاز (گیگ)", "type": "number"},
                     {"key": "custom_config_max_gb", "label": "حداکثر حجم مجاز (گیگ)", "type": "number"},
                     {"key": "custom_config_duration_days", "label": "مدت اعتبار (روز)", "type": "number"},
-                    {"key": "btn_custom_config", "label": "متن دکمه ساخت کانفیگ شخصی", "type": "text"},
+                    {"key": "btn_custom_config", "label": "نام بخش حجم دلخواه", "type": "text"},
                 ],
             },
             {

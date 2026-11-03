@@ -57,7 +57,7 @@ class CatalogMixin:
             "description": "لینک اختصاصی می‌گیرید و از هر خرید مشتریانی که با لینک شما وارد شوند، درصدی کمیسیون به کیف پولتان اضافه می‌شود. بدون سرمایه اولیه.",
         },
         {
-            "code": "silver", "title": "نقره‌ای", "icon": "🥈", "model": "discount", "sort_order": 20, "is_enabled": 1,
+            "code": "silver", "title": "تخفیف درصدی", "icon": "🥈", "model": "discount", "sort_order": 20, "is_enabled": 1,
             "membership_fee_toman": 0, "duration_days": 30,
             "summary": "تخفیف دائمی و خرید عمده در بات اصلی",
             "description": "بدون لینک و بدون بات؛ از خود بات اصلی با قیمت تخفیفی می‌خرید و هرچه یک‌جا بیشتر بخرید، تخفیف بیشتر می‌شود.",
@@ -66,8 +66,8 @@ class CatalogMixin:
             "code": "gold", "title": "طلایی", "icon": "🥇", "model": "fixed_product", "sort_order": 30,
             "membership_fee_toman": 0, "duration_days": 30,
             "has_miniapp": 1, "has_web_panel": 1, "has_dedicated_bot": 1,
-            "summary": "فروشگاه شخصی با خرید عمده‌ی محصولات ما",
-            "description": "پنل وب، مینی‌اپ و بات مستقل اختصاصی دارید. محصولات فروشگاه را عمده و پیش‌پرداخت می‌خرید و همان‌ها را می‌فروشید.",
+            "summary": "ربات اختصاصی با محصولات مدیریت‌شده و کیف پول ریالی",
+            "description": "محصولات مجاز ربات اصلی را انتخاب می‌کنید. مشخصات فنی و نرخ تأمین از بالادست دریافت می‌شود و فقط قیمت فروش، توضیحات و وضعیت را مدیریت می‌کنید. می‌توانید نماینده زیرمجموعه هم داشته باشید.",
         },
         {
             "code": "vip", "title": "VIP", "icon": "👑", "model": "volume_credit", "sort_order": 40,
@@ -185,6 +185,8 @@ class CatalogMixin:
 
 
     def delete_category(self, cat_id: int):
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("در نمایندگی فقط قیمت فروش، توضیحات و وضعیت هر محصول قابل تغییر است.")
         def op():
             with self._get_conn() as conn:
                 cur = conn.execute("DELETE FROM categories WHERE id=?", (cat_id,))
@@ -225,6 +227,8 @@ class CatalogMixin:
 
     def apply_bulk_price_change(self, changes, scope="products"):
         """اعمال اتمیک تغییر قیمت و ثبت snapshot کامل برای undo."""
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("در نمایندگی فقط قیمت فروش، توضیحات و وضعیت هر محصول قابل تغییر است.")
         if not changes: return None
         payload=json.dumps(changes, ensure_ascii=False)
         with self._get_conn() as conn:
@@ -262,6 +266,8 @@ class CatalogMixin:
         base_users/extra_user_price/max_users: محدودیت کاربر همزمان (فقط محصولات خودکار).
         base_users=0 یعنی بدون محدودیت؛ ارتقا فقط وقتی فعال است که extra_user_price>0 و
         max_users>base_users باشد."""
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("ایجاد محصول مستقل مجاز نیست؛ محصولات را از بالادست دریافت کنید.")
         pm_value = json.dumps(payment_methods, ensure_ascii=False) if payment_methods else None
         base_users = max(int(base_users or 0), 0) if is_auto_provision else 0
         extra_user_price = max(int(extra_user_price or 0), 0)
@@ -357,6 +363,22 @@ class CatalogMixin:
 
 
     def toggle_product(self, product_id: int):
+        if self.get_setting("managed_reseller_bot_id", ""):
+            product = self.get_product(product_id)
+            if not product or not dict(product).get("upstream_product_id"):
+                raise ValueError("محصول بالادست یافت نشد.")
+            enabled = 0 if product["managed_local_enabled"] else 1
+            if enabled:
+                from managed_resellers import rate
+                from database import Database
+                central = Database(self.get_setting("managed_root_db_path", ""))
+                try:
+                    rate(central, int(self.get_setting("managed_reseller_bot_id")), product["upstream_product_id"])
+                finally:
+                    central.close()
+            with self._get_conn() as conn:
+                conn.execute("UPDATE products SET managed_local_enabled=?,is_active=? WHERE id=?", (enabled,enabled,product_id))
+            return enabled
         with self._get_conn() as conn:
             row = conn.execute("SELECT is_active FROM products WHERE id=?", (product_id,)).fetchone()
             if row:
@@ -398,6 +420,8 @@ class CatalogMixin:
         # Ellipsis استفاده می‌کنند (مثل payment_methods) چون باید بتوان آن‌ها را عمداً
         # NULL/False کرد (مثلاً وقتی محصول از «اتصال مستقیم به پنل» به «بانک کانفیگ»
         # برمی‌گردد) و این با pattern قبلیِ «None یعنی بدون تغییر» فرق دارد.
+        from managed_resellers import validate_edit
+        validate_edit(self, product_id, {k:v for k,v in locals().copy().items() if k not in ("self","product_id") and not callable(v)})
         fields, values = [], []
         if category_id is not None:
             fields.append("category_id=?"); values.append(category_id)
@@ -450,6 +474,8 @@ class CatalogMixin:
     def set_category_products_delivery_mode(self, category_id: int, delivery_mode: str) -> tuple:
         """Apply a delivery mode to every product in a category, while only
         applying Happ modes to active, directly provisioned 3X-UI products."""
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("در نمایندگی فقط قیمت فروش، توضیحات و وضعیت هر محصول قابل تغییر است.")
         if delivery_mode not in ("normal", "happ", "both"):
             raise ValueError("روش تحویل نامعتبر است.")
         with self._get_conn() as conn:
@@ -478,6 +504,8 @@ class CatalogMixin:
                                base_users: int = None):
         """base_users=None: ستون base_users دست نمی‌خورد (رفتار قدیمی).
         base_users=0: محدودیت کاربر کاملاً غیرفعال. base_users>=1: تعداد ثابتِ گنجانده‌شده در قیمت پایه."""
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("در نمایندگی فقط قیمت فروش، توضیحات و وضعیت هر محصول قابل تغییر است.")
         extra_user_price = max(int(extra_user_price or 0), 0)
         max_users = max(int(max_users or 0), 0)
         floor = 1
@@ -500,6 +528,8 @@ class CatalogMixin:
 
 
     def delete_product(self, product_id: int):
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("در نمایندگی فقط قیمت فروش، توضیحات و وضعیت هر محصول قابل تغییر است.")
         with self._get_conn() as conn:
             conn.execute("DELETE FROM products WHERE id=?", (product_id,))
             conn.execute("DELETE FROM product_waitlist WHERE product_id=?", (product_id,))

@@ -98,6 +98,17 @@ def parse_xui_inbound_ids(server) -> list:
 
 
 def get_provider(server) -> BasePanelProvider:
+    if "managed_source_server_id" in server.keys() and server["managed_source_server_id"]:
+        from database import Database
+        central = Database(server["managed_root_db_path"])
+        try:
+            source = central.get_panel_server(server["managed_source_server_id"])
+            if not source or not source["is_active"]:
+                raise PanelError("پنل بالادست فعال نیست.")
+            from managed_resellers import ManagedProvider
+            return ManagedProvider(get_provider(source),server["managed_root_db_path"],server["managed_source_server_id"])
+        finally:
+            central.close()
     panel_type = server["panel_type"]
     cls = PROVIDERS.get(panel_type)
     if cls is None:

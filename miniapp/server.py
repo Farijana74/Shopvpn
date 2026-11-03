@@ -3162,6 +3162,9 @@ async def api_wallet_extra_gateway_invoice(gateway: str, body: NoapayWalletInvoi
     )
 
 
+from public_payment_routes import public_payment_router
+app.include_router(public_payment_router(None, include_callbacks=False))
+
 @app.api_route("/api/pay-return/{gateway}", methods=["GET", "POST"], response_class=HTMLResponse)
 async def api_extra_gateway_return_page(gateway: str):
     return HTMLResponse(
@@ -5922,6 +5925,9 @@ def api_admin_create_reseller(body: ResellerCreate, auth=Depends(require_main_ad
     os.makedirs(RESELLER_DBS_DIR, exist_ok=True)
     db_path = os.path.join(RESELLER_DBS_DIR, f"{body.username}.db")
     reseller_id = db.register_reseller_bot(body.token, body.username, body.owner_telegram_id, body.owner_name, db_path)
+    from managed_resellers import bootstrap
+    bootstrap(db, reseller_id)
+    db.set_user_reseller_tier(body.owner_telegram_id, "gold")
 
     # دیتابیس همین نماینده باید بداند شناسه‌ی خودش را تا لینک مینی‌اپ اختصاصی بسازد
     try:
@@ -6455,10 +6461,10 @@ def api_admin_get_extra_gateways(auth=Depends(require_senior_admin)):
                 "value": "" if field["secret"] else raw,
             })
         hint_url = ""
-        if API_BASE_URL and meta["needs_base_url"]:
+        if extra_gateway_payment.is_configured(db, key) and meta["needs_base_url"]:
             hint_url = (
                 extra_gateway_payment.ipn_url(tenant.tenant_id) if key == "nowpayments"
-                else extra_gateway_payment.callback_url(tenant.tenant_id, key)
+                else extra_gateway_payment.callback_url(tenant.tenant_id, key, db)
             )
         gateways.append({
             "key": key, "title": meta["title"], "icon": meta["icon"], "help": meta["help"],

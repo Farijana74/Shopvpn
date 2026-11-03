@@ -1,3 +1,4 @@
+from aiogram.exceptions import TelegramBadRequest
 # -*- coding: utf-8 -*-
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 """
@@ -28,6 +29,7 @@ from config import (
     WEBHOOK_LISTEN_HOST, WEBHOOK_LISTEN_PORT,
 )
 from database import Database
+from inline_navigation import InlineNavigationMiddleware, send_navigation, without_custom_icons
 from handlers_user import create_user_router
 from business_chat import create_business_router
 from userbot_admin import create_userbot_router
@@ -227,7 +229,17 @@ class TranslatingBot(Bot):
                 if generated:
                     merge_language_catalog(generated)
                     _patch_method_texts(method, generated)
-        return await super().__call__(method, request_timeout=request_timeout)
+        send = super().__call__
+        async def dispatch(outgoing):
+            try:
+                return await send(outgoing, request_timeout=request_timeout)
+            except TelegramBadRequest as exc:
+                error = str(exc).lower()
+                fallback = without_custom_icons(outgoing) if any(part in error for part in ("custom_emoji", "custom emoji", "premium")) else None
+                if fallback is None:
+                    raise
+                return await send(fallback, request_timeout=request_timeout)
+        return await send_navigation(method, dispatch)
 
 
 class AdminPresenceMiddleware:
@@ -443,11 +455,24 @@ class BotManager:
         db = initialized_db if initialized_db is not None else Database(db_path)
         if initialized_db is None:
             await asyncio.to_thread(db.init_db, owner_id=owner_id)
-        # Dedicated reseller bots are intentionally a near-complete copy of the
-        # main bot.  The only missing capability is the main-bot-only reseller
-        # management section (create/approve/manage other full resellers).
-        if not is_main_bot:
-            db.set_setting("bot_role", "full_reseller")
+        # Gold bots use the root-controlled catalog; preserve legacy roles
+        # only for registrations that do not belong to the managed hierarchy.
+        if not is_main_bot and not db.get_setting("managed_reseller_bot_id", ""):
+            from managed_resellers import bootstrap
+            from config import DB_PATH as central_path
+            central = Database(central_path)
+            try:
+                entry = central.get_reseller_bot_by_token(token)
+                if entry:
+                    with central._get_conn() as connection:
+                        marked = connection.execute("SELECT 1 FROM managed_catalog WHERE bot_id=? LIMIT 1", (entry["id"],)).fetchone()
+                    if marked or entry["managed_parent_bot_id"] or central.get_agent_tier(owner_id) == "gold":
+                        await asyncio.to_thread(bootstrap, central, entry["id"], parent_id=entry["managed_parent_bot_id"])
+                        db.close()
+            finally:
+                central.close()
+            if not db.get_setting("managed_reseller_bot_id", ""):
+                db.set_setting("bot_role", "full_reseller")
 
         bot = TranslatingBot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML), translation_db=db)
         # قبلاً MemoryStorage (فقط RAM) بود که با هر ری‌استارت پروسه state‌های
@@ -464,6 +489,7 @@ class BotManager:
             )
             fsm_storage = MemoryStorage()
         dp = Dispatcher(storage=fsm_storage)
+        dp.callback_query.outer_middleware(InlineNavigationMiddleware())
         async def _error_with_report(event: ErrorEvent, _bot=bot, _db=db) -> bool:
             await _report_error_to_group(_bot, _db, event)
             return await _global_error_handler(event)
@@ -500,6 +526,8 @@ class BotManager:
 
         tutorial_hub.install(bot, dp, db)
 
+        from managed_reseller_ui import create_agency_router
+        dp.include_router(create_agency_router(db, is_main_bot))
         if is_main_bot:
             dp.include_router(create_business_router(db, language_mw))
             dp.include_router(create_userbot_router(db))
@@ -591,7 +619,7 @@ class BotManager:
             "reseller_expiry_task": reseller_expiry_task, "signup_gift_task": signup_gift_task,
             "gift_expiry_task": gift_expiry_task, "audit_task": audit_task,
             "season_task": season_task, "quiz_task": quiz_task, "update_check_task": update_check_task,
-            "db_path": db_path,
+            "db_path": db_path, "managed_reseller": bool(db.get_setting("managed_reseller_bot_id", "")),
         }
         logger.info("بات با db_path=%s راه‌اندازی شد.", db_path)
         return True
@@ -696,6 +724,8 @@ class BotManager:
                         )
                     except Exception:
                         logger.exception("راه‌اندازی مجدد بات اصلی ناموفق بود؛ دوباره تلاش می‌شود.")
+                from managed_resellers import reconcile
+                await reconcile(main_db, self)
                 rows = main_db.list_reseller_bots()
                 # نکته (باگ قبلی): نماینده‌های «بدون بات واقعی» (بات_choice=none/inline_link)
                 # با has_live_bot=0 و یک توکن قلابی (مثل "no-bot:123:456") ثبت می‌شوند تا

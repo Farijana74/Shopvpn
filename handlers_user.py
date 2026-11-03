@@ -303,6 +303,19 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         finally:
             reset_language(token)
 
+    @router.message(F.text.in_({"❌ انصراف", "انصراف", "/cancel"}))
+    async def cancel_and_restore_menu(message: Message, state: FSMContext):
+        data = await state.get_data()
+        order_id = data.get("order_id")
+        if order_id:
+            order = await asyncio.to_thread(db.get_order, order_id)
+            if order and order["user_id"] == message.from_user.id and order["status"] == "pending":
+                await asyncio.to_thread(db.reject_order, order_id, "user_cancel")
+        await state.clear()
+        from menu_restore import main_menu_markup
+        markup = await asyncio.to_thread(main_menu_markup, db, message.from_user.id)
+        await message.answer("عملیات لغو شد. از منو انتخاب کنید:", reply_markup=markup)
+
     extra_gateway_user.register_early(router, db, is_main_bot)
 
     async def _safe_edit(message: Message, text: str, reply_markup=None, parse_mode=None) -> None:
@@ -1285,15 +1298,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data == "back_main")
     async def cb_back_main(call: CallbackQuery, state: FSMContext):
         await state.clear()
-        try:
-            await call.message.delete()
-        except Exception:
-            # پیام قدیمی‌تر از ۴۸ ساعت یا از قبل حذف‌شده باشد، تلگرام حذف را رد
-            # می‌کند؛ در این حالت به‌جای کرش، فقط دکمه‌ها را از زیر پیام برمی‌داریم.
-            try:
-                await call.message.edit_reply_markup(reply_markup=None)
-            except Exception:
-                pass
+        markup = await asyncio.to_thread(kb.inline_menu_for_user, db, call.from_user.id, is_main_bot)
+        await _safe_edit(call.message, db.get_text('handlers_user.auto_f368dac9', '📋 منو:'), reply_markup=markup)
         await call.answer()
 
     @router.callback_query(F.data == "back_categories")
@@ -2436,7 +2442,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             if order and order["status"] == "pending":
                 (await asyncio.to_thread(db.reject_order, order_id, "user_cancel"))
         await state.clear()
-        await _safe_edit(call.message, db.get_text('handlers_user.auto_570dedda', 'عملیات لغو شد.'))
+        from menu_restore import main_menu_markup
+        await _safe_edit(call.message, db.get_text('handlers_user.auto_570dedda', 'عملیات لغو شد.'), reply_markup=await asyncio.to_thread(main_menu_markup, db, call.from_user.id))
         await call.answer()
 
     @router.callback_query(F.data == "pay_crypto", BuyFlow.waiting_receipt)
@@ -3934,11 +3941,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data == "acct:main_menu")
     async def cb_account_back_to_main(call: CallbackQuery):
         await call.answer()
-        try:
-            await call.message.delete()
-        except Exception:
-            pass
-        await _send_inline_main_menu(call.message, call.from_user.id)
+        markup = await asyncio.to_thread(kb.inline_menu_for_user, db, call.from_user.id, is_main_bot)
+        await _safe_edit(call.message, db.get_text('handlers_user.auto_f368dac9', '📋 منو:'), reply_markup=markup)
 
     # -----------------------------------------------------------------------
     # سفارش‌های من (منوی کانفیگ‌ها + امکان حذف کامل هر کانفیگ)
@@ -7657,6 +7661,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if req["wants_web_panel"]:
             (await asyncio.to_thread(db.enable_reseller_web_panel, reseller_bot_id))
 
+        if req["tier_code"] == "gold":
+            from managed_resellers import bootstrap
+            # Prepaid supply items affect billing, not catalog availability.
+            await asyncio.to_thread(bootstrap, db, reseller_bot_id)
         started = False
         if bot_manager:
             started = await bot_manager.start_bot(token, db_path, owner_id, is_main_bot=False)
@@ -7665,7 +7673,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         (await asyncio.to_thread(reseller_db.init_db, owner_id=owner_id))
         if req["wants_miniapp"]:
             (await asyncio.to_thread(reseller_db.set_setting, "miniapp_tenant_id", str(reseller_bot_id)))
-        wants_custom_config = "1" if req["wants_custom_config"] else "0"
+        wants_custom_config = "1" if req["wants_custom_config"] and not reseller_db.get_setting("managed_reseller_bot_id", "") else "0"
         (await asyncio.to_thread(reseller_db.set_setting, "custom_config_enabled", wants_custom_config))
 
         (await asyncio.to_thread(db.set_reseller_status, owner_id, True))

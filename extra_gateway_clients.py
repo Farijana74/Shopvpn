@@ -13,7 +13,7 @@ import aiohttp
 logger = logging.getLogger("extra_gateway_clients")
 
 ZARINPAL_BASE = "https://payment.zarinpal.com/pg/v4/payment"
-ZARINPAL_STARTPAY = "https://www.zarinpal.com/pg/StartPay"
+ZARINPAL_STARTPAY = "https://payment.zarinpal.com/pg/StartPay"
 AQAYE_BASE = "https://panel.aqayepardakht.ir"
 TETRA98_BASE = "https://tetra98.com"
 CUBEPAY_BASE = "https://cubevps.ir/smspay/api"
@@ -60,6 +60,10 @@ async def zarinpal_create(merchant_id: str, amount_toman: int, callback_url: str
         return {"remote_id": authority, "payment_url": f"{ZARINPAL_STARTPAY}/{authority}", "meta": {}}
     err = data.get("errors")
     if isinstance(err, dict):
+        if str(err.get("code")) == "-14":
+            from urllib.parse import urlsplit
+            domain = urlsplit(callback_url).hostname or ""
+            raise GatewayError(f"زرین‌پال: دامنه بازگشت «{domain}» با دامنه همین مرچنت مطابقت ندارد (کد -14). آدرس عمومی پرداخت را در تنظیمات درگاه بررسی کنید.")
         raise GatewayError(f"زرین‌پال: {err.get('message') or 'خطای نامشخص'} (کد {err.get('code')})")
     raise GatewayError(f"زرین‌پال پاسخ نامعتبر داد (HTTP {status}).")
 
@@ -67,7 +71,7 @@ async def zarinpal_create(merchant_id: str, amount_toman: int, callback_url: str
 async def zarinpal_verify(merchant_id: str, amount_toman: int, authority: str) -> str:
     status, data = await _request("POST", f"{ZARINPAL_BASE}/verify.json", json_body={
         "merchant_id": merchant_id,
-        "amount": int(amount_toman),
+        "amount": int(amount_toman) * 10,
         "authority": authority,
     })
     body = data.get("data")

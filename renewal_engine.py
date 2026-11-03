@@ -84,6 +84,12 @@ class RenewalError(Exception):
 async def execute_renewal(db, order) -> str:
     """تمدید واقعی را روی پنل/بوکینگ محلی اعمال می‌کند و متن نتیجه را برمی‌گرداند.
     در صورت شکست RenewalError صادر می‌شود (مبلغ را خودِ فراخوان باید مدیریت کند)."""
+    if db.get_setting("managed_reseller_bot_id", ""):
+        from managed_resellers import renew_service, AgencyError
+        try:
+            return await renew_service(db, order)
+        except AgencyError as exc:
+            raise RenewalError(str(exc)) from None
     kind = order["renewal_target_kind"]
     target_id = order["renewal_target_id"]
     mode = order["renewal_mode"]

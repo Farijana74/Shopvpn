@@ -66,6 +66,18 @@ async def _send_tutorial_picker_web(bot_token: str, user_tg_id: int, db) -> None
         pass
 
 
+async def _restore_menu_web(bot_token, user_tg_id, db):
+    if db is not None:
+        import asyncio
+        from menu_restore import main_menu_markup
+        try:
+            markup = await asyncio.to_thread(main_menu_markup, db, user_tg_id)
+            await tg_send(bot_token, user_tg_id, "📋 منو:", reply_markup=markup.model_dump(mode="json", exclude_none=True))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("Restoring post-delivery menu failed for user %s",user_tg_id)
+
+
 async def deliver_config_to_user_web(
     user_tg_id: int,
     product_name: str,
@@ -84,6 +96,7 @@ async def deliver_config_to_user_web(
     if gift_order and gift_order["card_id"]:
         if db.gift_mark_order_delivered(order_id):
             await tg_send(bot_token, user_tg_id, "✅ خرید انجام شد و کانفیگ داخل کارت هدیه قرار گرفت. کارت را از «کیف پول ← 🎁 کارت هدیه ← کارت‌های من» ببینید و برای گیرنده بفرستید.")
+        await _restore_menu_web(bot_token, user_tg_id, db)
         return
     if isinstance(links, str):
         links = [links]
@@ -121,5 +134,6 @@ async def deliver_config_to_user_web(
             pass
 
     await _send_tutorial_picker_web(bot_token, user_tg_id, db)
+    await _restore_menu_web(bot_token, user_tg_id, db)
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 # 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

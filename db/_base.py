@@ -140,6 +140,8 @@ class DatabaseBase:
         فایل نیمه‌نوشته باز کند؛ اولین `_get_conn()` بعدی (که خودش هم منتظر
         همین لاک می‌ماند) یک اتصال تازه و سالم به فایل جدید باز خواهد کرد.
         """
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("بازیابی دیتابیس نمایندگی باید توسط مدیر ربات اصلی انجام شود.")
         backup_dir = os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "backups")
         os.makedirs(backup_dir, exist_ok=True)
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -1571,6 +1573,11 @@ class DatabaseBase:
                 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
             self._migrate_columns(conn)
+            from managed_resellers import install_schema
+            install_schema(conn)
+            conn.execute("UPDATE settings SET value='🛠 حجم دلخواه' WHERE key IN ('btn_custom_config','btn_custom_config_text') AND value IN ('🛠 ساخت کانفیگ شخصی','🛠 کانفیگ شخصی')")
+            conn.execute("UPDATE reseller_tiers SET is_enabled=0 WHERE code NOT IN ('gold','silver')")
+
             # Preserve the delivery format on existing product-backed services.
             conn.execute(
                 "UPDATE custom_configs SET delivery_mode=COALESCE(("
@@ -1884,6 +1891,13 @@ class DatabaseBase:
             ("discount_codes", "product_ids", "TEXT"),
             ("products", "duration_days", "INTEGER DEFAULT 30"),
             ("products", "delivery_mode", "TEXT NOT NULL DEFAULT 'normal'"),
+            ("products", "upstream_product_id", "INTEGER"),
+            ("products", "managed_buy_price", "INTEGER DEFAULT 0"),
+            ("products", "managed_local_enabled", "INTEGER DEFAULT 1"),
+            ("products", "reseller_wholesale_price", "INTEGER"),
+            ("panel_servers", "managed_source_server_id", "INTEGER"),
+            ("panel_servers", "managed_root_db_path", "TEXT"),
+            ("reseller_bots", "managed_parent_bot_id", "INTEGER"),
             ("configs", "expires_at", "TEXT"),
             ("configs", "renewal_reminder_sent", "INTEGER DEFAULT 0"),
             ("configs", "volume_reminder_sent", "INTEGER DEFAULT 0"),
@@ -1897,6 +1911,7 @@ class DatabaseBase:
             ("channel_posts", "poll_json", "TEXT"),
             ("tickets", "department_id", "INTEGER"),
             ("orders", "quantity", "INTEGER DEFAULT 1"),
+            ("orders", "managed_internal", "INTEGER DEFAULT 0"),
             ("orders", "config_name", "TEXT"),
             ("orders", "provision_username_generated", "INTEGER NOT NULL DEFAULT 0"),
             ("configs", "order_id", "INTEGER"),
@@ -1970,6 +1985,7 @@ class DatabaseBase:
             ("custom_configs", "volume_reminder_sent", "INTEGER DEFAULT 0"),
             ("custom_configs", "source", "TEXT DEFAULT 'custom_config'"),
             ("custom_configs", "delivery_mode", "TEXT"),
+            ("custom_configs", "upstream_config_id", "INTEGER"),
             ("custom_configs", "reseller_product_id", "INTEGER"),
             ("custom_configs", "enabled", "INTEGER DEFAULT 1"),
             ("custom_configs", "auto_renew", "INTEGER DEFAULT 0"),

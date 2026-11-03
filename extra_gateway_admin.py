@@ -54,12 +54,12 @@ def gateway_settings_text(db, key: str) -> str:
     lines = [f"{meta['icon']} تنظیم درگاه {meta['title']}", "", meta["help"]]
     tenant_id = db.get_setting("miniapp_tenant_id", "")
     if meta["needs_base_url"]:
-        if not API_BASE_URL:
-            lines += ["", "⚠️ MINIAPP_URL روی سرور تنظیم نشده؛ بدون آن این درگاه فعال نمی‌شود."]
+        if not egp.is_configured(db, key):
+            lines += ["", "⚠️ تنظیمات درگاه یا آدرس عمومی پرداخت کامل نیست."]
         elif key == "nowpayments":
             lines += ["", f"🔗 آدرس IPN:\n{egp.ipn_url(tenant_id)}"]
         else:
-            lines += ["", f"🔗 آدرس برگشت (باید با دامنه‌ی ثبت‌شده در درگاه یکی باشد):\n{egp.callback_url(tenant_id, key)}"]
+            lines += ["", f"🔗 آدرس برگشت (باید با دامنه‌ی ثبت‌شده در درگاه یکی باشد):\n{egp.callback_url(tenant_id, key, db)}"]
     lines += ["", "حداقل مبلغ این درگاه را از «حداقل مبلغ پرداخت‌ها» در همین بخش مالی تنظیم کن."]
     return "\n".join(lines)
 

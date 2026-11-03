@@ -140,8 +140,14 @@ class SystemMixin:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, value),
             )
+            if key in ("btn_custom_config", "btn_custom_config_text"):
+                alias = "btn_custom_config_text" if key == "btn_custom_config" else "btn_custom_config"
+                conn.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(alias,value))
         if self._settings_cache is not None:
             self._settings_cache[key] = value
+            if key in ("btn_custom_config", "btn_custom_config_text"):
+                self._settings_cache["btn_custom_config"] = value
+                self._settings_cache["btn_custom_config_text"] = value
 
 
     def get_all_settings(self) -> dict:

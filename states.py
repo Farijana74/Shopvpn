@@ -138,6 +138,10 @@ class AdminSetTranslationOpenRouterKey(StatesGroup):
     waiting_key = State()
 
 
+class AdminRenameCategory(StatesGroup):
+    waiting_name = State()
+
+
 class AdminAddCategory(StatesGroup):
     waiting_name = State()
 

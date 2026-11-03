@@ -1,3 +1,4 @@
+from button_emoji import button_icon
 # -*- coding: utf-8 -*-
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 """
@@ -269,20 +270,17 @@ def main_menu_inline_kb(db, is_admin: bool, is_reseller: bool = False, is_main_b
 
     def _build_button(key, text, style):
         if key == "miniapp" and miniapp_url:
-            return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=miniapp_url))
+            return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=miniapp_url), icon_custom_emoji_id=button_icon(db, f"{key}_style"))
         s = style if style in ("primary", "success", "danger") else None
-        return InlineKeyboardButton(text=text, callback_data=f"mm:{key}", style=s)
+        return InlineKeyboardButton(text=text, callback_data=f"mm:{key}", style=s, icon_custom_emoji_id=button_icon(db, f"{key}_style"))
 
     rows = [[_build_button(key, tr(text), style) for key, text, style in row] for row in item_rows]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _show_commission_reseller_request(db, user_tg_id: int, is_main_bot: bool) -> bool:
-    return (
-        is_main_bot
-        and not db.is_inline_reseller(user_tg_id)
-        and not db.get_pending_commission_reseller_request_for_user(user_tg_id)
-    )
+    # New applications use the two supported tiers; existing commissions remain recorded.
+    return False
 
 
 def menu_for_user(db, user_tg_id: int, is_main_bot: bool = True):
@@ -354,10 +352,10 @@ def categories_kb(db, categories, is_main_bot: bool = True) -> InlineKeyboardMar
     rows = []
     custom_enabled = db.get_setting("custom_config_enabled", "0") == "1" or db.count_active_custom_config_products() > 0
     if db.is_full_access_bot(is_main_bot) and custom_enabled:
-        text = db.get_setting("btn_custom_config_text", "🛠 ساخت کانفیگ شخصی")
+        text = db.get_setting("btn_custom_config_text", "🛠 حجم دلخواه")
         rows.append([_styled_inline(db, text, "custom_config_start", "btn_custom_config_style")])
     for cat in categories:
-        rows.append([_styled_inline(db, f"📁 {cat['name']}", f"cat:{cat['id']}", "btn_cat_select_style")])
+        rows.append([_styled_inline(db, f"{cat['name']}", f"cat:{cat['id']}", "btn_cat_select_style")])
     back_text = db.get_setting("btn_buy_back_text", "⬅️ بازگشت")
     rows.append([_styled_inline(db, back_text, "back_main", "btn_buy_back_style")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1610,6 +1608,7 @@ def support_contact_settings_kb(db) -> InlineKeyboardMarkup:
 
 # لیست دکمه‌های پنل مدیریت: (کلید تنظیمات رنگ, متن, callback_data)
 ADMIN_PANEL_ITEMS = [
+    ("adm_agency", "🏪 مدیریت نمایندگی طلایی", "agency:home"),
     ("adm_categories", "📂 مدیریت دسته‌بندی‌ها", "adm_categories"),
     ("adm_products", "📦 مدیریت محصولات", "adm_products"),
     ("adm_my_volume", "📊 حجم و پنل من", "adm_my_volume"),
@@ -1639,7 +1638,7 @@ ADMIN_PANEL_ITEMS = [
     ("adm_connect_alert_settings", "🔌 هشدار اتصال/عدم‌اتصال کانفیگ", "adm_connect_alert_settings"),
     ("adm_early_renewal_discount", "🎁 تخفیف تمدید کامل زودهنگام", "adm_early_renewal_discount"),
     ("adm_stock_alert_settings", "📦 آستانه‌ی هشدار موجودی", "adm_stock_alert_settings"),
-    ("adm_custom_config_settings", "🛠 ساخت کانفیگ شخصی", "adm_custom_config_settings"),
+    ("adm_custom_config_settings", "🛠 حجم دلخواه", "adm_custom_config_settings"),
     ("adm_panel_servers", "🖥 مدیریت پنل‌های VPN", "adm_panel_servers"),
     ("adm_ssh_menu", "🔐 مدیریت SSH و سهمیه", "adm_ssh_menu"),
     ("adm_renewal_pricing", "💳 قیمت‌گذاری تمدید حجم/زمان", "adm_renewal_pricing"),
@@ -1709,7 +1708,7 @@ ADMIN_PANEL_ITEMS += [
 def _styled_inline(db, text: str, callback_data: str, style_key: str) -> InlineKeyboardButton:
     style_value = db.get_setting(style_key, "")
     style = style_value if style_value in ("primary", "success", "danger") else None
-    return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
+    return InlineKeyboardButton(text=text, callback_data=callback_data, style=style, icon_custom_emoji_id=button_icon(db, style_key))
 
 
 # ---------------------------------------------------------------------------
@@ -1746,6 +1745,7 @@ ADMIN_PANEL_CATEGORIES = [
         "adm_renewal_pricing",
     ]),
     ("resellers", "🤝 نمایندگی‌ها", [
+        "adm_agency",
         "adm_resellers_menu",
         "adm_credit_resellers_menu",
         "adm_commission_resellers_menu",
@@ -2035,8 +2035,8 @@ def _ubtn(db, key: str, default_text: str, callback_data: str = None, url: str =
     style_value = db.get_setting(f"ubtn_{key}_style", "")
     style = style_value if style_value in ("primary", "success", "danger") else None
     if url:
-        return InlineKeyboardButton(text=text, url=url, style=style)
-    return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
+        return InlineKeyboardButton(text=text, url=url, style=style, icon_custom_emoji_id=button_icon(db, f"ubtn_{key}_style"))
+    return InlineKeyboardButton(text=text, callback_data=callback_data, style=style, icon_custom_emoji_id=button_icon(db, f"ubtn_{key}_style"))
 
 
 def _admin_item_exists(key: str) -> bool:
@@ -2064,6 +2064,13 @@ def admin_category_item_keys(db, cat_key: str) -> list:
 
 def admin_panel_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
     """کیبورد سطح اول پنل مدیریت: فقط دسته‌ها نمایش داده می‌شوند، نه هر ۲۶ آیتم."""
+    if db.get_setting("managed_reseller_bot_id", ""):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏪 مدیریت نمایندگی و محصولات",callback_data="agency:home")],
+            [InlineKeyboardButton(text="📦 سفارش‌ها",callback_data="adm_pending_orders")],
+            [InlineKeyboardButton(text="💳 تنظیمات پرداخت",callback_data="adm_cat:finance")],
+            [InlineKeyboardButton(text="👤 کاربران",callback_data="adm_users")],
+            [InlineKeyboardButton(text="⬅️ منوی اصلی",callback_data="acct:main_menu")]])
     entries = []
     for cat_key, cat_label, _item_keys in _ordered_admin_categories(db):
         item_keys = admin_category_item_keys(db, cat_key)
@@ -2691,7 +2698,7 @@ def deeplink_discount_picker_kb(codes, back_callback: str) -> InlineKeyboardMark
 
 def deeplink_product_categories_kb(categories, back_callback: str) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"📁 {cat['name']}", callback_data=f"adm_dlp_prodcat:{cat['id']}")]
+        [InlineKeyboardButton(text=f"{cat['name']}", callback_data=f"adm_dlp_prodcat:{cat['id']}")]
         for cat in categories
     ]
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data=back_callback)])
@@ -2727,6 +2734,7 @@ def admin_categories_kb(categories) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(text=f"{state_icon} {cat['name']}", callback_data="noop"),
+                InlineKeyboardButton(text=tr("✏️ تغییر نام"), callback_data=f"adm_cat_rename:{cat['id']}"),
                 InlineKeyboardButton(text=tr("تغییر وضعیت"), callback_data=f"adm_cat_toggle:{cat['id']}"),
                 InlineKeyboardButton(text=tr("🗑حذف"), callback_data=f"adm_cat_del:{cat['id']}"),
             ]
@@ -2763,7 +2771,7 @@ def admin_custom_gateways_kb(gateways) -> InlineKeyboardMarkup:
 def admin_bulk_price_scope_kb(categories, panels):
     rows=[[InlineKeyboardButton(text=tr("🌐 همه دسته‌ها"), callback_data="adm_bprice_cat:all")]]
     for c in categories:
-        rows.append([InlineKeyboardButton(text=f"📁 {c['name']}", callback_data=f"adm_bprice_cat:{c['id']}")])
+        rows.append([InlineKeyboardButton(text=f"{c['name']}", callback_data=f"adm_bprice_cat:{c['id']}")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:products")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2845,7 +2853,7 @@ def admin_bulk_wallet_credit_confirm_kb() -> InlineKeyboardMarkup:
 def admin_products_categories_kb(categories, prefix="adm_prod_cat") -> InlineKeyboardMarkup:
     rows = []
     for cat in categories:
-        rows.append([InlineKeyboardButton(text=f"📁 {cat['name']}", callback_data=f"{prefix}:{cat['id']}")])
+        rows.append([InlineKeyboardButton(text=f"{cat['name']}", callback_data=f"{prefix}:{cat['id']}")])
     rows.append([InlineKeyboardButton(text=tr("➕ افزودن محصول جدید"), callback_data="adm_prod_add")])
     rows.append([InlineKeyboardButton(text=tr("💰 ویرایش گروهی قیمت"), callback_data="adm_bulk_price")])
     rows.append([InlineKeyboardButton(text=tr("↩️ Undo تغییرات قیمت"), callback_data="adm_bulk_price_undo")])
@@ -3120,7 +3128,7 @@ def admin_custom_config_payment_methods_kb(db) -> InlineKeyboardMarkup:
 def admin_pick_category_kb(categories, prefix) -> InlineKeyboardMarkup:
     rows = []
     for cat in categories:
-        rows.append([InlineKeyboardButton(text=f"📁 {cat['name']}", callback_data=f"{prefix}:{cat['id']}")])
+        rows.append([InlineKeyboardButton(text=f"{cat['name']}", callback_data=f"{prefix}:{cat['id']}")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:products")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3894,7 +3902,7 @@ def discount_scope_picker_kb() -> InlineKeyboardMarkup:
 
 def discount_scope_categories_kb(categories) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"📁 {cat['name']}", callback_data=f"adm_disc_scope_cat:{cat['id']}")]
+        [InlineKeyboardButton(text=f"{cat['name']}", callback_data=f"adm_disc_scope_cat:{cat['id']}")]
         for cat in categories
     ]
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_disc_scope_back")])

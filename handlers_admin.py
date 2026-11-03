@@ -85,6 +85,7 @@ from states import (
     AdminConfigManage,
     AdminCreateWalletGift,
     AdminAddCategory,
+    AdminRenameCategory,
     AdminAddProduct,
     AdminEditProduct,
     AdminAddConfigs,
@@ -518,9 +519,10 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
     # -------------------------------------------------------------------
 
     @router.callback_query(F.data == "adm_categories")
-    async def cb_admin_categories(call: CallbackQuery):
+    async def cb_admin_categories(call: CallbackQuery, state: FSMContext):
         if not senior_admin_only(call.from_user.id):
             return await deny_mid(call)
+        await state.clear()
         try:
             categories = (await asyncio.to_thread(db.get_categories, active_only=False))
             await replace_admin_view(call, tr("📂 مدیریت دسته‌بندی‌ها:"), kb.admin_categories_kb(categories))
@@ -563,6 +565,39 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await call.answer(db.get_text('handlers_admin.auto_333cfcc1', 'دسته\u200cبندی حذف شد.'))
         except Exception:
             await call.answer(db.get_text('handlers_admin.auto_f0a51b8a', '⚠️ حذف دسته\u200cبندی ناموفق بود. دوباره تلاش کنید.'), show_alert=True)
+
+    @router.callback_query(F.data.startswith("adm_cat_rename:"))
+    async def cb_admin_cat_rename(call: CallbackQuery, state: FSMContext):
+        if not senior_admin_only(call.from_user.id):
+            return await deny_mid(call)
+        cat_id = callback_id(call.data, "adm_cat_rename")
+        category = await asyncio.to_thread(db.get_category, cat_id) if cat_id else None
+        if not category:
+            return await call.answer("دسته‌بندی یافت نشد.", show_alert=True)
+        await state.set_state(AdminRenameCategory.waiting_name)
+        await state.update_data(rename_category_id=cat_id)
+        await safe_edit(call, "نام جدید دسته‌بندی را ارسال کنید:", reply_markup=kb.admin_back_kb("adm_categories"))
+        await call.answer()
+
+    @router.message(AdminRenameCategory.waiting_name)
+    async def process_rename_category(message: Message, state: FSMContext):
+        if not senior_admin_only(message.from_user.id):
+            return
+        name = (message.text or "").strip()
+        if not name or len(name) > 100:
+            await message.answer("نام دسته‌بندی باید بین ۱ تا ۱۰۰ کاراکتر باشد.")
+            return
+        data = await state.get_data()
+        cat_id = data.get("rename_category_id")
+        if not cat_id or not await asyncio.to_thread(db.get_category, cat_id):
+            await state.clear()
+            await message.answer("دسته‌بندی یافت نشد.")
+            return
+        await asyncio.to_thread(db.edit_category, cat_id, name)
+        await asyncio.to_thread(db.log_admin_action, message.from_user.id, "category_edit", name)
+        await state.clear()
+        categories = await asyncio.to_thread(db.get_categories, active_only=False)
+        await message.answer("✅ نام دسته‌بندی تغییر کرد.", reply_markup=kb.admin_categories_kb(categories))
 
     @router.callback_query(F.data == "adm_cat_add")
     async def cb_admin_cat_add(call: CallbackQuery, state: FSMContext):
@@ -9221,6 +9256,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                             pass
 
             reseller_id = (await asyncio.to_thread(db.register_reseller_bot, token, username, owner_id, owner_name, db_path))
+            from managed_resellers import bootstrap
+            await asyncio.to_thread(bootstrap, db, reseller_id)
+            await asyncio.to_thread(db.set_user_reseller_tier, owner_id, "gold")
 
             started = False
             if bot_manager:

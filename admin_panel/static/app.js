@@ -3755,7 +3755,8 @@ async function renderCatalog() {
       <tbody>${categories.map(c => `<tr>
         <td>${esc(c.name)}</td>
         <td>${c.is_active ? '<span class="badge badge-approved">فعال</span>' : '<span class="badge badge-rejected">غیرفعال</span>'}</td>
-        <td><button class="btn btn-sm" data-toggle-cat="${c.id}">${c.is_active ? 'غیرفعال کن' : 'فعال کن'}</button>
+        <td><button class="btn btn-sm" data-rename-cat="${c.id}">تغییر نام</button>
+              <button class="btn btn-sm" data-toggle-cat="${c.id}">${c.is_active ? 'غیرفعال کن' : 'فعال کن'}</button>
         <button class="btn btn-danger btn-sm" data-del-cat="${c.id}">حذف</button></td>
       </tr>`).join('') || '<tr><td colspan="3" class="empty-state">دسته‌بندی‌ای نیست</td></tr>'}</tbody></table></div></div>`;
     $('#add-cat').addEventListener('click', () => openModal('دسته‌بندی جدید', `
@@ -3764,6 +3765,16 @@ async function renderCatalog() {
       $('#cat-save', b).addEventListener('click', async () => {
         const name = $('#cat-name', b).value.trim(); if (!name) return;
         try { await apiPost('/categories', { name }); toast('اضافه شد.'); close(); renderCatalog(); } catch (e) { handleErr(e); }
+      });
+    }));
+    $$('[data-rename-cat]', body).forEach(button => button.addEventListener('click', () => {
+      const category = categories.find(c => String(c.id) === button.dataset.renameCat);
+      openModal('تغییر نام دسته‌بندی', `<div class="form-grid"><input class="input" id="cat-rename" maxlength="100" value="${esc(category.name)}"><button class="btn btn-primary" id="cat-rename-save">ذخیره</button></div>`, (modal, close) => {
+        $('#cat-rename-save', modal).addEventListener('click', async () => {
+          const name = $('#cat-rename', modal).value.trim();
+          if (!name) return;
+          try { await apiPut(`/categories/${category.id}`, {name}); close(); toast('نام تغییر کرد.'); renderCatalog(); } catch (error) { handleErr(error); }
+        });
       });
     }));
     $$('[data-toggle-cat]', body).forEach(b => b.addEventListener('click', async () => {
@@ -4019,6 +4030,7 @@ function renderCatalogBrutalist(categories, products, panelServers, sshNodes, pa
             <span class="bru-cat-name">${esc(c.name)}</span>
             <span class="bru-flag ${c.is_active ? 'bru-flag-ok' : 'bru-flag-no'}">${c.is_active ? 'فعال' : 'غیرفعال'}</span>
             <div class="bru-cat-actions">
+              <button class="btn btn-sm" data-rename-cat="${c.id}">تغییر نام</button>
               <button class="btn btn-sm" data-toggle-cat="${c.id}">${c.is_active ? 'غیرفعال کن' : 'فعال کن'}</button>
               <button class="btn btn-danger btn-sm" data-del-cat="${c.id}">حذف</button>
             </div>
@@ -4031,6 +4043,16 @@ function renderCatalogBrutalist(categories, products, panelServers, sshNodes, pa
       $('#cat-save', b).addEventListener('click', async () => {
         const name = $('#cat-name', b).value.trim(); if (!name) return;
         try { await apiPost('/categories', { name }); toast('اضافه شد.'); close(); renderCatalog(); } catch (e) { handleErr(e); }
+      });
+    }));
+    $$('[data-rename-cat]', body).forEach(button => button.addEventListener('click', () => {
+      const category = categories.find(c => String(c.id) === button.dataset.renameCat);
+      openModal('تغییر نام دسته‌بندی', `<div class="form-grid"><input class="input" id="cat-rename" maxlength="100" value="${esc(category.name)}"><button class="btn btn-primary" id="cat-rename-save">ذخیره</button></div>`, (modal, close) => {
+        $('#cat-rename-save', modal).addEventListener('click', async () => {
+          const name = $('#cat-rename', modal).value.trim();
+          if (!name) return;
+          try { await apiPut(`/categories/${category.id}`, {name}); close(); toast('نام تغییر کرد.'); renderCatalog(); } catch (error) { handleErr(error); }
+        });
       });
     }));
     $$('[data-toggle-cat]', body).forEach(b => b.addEventListener('click', async () => {
@@ -8227,7 +8249,7 @@ function bsInspectorHtml(g) {
   return `
     <div class="bs-insp-head"><b dir="auto">${esc(it.label)}</b><code>${esc(it.key)}</code>
       <button type="button" class="btn btn-ghost btn-sm bs-close" data-bs-act="close" title="بستن">✕</button></div>
-    ${text}${swatches}${toggle}${arrows}${catSel}
+    ${text}${it.has_style ? `<label class="bs-field"><span>شناسه ایموجی پرمیوم</span><input class="input" id="bs-emoji" inputmode="numeric" value="${esc(it.icon_custom_emoji_id || '')}" placeholder="Custom Emoji ID"><small>شناسه عددی ایموجی؛ خالی برای حذف. حساب مالک ربات باید مجوز استفاده از ایموجی پرمیوم داشته باشد.</small></label>` : ''}${swatches}${toggle}${arrows}${catSel}
     ${!it.has_text && !it.has_style && !it.togglable ? '<p class="card-sub">این دکمه متن/رنگ قابل ویرایش ندارد.</p>' : ''}
     <button type="button" class="btn btn-primary bs-insp-save" data-bs-act="save" ${bsChangeCount() ? '' : 'disabled'}>ذخیره تغییرات</button>`;
 }
@@ -8523,6 +8545,7 @@ async function bsSaveAll() {
       if (gk === 'main_menu') {
         const buttons = edited.map(i => ({
           key: i.key,
+          icon_custom_emoji_id: i.icon_custom_emoji_id || '',
           enabled: i.togglable ? !!i.enabled : undefined,
           text: i.has_text ? i.text : undefined,
           style: i.has_style ? i.style : undefined,
@@ -8536,7 +8559,7 @@ async function bsSaveAll() {
       }
       for (const it of edited) {
         if (!it.has_text && !it.has_style && !it.togglable) continue;
-        await apiPost('/buttons/item', { group: gk, key: it.key, text: it.has_text ? it.text : undefined, style: it.has_style ? it.style : undefined, enabled: it.togglable ? !!it.enabled : undefined });
+        await apiPost('/buttons/item', { group: gk, key: it.key, icon_custom_emoji_id: it.icon_custom_emoji_id || '', text: it.has_text ? it.text : undefined, style: it.has_style ? it.style : undefined, enabled: it.togglable ? !!it.enabled : undefined });
       }
     }
     toast('ذخیره شد.');
@@ -8589,6 +8612,11 @@ function bsWire() {
     }
   });
   root.addEventListener('input', (e) => {
+    if (e.target.id === 'bs-emoji' && BS.sel) {
+      const g = BS.groups[BS.cur];
+      bsItem(g, BS.sel).icon_custom_emoji_id = e.target.value.trim(); bsMarkEdited(g, BS.sel);
+      bsRenderTop(); const save = $('.bs-insp-save'); if (save) save.disabled = false;
+    }
     if (e.target.id === 'bs-text' && BS.sel) {
       const g = BS.groups[BS.cur];
       bsItem(g, BS.sel).text = e.target.value; bsMarkEdited(g, BS.sel);

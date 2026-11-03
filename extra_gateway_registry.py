@@ -13,8 +13,9 @@ GATEWAYS = {
         "needs_base_url": True,
         "fields": [
             {"setting": "zarinpal_merchant_id", "label": "مرچنت کد", "secret": True, "required": True, "numeric": False},
+            {"setting": "zarinpal_callback_base_url", "label": "آدرس عمومی پرداخت روی دامنه ثبت‌شده (خالی = آدرس API یا پنل وب)", "secret": False, "required": False, "numeric": False},
         ],
-        "help": "مرچنت کد را از پنل زرین‌پال بگیر. مبلغ به تومان ارسال می‌شود.",
+        "help": "مرچنت کد و دامنه ثبت‌شده باید مربوط به یک درگاه باشند. آدرس عمومی پرداخت باید به همین برنامه متصل باشد. مبلغ به تومان ارسال می‌شود.",
     },
     "aqayepardakht": {
         "title": "آقای پرداخت",

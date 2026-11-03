@@ -13,6 +13,9 @@ class ResellersMixin:
                 f"INSERT OR IGNORE INTO reseller_tiers ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                 [row[c] for c in cols],
             )
+        conn.execute("UPDATE reseller_tiers SET is_enabled=0 WHERE code NOT IN ('gold','silver')")
+        conn.execute("UPDATE reseller_tiers SET title='تخفیف درصدی' WHERE code='silver' AND title='نقره‌ای'")
+        conn.execute("UPDATE reseller_tiers SET summary='ربات اختصاصی با محصولات مدیریت‌شده و کیف پول ریالی' WHERE code='gold' AND summary='فروشگاه شخصی با خرید عمده‌ی محصولات ما'")
         # مهاجرت یک‌باره: نسخه‌های قبلی نقره‌ای را به‌صورت پیش‌فرض خاموش داشتند؛
         # در سیستم چهارسطحی جدید هر چهار سطح باید قابل درخواست باشند. بعد از یک‌بار
         # اعمال، ادمین می‌تواند نقره‌ای را دوباره دستی غیرفعال کند.
@@ -66,9 +69,9 @@ class ResellersMixin:
 
 
     def list_reseller_tiers(self, enabled_only: bool = False):
-        query = "SELECT * FROM reseller_tiers"
+        query = "SELECT * FROM reseller_tiers WHERE code IN ('gold','silver')"
         if enabled_only:
-            query += " WHERE is_enabled=1"
+            query += " AND is_enabled=1"
         with self._get_conn() as conn:
             return conn.execute(query + " ORDER BY sort_order, code").fetchall()
 

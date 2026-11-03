@@ -88,6 +88,8 @@ class PanelsMixin:
 
     def add_panel_server(self, name: str, panel_type: str, api_url: str,
                           api_username: str, api_password: str, default_group: str = None) -> int:
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("افزودن یا تغییر پنل در نمایندگی مجاز نیست؛ پنل از ربات اصلی مدیریت می‌شود.")
         with self._get_conn() as conn:
             row = conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM panel_servers WHERE is_mirror=0 OR is_mirror IS NULL").fetchone()
             sort_order = int(row["m"] or -1) + 1
@@ -100,6 +102,8 @@ class PanelsMixin:
 
 
     def update_panel_server(self, server_id: int, **fields):
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("افزودن یا تغییر پنل در نمایندگی مجاز نیست؛ پنل از ربات اصلی مدیریت می‌شود.")
         allowed = {"name", "panel_type", "api_url", "api_username", "api_password",
                    "default_group", "is_active", "template_username", "group_ids", "proxy_settings",
                    "socks_proxy",

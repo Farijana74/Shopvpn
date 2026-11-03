@@ -58,6 +58,12 @@ async def provision_direct(db, product, quantity: int = 1, user_id: int = None, 
 
     اگر user_id داده شود، هر واحد ساخته‌شده در custom_configs (source='direct_product')
     هم ثبت می‌شود تا هشدار اتمام حجم/زمان و «سرویس‌های من» آن را ببینند."""
+    if "upstream_product_id" in product.keys() and product["upstream_product_id"]:
+        from managed_resellers import provision, AgencyError
+        try:
+            return await provision(db, product, quantity, user_id, order_id)
+        except AgencyError as exc:
+            raise ProvisionError(str(exc)) from None
     ssh_node_id = None
     try:
         ssh_node_id = product["provision_ssh_node_id"]

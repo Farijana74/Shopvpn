@@ -52,7 +52,7 @@ async def _request(method: str, api_key: str, path: str, json_body: dict = None)
                 method, url, headers=_headers(api_key), json=json_body, timeout=aiohttp.ClientTimeout(total=20)
             ) as resp:
                 try:
-                    data = await resp.json()
+                    data = await resp.json(content_type=None)
                 except Exception:
                     data = {}
                 status = resp.status
@@ -60,13 +60,17 @@ async def _request(method: str, api_key: str, path: str, json_body: dict = None)
         logger.warning("خطای شبکه در ارتباط با بلوپال: %s", e)
         raise BluPalError(f"خطای شبکه در ارتباط با درگاه پرداخت: {e}")
 
+    if not isinstance(data, dict) or not data:
+        raise BluPalError("پاسخ بلوپال JSON معتبر ندارد؛ آدرس API و دسترسی شبکه را بررسی کنید.", http_status=status)
     if status >= 400 or data.get("success") is False:
         code = data.get("error")
         message = data.get("message") or "خطای نامشخص از بلوپال"
         logger.warning("خطای بلوپال (%s): %s - %s", status, code, message)
         raise BluPalError(message, code=code, http_status=status)
 
-    return data
+    # Some API responses wrap invoice fields inside data/invoice.
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    return payload.get("invoice") if isinstance(payload.get("invoice"), dict) else payload
 
 
 async def create_invoice(api_key: str, amount_rial: int, card_number: str = None) -> dict:
