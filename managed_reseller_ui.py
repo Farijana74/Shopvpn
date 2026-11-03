@@ -16,6 +16,10 @@ class AgencyFlow(StatesGroup):
     token=State()
     owner=State()
     trials=State()
+    trial_hours=State()
+    trial_cost=State()
+    trial_panel=State()
+    trial_confirm=State()
 
 
 def create_agency_router(local, is_main_bot):
@@ -80,17 +84,48 @@ def create_agency_router(local, is_main_bot):
             if action=='home':
                 await state.clear()
                 await display(call,'مدیریت نمایندگی طلایی',home_rows())
-            elif action in ('trials','trials_off'):
-                if not is_main_bot or not root.is_senior_admin(call.from_user.id):raise AgencyError('تنظیم حجم و هزینه تست فقط در اختیار مدیر ارشد ربات اصلی است.')
-                from managed_trials import trial_policy,POLICY_KEY
+            elif action in ('trials','trials_off','trial_panels','trial_panel','trial_save'):
+                if not is_main_bot or not root.is_senior_admin(call.from_user.id):raise AgencyError('این تنظیم فقط در اختیار مدیر ارشد ربات اصلی است.')
+                from managed_trials import trial_policy,configure_panel_trials,POLICY_KEY
                 import json
-                policy=trial_policy(root)
-                if action=='trials_off':
-                    policy['enabled']=False
-                    root.set_setting(POLICY_KEY,json.dumps(policy))
-                await state.set_state(AgencyFlow.trials)
-                status='فعال' if policy.get('enabled') else 'غیرفعال'
-                await display(call,f"تست نماینده‌ها: {status}\nمحصول پایه: {policy.get('product_id','—')} | حجم: {policy.get('volume_mb','—')} مگابایت | مدت: {policy.get('hours','—')} ساعت | هزینه هر تست: {policy.get('cost','—')} تومان\n\nشناسه محصول پایه مجاز نماینده‌ها، حجم مگابایت، مدت ساعت و هزینه تومان را با فاصله بفرستید. مثال: 12 512 24 1000\nتست برای مشتری رایگان است؛ هزینه از کیف پول زنجیره نماینده‌ها کسر می‌شود. هزینه صفر نیز مجاز است.",[[Button(text='غیرفعال‌کردن تست نماینده‌ها',callback_data='agency:trials_off')],[Button(text='بازگشت',callback_data='agency:home')]])
+                if action in ('trials','trials_off'):
+                    await state.clear()
+                    policy=trial_policy(root)
+                    if action=='trials_off':
+                        policy['enabled']=False
+                        await asyncio.to_thread(root.set_setting,POLICY_KEY,json.dumps(policy))
+                        await display(call,'تست نماینده‌ها غیرفعال شد.',[[Button(text='تنظیم دوباره',callback_data='agency:trials')],[Button(text='بازگشت',callback_data='agency:home')]])
+                    else:
+                        await state.set_state(AgencyFlow.trials)
+                        await display(call,'حجم هر سرویس تست چند مگابایت باشد؟\nمثلاً 512 برای نیم گیگابایت.',[[Button(text='غیرفعال‌کردن تست نماینده‌ها',callback_data='agency:trials_off')],[Button(text='انصراف',callback_data='agency:home')]])
+                elif action=='trial_panels':
+                    if await state.get_state() not in (AgencyFlow.trial_panel.state,AgencyFlow.trial_confirm.state):raise AgencyError('ابتدا تنظیم تست را از ابتدا شروع کنید.')
+                    await state.set_state(AgencyFlow.trial_panel)
+                    servers=await asyncio.to_thread(root.get_panel_servers,True)
+                    servers=[s for s in servers if not dict(s).get('managed_source_server_id')]
+                    if not servers:raise AgencyError('هیچ پنل فعالی در ربات اصلی ثبت نشده است.')
+                    page=max(0,int(parts[2]) if len(parts)>2 else 0)
+                    rows=[[Button(text=s['name'],callback_data=f"agency:trial_panel:{s['id']}")] for s in servers[page*30:(page+1)*30]]
+                    nav=[]
+                    if page:nav.append(Button(text='قبلی',callback_data=f'agency:trial_panels:{page-1}'))
+                    if (page+1)*30<len(servers):nav.append(Button(text='بعدی',callback_data=f'agency:trial_panels:{page+1}'))
+                    if nav:rows.append(nav)
+                    rows.append([Button(text='انصراف',callback_data='agency:home')])
+                    await display(call,'سرویس تست روی کدام پنل ساخته شود؟',rows)
+                elif action=='trial_panel':
+                    if await state.get_state()!=AgencyFlow.trial_panel.state:raise AgencyError('ابتدا مراحل تنظیم تست را انجام دهید.')
+                    server=await asyncio.to_thread(root.get_panel_server,int(parts[2]))
+                    if not server or not server['is_active'] or dict(server).get('managed_source_server_id'):raise AgencyError('پنل انتخاب‌شده فعال نیست.')
+                    data=await state.get_data()
+                    await state.update_data(trial_panel_id=server['id'])
+                    await state.set_state(AgencyFlow.trial_confirm)
+                    await display(call,f"تنظیم تست نماینده‌ها:\nحجم: {data['trial_volume']} مگابایت\nمدت: {data['trial_hours']} ساعت\nهزینه هر تست: {data['trial_cost']:,} تومان\nپنل: {server['name']}\n\nتست برای مشتری رایگان است؛ هزینه از کیف پول زنجیره نماینده کسر می‌شود.",[[Button(text='تأیید و فعال‌سازی',callback_data='agency:trial_save')],[Button(text='تغییر پنل',callback_data='agency:trial_panels')],[Button(text='انصراف',callback_data='agency:home')]])
+                else:
+                    if await state.get_state()!=AgencyFlow.trial_confirm.state:raise AgencyError('تنظیم تست آماده تأیید نیست؛ از ابتدا شروع کنید.')
+                    data=await state.get_data()
+                    await asyncio.to_thread(configure_panel_trials,root,data['trial_panel_id'],data['trial_volume'],data['trial_hours'],data['trial_cost'])
+                    await state.clear()
+                    await display(call,'✅ تنظیم تست نماینده‌ها ذخیره و فعال شد.',home_rows())
             elif action=='transactions':
                 with root._get_conn() as conn:
                     if is_main_bot:
@@ -207,17 +242,35 @@ def create_agency_router(local, is_main_bot):
         except (AgencyError,ValueError,IndexError,TypeError) as exc:
             await call.answer(str(exc),show_alert=True)
 
-    @router.message(AgencyFlow.trials)
+    @router.message(StateFilter(AgencyFlow.trials,AgencyFlow.trial_hours,AgencyFlow.trial_cost))
     async def trial_settings_message(message,state):
         if not is_main_bot or not authorized(message.from_user.id) or not root.is_senior_admin(message.from_user.id):return
-        from managed_trials import configure_trials
         try:
-            values=list(map(int,(message.text or '').split()))
-            if len(values)!=4:raise AgencyError('چهار عدد بفرستید: شناسه محصول، حجم مگابایت، مدت ساعت، هزینه تومان.')
-            await asyncio.to_thread(configure_trials,root,*values)
-            await state.clear()
-            await message.answer('✅ حجم، مدت و هزینه تست نماینده‌ها ذخیره و فعال شد.',reply_markup=Markup(inline_keyboard=home_rows()))
-        except ValueError as exc:await message.answer(str(exc))
+            value=int((message.text or '').strip())
+            current=await state.get_state()
+            cancel=Markup(inline_keyboard=[[Button(text='انصراف',callback_data='agency:home')]])
+            if current==AgencyFlow.trials.state:
+                if not 1<=value<=1048576:raise AgencyError('حجم را به مگابایت، عددی مثبت تا 1048576 بفرستید.')
+                await state.update_data(trial_volume=value)
+                await state.set_state(AgencyFlow.trial_hours)
+                await message.answer('مدت اعتبار تست چند ساعت باشد؟ مثلاً 24.',reply_markup=cancel)
+            elif current==AgencyFlow.trial_hours.state:
+                if not 1<=value<=8760:raise AgencyError('مدت را به ساعت، عددی مثبت تا 8760 بفرستید.')
+                await state.update_data(trial_hours=value)
+                await state.set_state(AgencyFlow.trial_cost)
+                await message.answer('بابت هر تست چند تومان از موجودی نماینده کم شود؟ برای تست رایگان، 0 بفرستید.',reply_markup=cancel)
+            else:
+                if value<0:raise AgencyError('هزینه باید صفر یا بیشتر باشد.')
+                await state.update_data(trial_cost=value)
+                await state.set_state(AgencyFlow.trial_panel)
+                servers=await asyncio.to_thread(root.get_panel_servers,True)
+                servers=[s for s in servers if not dict(s).get('managed_source_server_id')]
+                rows=[[Button(text=s['name'],callback_data=f"agency:trial_panel:{s['id']}")] for s in servers[:30]]
+                if len(servers)>30:rows.append([Button(text='بعدی',callback_data='agency:trial_panels:1')])
+                rows.append([Button(text='انصراف',callback_data='agency:home')])
+                await message.answer('سرویس تست روی کدام پنل ساخته شود؟' if servers else 'پنل فعالی ثبت نشده است. ابتدا پنل را در ربات اصلی اضافه کنید.',reply_markup=Markup(inline_keyboard=rows))
+        except ValueError as exc:
+            await message.answer(str(exc) if isinstance(exc,AgencyError) else 'لطفاً فقط یک عدد بفرستید.')
 
     @router.message(AgencyFlow.price)
     async def price_message(message,state):

@@ -799,10 +799,10 @@ class SystemMixin:
         with self._get_conn() as conn:
             if active_only:
                 rows = conn.execute(
-                    "SELECT * FROM categories WHERE is_active=1 ORDER BY sort_order, id"
+                    "SELECT * FROM categories WHERE is_active=1 AND id NOT IN (SELECT CAST(value AS INTEGER) FROM settings WHERE key='managed_trial_billing_category_id') ORDER BY sort_order, id"
                 ).fetchall()
             else:
-                rows = conn.execute("SELECT * FROM categories ORDER BY sort_order, id").fetchall()
+                rows = conn.execute("SELECT * FROM categories WHERE id NOT IN (SELECT CAST(value AS INTEGER) FROM settings WHERE key='managed_trial_billing_category_id') ORDER BY sort_order, id").fetchall()
             return rows
 
 

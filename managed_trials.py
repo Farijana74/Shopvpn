@@ -29,13 +29,42 @@ def configure_trials(root, product_id, volume_mb, hours, cost):
     return policy
 
 
+def _billing_product(db):
+    """Internal order reference, excluded from the public product catalog."""
+    with db._get_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        setting=conn.execute("SELECT value FROM settings WHERE key='managed_trial_billing_product_id'").fetchone()
+        if setting and conn.execute('SELECT 1 FROM products WHERE id=?',(setting[0],)).fetchone():return int(setting[0])
+        category=conn.execute("INSERT INTO categories(name,is_active) VALUES('تست نمایندگان (داخلی)',0)").lastrowid
+        product=conn.execute("INSERT INTO products(category_id,name,price,is_active,is_auto_provision) VALUES(?,'تست نمایندگان',0,0,0)",(category,)).lastrowid
+        for key,value in [('managed_trial_billing_product_id',product),('managed_trial_billing_category_id',category)]:
+            conn.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(key,str(value)))
+        return product
+
+
+def configure_panel_trials(root, panel_id, volume_mb, hours, cost):
+    if any(not isinstance(v,int) or isinstance(v,bool) for v in (panel_id,volume_mb,hours,cost)) or not 1<=volume_mb<=1048576 or not 1<=hours<=8760 or cost<0:
+        raise AgencyError('حجم و مدت باید مثبت و هزینه صفر یا بیشتر باشد.')
+    server=root.get_panel_server(panel_id)
+    if not server or not server['is_active'] or dict(server).get('managed_source_server_id'):
+        raise AgencyError('پنل انتخاب‌شده فعال یا معتبر نیست.')
+    product_id=_billing_product(root)
+    with root._get_conn() as conn:
+        source=conn.execute('SELECT delivery_mode FROM products WHERE provision_server_id=? AND is_active=1 AND is_auto_provision=1 ORDER BY id LIMIT 1',(panel_id,)).fetchone()
+    mode=source[0] if source and server['panel_type']=='3xui' else 'normal'
+    policy=dict(enabled=True,product_id=product_id,panel_id=panel_id,volume_mb=volume_mb,hours=hours,cost=cost,delivery_mode=mode)
+    root.set_setting(POLICY_KEY,json.dumps(policy))
+    return policy
+
+
 def _claim(local,user_id,policy):
+    billing_id=_billing_product(local) if policy.get('panel_id') else None
     with local._get_conn() as conn:
         old=conn.execute('SELECT * FROM managed_trials WHERE user_id=?',(user_id,)).fetchone()
         if old and old['status']=='completed':return dict(old)
         if old and old['status']=='processing':
             raise AgencyError('درخواست تست شما در حال پردازش است؛ دوباره درخواست ندهید. اگر متوقف مانده، پشتیبانی باید بررسی کند.')
-        product=conn.execute('SELECT id FROM products WHERE upstream_product_id=?',(policy['product_id'],)).fetchone()
+        product=conn.execute('SELECT id FROM products WHERE id=?',(billing_id,)).fetchone() if billing_id else conn.execute('SELECT id FROM products WHERE upstream_product_id=?',(policy['product_id'],)).fetchone()
         if not product:raise AgencyError('محصول پایه تست هنوز برای این نماینده دریافت نشده است.')
         changed=conn.execute('UPDATE users SET test_used=test_used+1 WHERE telegram_id=? AND test_used<1',(user_id,)).rowcount
         if not changed:raise AgencyError('هر کاربر فقط یک بار می‌تواند سرویس تست دریافت کند.')
@@ -56,8 +85,10 @@ async def provide_trial(local,user_id):
         claim=await asyncio.to_thread(_claim,local,user_id,policy)
         policy=json.loads(claim['policy'])
         with local._get_conn() as conn:
-            product=conn.execute('SELECT * FROM products WHERE upstream_product_id=?',(policy['product_id'],)).fetchone()
+            product=conn.execute('SELECT p.* FROM products p JOIN orders o ON o.product_id=p.id WHERE o.id=?',(claim['order_id'],)).fetchone()
             saved=conn.execute('SELECT * FROM custom_configs WHERE order_id=?',(claim['order_id'],)).fetchall()
+        if policy.get('panel_id'):
+            product={**dict(product),'upstream_product_id':policy['product_id'],'is_auto_provision':1,'delivery_mode':policy.get('delivery_mode','normal')}
         if claim['status']=='completed':
             if not saved:raise AgencyError('سرویس تست قبلی حذف شده است؛ پشتیبانی باید بررسی کند.')
             results=[dict(username=c['username'],subscription_url=c['subscription_url'],panel_server_id=c['panel_server_id'],custom_config_id=c['id'],volume_gb=c['volume_gb'],duration_days=c['duration_days'],_managed_delivery_mode=c['delivery_mode']) for c in saved]

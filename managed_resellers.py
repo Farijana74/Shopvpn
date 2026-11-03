@@ -251,7 +251,7 @@ def validate_edit(db, product_id, changes):
             raise AgencyError('قیمت فروش کمتر از قیمت تأمین مجاز نیست.')
 
 
-def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Fraction(1,1), extra_per_unit=0, *, allow_zero=False):
+def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Fraction(1,1), extra_per_unit=0, *, allow_zero=False, panel_trial=False):
     if not isinstance(quantity,int) or isinstance(quantity,bool) or quantity < 1 or cost_factor < 0 or extra_per_unit < 0 or (cost_factor == 0 and extra_per_unit == 0 and not allow_zero):
         raise AgencyError('تعداد یا ضریب قیمت نامعتبر است.')
     def cost(value):
@@ -265,10 +265,11 @@ def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Frac
             raise AgencyError('مشخصات سفارش با رزرو قبلی مطابقت ندارد.')
         return recorded['root_order_id']
     bots = chain(root, bot_id)
-    root_price = rate(root, bots[0]['id'], product_id)
+    if panel_trial and (quantity!=1 or cost_factor!=0):raise AgencyError('رزرو تست پنلی معتبر نیست.')
+    root_price = 0 if panel_trial else rate(root, bots[0]['id'], product_id)
     charges = [(root.db_path, bots[0]['owner_telegram_id'], cost(root_price))]
     for index in range(1,len(bots)):
-        charges.append((bots[index-1]['db_path'],bots[index]['owner_telegram_id'],cost(rate(root,bots[index]['id'],product_id))))
+        charges.append((bots[index-1]['db_path'],bots[index]['owner_telegram_id'],cost(0 if panel_trial else rate(root,bots[index]['id'],product_id))))
     conn = sqlite3.connect(root.db_path,timeout=10)
     conn.row_factory = sqlite3.Row
     try:
@@ -339,9 +340,11 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
             original={**dict(original),'auto_provision_volume_gb':trial_policy['volume_mb']/1024,
                       'duration_days':trial_policy['hours']/24,'base_users':1,'max_users':1,'extra_user_price':0,
                       'provision_ssh_node_id':None}
+            if trial_policy.get('panel_id'):
+                original.update(provision_server_id=trial_policy['panel_id'],is_auto_provision=1,delivery_mode=trial_policy.get('delivery_mode','normal'))
         with root._get_conn() as conn:
             funded=conn.execute("SELECT 1 FROM managed_purchases WHERE request_key=? AND status!='refunded'",(f'{bot_id}:{order_id}',)).fetchone()
-        current_cost=rate(root,bot_id,product['upstream_product_id']) if not funded else 0
+        current_cost=rate(root,bot_id,product['upstream_product_id']) if not funded and not (trial_policy and trial_policy.get('panel_id')) else 0
         if not trial_policy and not funded and int(product['price']) < current_cost:
             raise AgencyError('نرخ تأمین تغییر کرده؛ ابتدا محصولات را بروزرسانی کنید.')
         if not trial_policy and not funded:
@@ -362,7 +365,7 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
         if not trial_policy and not funded and int(local_order['base_price']) < (current_cost+extra)*quantity:
             raise AgencyError('قیمت سفارش از نرخ تأمین جدید کمتر است؛ ابتدا قیمت‌ها را بروزرسانی کنید.')
         if trial_policy:
-            purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],1,Fraction(0,1),trial_policy['cost'],allow_zero=True)
+            purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],1,Fraction(0,1),trial_policy['cost'],allow_zero=True,panel_trial=bool(trial_policy.get('panel_id')))
             with root._get_conn() as conn:
                 conn.execute('UPDATE managed_purchases SET is_trial=1 WHERE request_key=?',(f'{bot_id}:{order_id}',))
         else:
