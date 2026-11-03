@@ -10856,6 +10856,10 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
 
     @router.message(AdminEditWelcome.waiting_text)
     async def process_edit_welcome(message: Message, state: FSMContext):
+        if not full_admin_only(message.from_user.id):
+            return
+        if not message.text:
+            return await message.answer("متن پیام خوش‌آمدگویی را ارسال کنید.")
         # از html_text به‌جای text استفاده می‌شود تا فرمت‌بندی (بولد/ایتالیک) و
         # به‌خصوص ایموجی‌های پریمیوم/سفارشی‌ای که ادمین تایپ می‌کند حفظ شوند؛
         # چون parse_mode بات روی HTML است، همین رشته‌ی HTML مستقیماً ارسال می‌شود.
@@ -11461,6 +11465,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
 
     @router.message(AdminBroadcast.waiting_message)
     async def process_broadcast(message: Message, state: FSMContext, bot: Bot):
+        if not full_admin_only(message.from_user.id):
+            return
         # بند ۴۵ اسپک: ارسال تصویر در پیام همگانی. آلبوم (چند عکس با هم) رد می‌شود
         # چون تلگرام هر عکس آلبوم را به‌صورت یک پیام جدا به بات می‌دهد و اگر اجازه
         # بدهیم، همین‌جا چند بار پشت‌سرهم process_broadcast صدا زده می‌شود و state
