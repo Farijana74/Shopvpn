@@ -117,6 +117,7 @@ class LanguageMiddleware:
             if user is not None:
                 try:
                     row = await asyncio.to_thread(self.db.get_user, user.id)
+                    data["_shopvpn_db_user"] = row
                 except Exception:
                     row = None
                 language = (row["language_code"] if row and "language_code" in row.keys() else None)

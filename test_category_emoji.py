@@ -9,6 +9,18 @@ class CategoryEmojiTests(unittest.TestCase):
         message=types.SimpleNamespace(text='🚀 ایران ⭐',entities=[MessageEntity(type='custom_emoji',offset=9,length=1,custom_emoji_id='12345')])
         self.assertEqual(message_button_label(message),('🚀 ایران','12345'))
 
+    def test_emoji_only_preserves_existing_name(self):
+        message=types.SimpleNamespace(text='⭐',entities=[MessageEntity(type='custom_emoji',offset=0,length=1,custom_emoji_id='12345')])
+        self.assertEqual(message_button_label(message,'ایران'),('ایران','12345'))
+
+    def test_explicit_id_preserves_existing_name(self):
+        message=types.SimpleNamespace(text='1234567890123456',entities=[])
+        self.assertEqual(message_button_label(message,'ایران'),('ایران','1234567890123456'))
+
+    def test_name_and_explicit_id(self):
+        message=types.SimpleNamespace(text='ایران | 1234567890123456',entities=[])
+        self.assertEqual(message_button_label(message),('ایران','1234567890123456'))
+
     def test_plain_text_clears_icon(self):
         self.assertEqual(message_button_label(types.SimpleNamespace(text=' ایران ',entities=[])),('ایران',''))
 

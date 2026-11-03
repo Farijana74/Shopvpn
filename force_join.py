@@ -85,11 +85,12 @@ class ForceJoinMiddleware(BaseMiddleware):
         ) and not await asyncio.to_thread(self.db.is_user_language_selected, user.id):
             return await handler(event, data)
 
-        exempt = await asyncio.to_thread(self.db.is_force_join_exempt, user.id)
         member = True
-        if settings["enabled"] and settings["channel"] and not exempt:
-            bot = data.get("bot")
-            member = await is_channel_member(bot, settings["channel"], user.id)
+        if settings["enabled"] and settings["channel"]:
+            exempt = await asyncio.to_thread(self.db.is_force_join_exempt, user.id)
+            if not exempt:
+                bot = data.get("bot")
+                member = await is_channel_member(bot, settings["channel"], user.id)
 
         if not member:
             text = "برای استفاده از بات، ابتدا باید در کانال زیر عضو شوید؛ سپس دکمه‌ی «بررسی مجدد عضویت» را بزنید:"

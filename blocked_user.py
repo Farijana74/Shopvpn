@@ -47,19 +47,22 @@ class BlockedUserMiddleware(BaseMiddleware):
         # پردازش را تا busy_timeout فریز کند. با to_thread این دو کوئری روی‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
         # یک ترد جدا اجرا می‌شوند و فقط همین یک آپدیت را منتظر نگه می‌دارند،
         # نه بقیه‌ی بات‌ها/کاربران را.
-        try:
-            await asyncio.to_thread(
-                self.db.add_or_update_user, user.id, user.username or "", user.first_name or ""
-            )
-        except Exception:
-            logger.exception("ثبت/به‌روزرسانی کاربر %s ناموفق بود.", user.id)
+        db_user = data.get('_shopvpn_db_user')
+        if db_user is None:
+            db_user = await asyncio.to_thread(self.db.get_user, user.id)
+        username, first_name = user.username or '', user.first_name or ''
+        if not db_user or (db_user['username'] or '') != username or (db_user['first_name'] or '') != first_name:
+            try:
+                await asyncio.to_thread(self.db.add_or_update_user, user.id, username, first_name)
+                db_user = await asyncio.to_thread(self.db.get_user, user.id)
+            except Exception:
+                logger.exception("ثبت/به‌روزرسانی کاربر %s ناموفق بود.", user.id)
 
         # ادمین‌های بات از این محدودیت معاف هستند (is_admin از کش در حافظه
         # می‌خواند، عملاً بلوکه‌کننده نیست - رجوع کنید به database.py)
         if self.db.is_admin(user.id):
             return await handler(event, data)
 
-        db_user = await asyncio.to_thread(self.db.get_user, user.id)
         if not db_user or not db_user["is_blocked"]:
             if data.get("bot") is not None and self.db.get_setting("streak_enabled", "0") == "1":
                 engagement.schedule_touch(self.db, data["bot"], user.id)

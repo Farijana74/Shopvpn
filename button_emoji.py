@@ -29,13 +29,42 @@ def button_icon(db, style_key):
     return value if re.fullmatch(r'[0-9]{1,32}', value) else None
 
 
-def message_button_label(message):
-    """Extract a native button icon; entity offsets count UTF-16 code units."""
-    text = message.text or ''
-    for entity in message.entities or []:
+def message_button_label(message, fallback_label=None):
+    """Extract an emoji entity, sticker or explicit ``name | emoji_id`` input."""
+    text = getattr(message, 'text', None) or getattr(message, 'caption', None) or ''
+    entities = getattr(message, 'entities', None) or getattr(message, 'caption_entities', None) or []
+    for entity in entities:
         if entity.type == 'custom_emoji' and entity.custom_emoji_id:
             raw = text.encode('utf-16-le')
             start, end = entity.offset * 2, (entity.offset + entity.length) * 2
             label = (raw[:start] + raw[end:]).decode('utf-16-le').strip()
-            return label or text.strip(), validate_icon(entity.custom_emoji_id)
+            return label or fallback_label or text.strip(), validate_icon(entity.custom_emoji_id)
+    sticker = getattr(message, 'sticker', None)
+    if sticker and getattr(sticker, 'custom_emoji_id', None):
+        return fallback_label or 'دسته‌بندی', validate_icon(sticker.custom_emoji_id)
+    explicit = re.fullmatch(r'(.+?)\s*\|\s*([0-9]{8,32})', text.strip())
+    if explicit:
+        return explicit.group(1).strip(), validate_icon(explicit.group(2))
+    if fallback_label and re.fullmatch(r'[0-9]{8,32}', text.strip()):
+        return fallback_label, validate_icon(text.strip())
     return text.strip(), ''
+
+
+async def send_icon_preview(message, label, custom_icon):
+    """Show whether Telegram accepted the icon instead of silently claiming success."""
+    if not custom_icon:
+        return
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+    from aiogram.exceptions import TelegramBadRequest
+    markup = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=label, callback_data='noop', icon_custom_emoji_id=custom_icon)
+    ]])
+    try:
+        sent = await message.answer('پیش‌نمایش آیکون ذخیره‌شده:', reply_markup=markup)
+    except TelegramBadRequest:
+        await message.answer('شناسه ذخیره شد، ولی تلگرام نمایش این آیکون را نپذیرفت. معتبر بودن شناسه و پرمیوم بودن مالک واقعی ربات در BotFather را بررسی کنید.')
+        return
+    if isinstance(sent, Message) and (not sent.reply_markup or not any(
+        button.icon_custom_emoji_id for row in sent.reply_markup.inline_keyboard for button in row
+    )):
+        await message.answer('شناسه ذخیره شد، اما تلگرام آیکون را نپذیرفت و پیش‌نمایش بدون آیکون ارسال شد. پرمیوم باید برای مالک واقعی ربات در BotFather فعال باشد؛ ممکن است شناسه نیز نامعتبر باشد.')

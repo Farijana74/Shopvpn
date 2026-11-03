@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SendMessage, EditMessageText
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 
 @dataclass
@@ -73,12 +73,15 @@ async def send_navigation(method, send):
 
 def without_custom_icons(method):
     markup = getattr(method, 'reply_markup', None)
-    if not isinstance(markup, InlineKeyboardMarkup):
+    if not isinstance(markup, (InlineKeyboardMarkup, ReplyKeyboardMarkup)):
         return None
-    if not any(button.icon_custom_emoji_id is not None for row in markup.inline_keyboard for button in row):
+    rows = markup.inline_keyboard if isinstance(markup, InlineKeyboardMarkup) else markup.keyboard
+    if not any(button.icon_custom_emoji_id is not None for row in rows for button in row):
         return None
     result = method.model_copy(deep=True)
-    for row in result.reply_markup.inline_keyboard:
+    copied = result.reply_markup
+    rows = copied.inline_keyboard if isinstance(copied, InlineKeyboardMarkup) else copied.keyboard
+    for row in rows:
         for button in row:
             button.icon_custom_emoji_id = None
     return result
