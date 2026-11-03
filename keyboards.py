@@ -2072,7 +2072,9 @@ def admin_panel_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🏪 مدیریت نمایندگی و محصولات",callback_data="agency:home")],
             [InlineKeyboardButton(text="📦 سفارش‌ها",callback_data="adm_pending_orders")],
             [InlineKeyboardButton(text="💳 تنظیمات پرداخت",callback_data="adm_cat:finance")],
-            [InlineKeyboardButton(text="👤 کاربران",callback_data="adm_users")],
+            [InlineKeyboardButton(text="👤 کاربران",callback_data="adm_stats_user")],
+            [InlineKeyboardButton(text="🎨 تنظیمات دکمه‌ها و منو",callback_data="adm_cat:appearance")],
+            [InlineKeyboardButton(text="📂 مدیریت دسته‌بندی‌ها",callback_data="adm_categories")],
             [InlineKeyboardButton(text="⬅️ منوی اصلی",callback_data="acct:main_menu")]])
     entries = []
     for cat_key, cat_label, _item_keys in _ordered_admin_categories(db):
@@ -2730,7 +2732,7 @@ def deeplink_attach_discount_picker_kb(codes, product_token: str, back_callback:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_categories_kb(categories) -> InlineKeyboardMarkup:
+def admin_categories_kb(categories, managed=False) -> InlineKeyboardMarkup:
     rows = []
     for cat in categories:
         state_icon = "🟢" if cat["is_active"] else "🔴"
@@ -2742,7 +2744,11 @@ def admin_categories_kb(categories) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=tr("🗑حذف"), callback_data=f"adm_cat_del:{cat['id']}"),
             ]
         )
-    rows.append([InlineKeyboardButton(text=tr("➕ افزودن دسته‌بندی جدید"), callback_data="adm_cat_add")])
+    if managed:
+        for row in rows:
+            row[:] = [b for b in row if not (b.callback_data or "").startswith("adm_cat_del:")]
+    else:
+        rows.append([InlineKeyboardButton(text=tr("➕ افزودن دسته‌بندی جدید"), callback_data="adm_cat_add")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:products")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

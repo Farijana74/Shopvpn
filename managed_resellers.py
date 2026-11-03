@@ -20,7 +20,10 @@ def install_schema(conn):
     )
     for statement in statements:
         conn.execute(statement)
+    conn.execute('CREATE TABLE IF NOT EXISTS managed_sale_notices (request_key TEXT NOT NULL, admin_id INTEGER NOT NULL, PRIMARY KEY(request_key,admin_id))')
     columns={row[1] for row in conn.execute('PRAGMA table_info(managed_purchases)')}
+    if 'root_notified' not in columns:
+        conn.execute('ALTER TABLE managed_purchases ADD COLUMN root_notified INTEGER NOT NULL DEFAULT 1')
     if 'prepaid_qty' not in columns:
         try:
             conn.execute('ALTER TABLE managed_purchases ADD COLUMN prepaid_qty INTEGER DEFAULT 0')
@@ -61,6 +64,9 @@ def rate(root, bot_id, product_id, require_selected=True):
     if not product or not product['is_active']:
         raise AgencyError('محصول بالادست غیرفعال یا حذف شده است.')
     product = dict(product)
+    category = root.get_category(product['category_id'])
+    if category and not category['is_active']:
+        raise AgencyError('دسته‌بندی محصول در ربات اصلی غیرفعال است.')
     cost = int(product.get('reseller_wholesale_price') if product.get('reseller_wholesale_price') is not None else product['price'])
     bots = chain(root, bot_id)
     with root._get_conn() as conn:
@@ -127,7 +133,8 @@ def bootstrap(root, bot_id, product_ids=None, parent_id=None):
         with local._get_conn() as conn:
             product_columns={r[1] for r in conn.execute('PRAGMA table_info(products)')}
             panel_columns={r[1] for r in conn.execute('PRAGMA table_info(panel_servers)')}
-        ready='upstream_product_id' in product_columns and 'managed_root_db_path' in panel_columns
+            category_columns={r[1] for r in conn.execute('PRAGMA table_info(categories)')}
+        ready='upstream_product_id' in product_columns and 'managed_root_db_path' in panel_columns and 'upstream_category_id' in category_columns
         owner=local.get_owner_telegram_id() if ready else None
         if not ready or owner != bot['owner_telegram_id']:
             local.init_db(bot['owner_telegram_id'])
@@ -169,10 +176,18 @@ def sync_bot(root, bot_id):
                 source = dict(product)
                 category = root.get_category(source['category_id'])
                 category_name = category['name'] if category else 'محصولات'
-                cat = conn.execute('SELECT id FROM categories WHERE name=?', (category_name,)).fetchone()
-                cat_id = cat[0] if cat else conn.execute('INSERT INTO categories(name) VALUES(?)', (category_name,)).lastrowid
-                if category and 'icon_custom_emoji_id' in category.keys():
-                    conn.execute('UPDATE categories SET icon_custom_emoji_id=? WHERE id=?',(category['icon_custom_emoji_id'],cat_id))
+                cat = conn.execute('SELECT * FROM categories WHERE upstream_category_id=?',(source['category_id'],)).fetchone()
+                if not cat and old:
+                    cat = conn.execute('SELECT * FROM categories WHERE id=? AND upstream_category_id IS NULL',(old['category_id'],)).fetchone()
+                if not cat:
+                    cat = conn.execute('SELECT * FROM categories WHERE name=? AND upstream_category_id IS NULL',(category_name,)).fetchone()
+                cat_id = cat['id'] if cat else conn.execute('INSERT INTO categories(name,upstream_category_id) VALUES(?,?)',(category_name,source['category_id'])).lastrowid
+                conn.execute('UPDATE categories SET upstream_category_id=? WHERE id=?',(source['category_id'],cat_id))
+                conn.execute('UPDATE categories SET name=? WHERE id=? AND managed_name_override=0',(category_name,cat_id))
+                if category:
+                    conn.execute('UPDATE categories SET icon_custom_emoji_id=? WHERE id=? AND managed_icon_override=0',(category['icon_custom_emoji_id'],cat_id))
+                category_enabled=conn.execute('SELECT is_active FROM categories WHERE id=?',(cat_id,)).fetchone()[0]
+                active = active and bool(category_enabled) and (bool(category['is_active']) if category else True)
                 server = root.get_panel_server(source['provision_server_id']) if source['provision_server_id'] else None
                 if not server:
                     active = False
@@ -286,7 +301,7 @@ def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Frac
         else:
             conn.execute('INSERT OR IGNORE INTO users(telegram_id,first_name) VALUES(?,?)',(-bot_id,'تأمین نمایندگی'))
             root_order=conn.execute("INSERT INTO orders(user_id,product_id,status,base_price,wallet_used,final_price,quantity,managed_internal) VALUES(?,?,'processing',?,?,0,?,1)",(-bot_id,product_id,cost(root_price),charges[0][2],quantity)).lastrowid
-            conn.execute('INSERT INTO managed_purchases(request_key,bot_id,local_order_id,root_order_id,charges,prepaid_qty) VALUES(?,?,?,?,?,?)',(request_key,bot_id,local_order_id,root_order,json.dumps(charges),prepaid))
+            conn.execute('INSERT INTO managed_purchases(request_key,bot_id,local_order_id,root_order_id,charges,prepaid_qty,root_notified) VALUES(?,?,?,?,?,?,0)',(request_key,bot_id,local_order_id,root_order,json.dumps(charges),prepaid))
         conn.commit()
         return root_order
     except Exception:
@@ -313,6 +328,11 @@ async def provision(local_db, product, quantity, user_id, order_id):
         current_cost=rate(root,bot_id,product['upstream_product_id']) if not funded else 0
         if not funded and int(product['price']) < current_cost:
             raise AgencyError('نرخ تأمین تغییر کرده؛ ابتدا محصولات را بروزرسانی کنید.')
+        if not funded:
+            current=local_db.get_product(product['id'])
+            category=local_db.get_category(current['category_id']) if current else None
+            if not current or not current['is_active'] or (category and not category['is_active']):
+                raise AgencyError('محصول یا دسته‌بندی در این فروشگاه غیرفعال است.')
         local_order=local_db.get_order(order_id)
         if not local_order or local_order['user_id'] != user_id:
             raise AgencyError('مالکیت سفارش معتبر نیست.')
@@ -381,6 +401,36 @@ async def provision(local_db, product, quantity, user_id, order_id):
         root.close()
 
 
+async def notify_root_sales(root, bot):
+    """Retry pending sale notices without resending to admins already notified."""
+    with root._get_conn() as conn:
+        sales=conn.execute("SELECT p.request_key,p.bot_id,p.local_order_id,p.root_order_id,b.bot_username,b.owner_telegram_id,o.product_id,o.quantity,o.wallet_used,o.is_renewal FROM managed_purchases p JOIN reseller_bots b ON b.id=p.bot_id JOIN orders o ON o.id=p.root_order_id WHERE p.status='completed' AND p.root_notified=0 ORDER BY p.root_order_id LIMIT 50").fetchall()
+    admins=[uid for uid in root.list_admins() if root.is_senior_admin(uid)]
+    for sale in sales:
+        product=root.get_product(sale['product_id'])
+        name=product['name'] if product else str(sale['product_id'])
+        text=(f"🛒 {'تمدید' if sale['is_renewal'] else 'خرید'} از ربات نماینده\n"
+              f"ربات: @{sale['bot_username']}\nمالک نماینده: {sale['owner_telegram_id']}\n"
+              f"محصول: {name}\nتعداد: {sale['quantity']}\n"
+              f"سفارش نماینده: {sale['local_order_id']}\nسفارش تأمین اصلی: {sale['root_order_id']}\n"
+              f"کسر نقدی از کیف پول بالادست: {sale['wallet_used']:,} تومان")
+        all_sent=bool(admins)
+        for uid in admins:
+            with root._get_conn() as conn:
+                sent=conn.execute('SELECT 1 FROM managed_sale_notices WHERE request_key=? AND admin_id=?',(sale['request_key'],uid)).fetchone()
+            if sent:continue
+            try:
+                await bot.send_message(uid,text,parse_mode=None)
+            except Exception:
+                all_sent=False
+                continue
+            with root._get_conn() as conn:
+                conn.execute('INSERT OR IGNORE INTO managed_sale_notices(request_key,admin_id) VALUES(?,?)',(sale['request_key'],uid))
+        if all_sent:
+            with root._get_conn() as conn:
+                conn.execute('UPDATE managed_purchases SET root_notified=1 WHERE request_key=?',(sale['request_key'],))
+
+
 async def reconcile(root, manager=None):
     for bot in root.list_reseller_bots(active_only=True):
         from database import Database
@@ -402,6 +452,10 @@ async def reconcile(root, manager=None):
         finally:
             local.close()
     if manager:
+        from config import BOT_TOKEN
+        main_instance=manager.instances.get(BOT_TOKEN)
+        if main_instance:
+            await notify_root_sales(root,main_instance['bot'])
         with root._get_conn() as conn:
             notices=conn.execute('SELECT n.*,b.bot_token,b.owner_telegram_id FROM managed_notices n JOIN reseller_bots b ON b.id=n.bot_id WHERE n.delivered=0 ORDER BY n.id LIMIT 100').fetchall()
         for notice in notices:

@@ -155,6 +155,8 @@ class CatalogMixin:
 
 
     def add_category(self, name: str, icon_custom_emoji_id: str = None) -> int:
+        if self.get_setting("managed_reseller_bot_id", ""):
+            raise ValueError("دسته‌های نمایندگی از ربات اصلی دریافت می‌شوند؛ نام و وضعیت دسته قابل تغییر است.")
         def op():
             with self._get_conn() as conn:
                 cur = conn.execute("INSERT INTO categories (name,icon_custom_emoji_id) VALUES (?,?)", (name,icon_custom_emoji_id))
@@ -176,15 +178,25 @@ class CatalogMixin:
                     conn.execute("UPDATE categories SET is_active=? WHERE id=?", (new_val, cat_id))
                     return True
                 return False
-        return self._sqlite_retry(op)
+        result = self._sqlite_retry(op)
+        if result and self.get_setting('managed_reseller_bot_id',''):
+            from database import Database
+            from managed_resellers import sync_bot
+            root = Database(self.get_setting('managed_root_db_path',''))
+            try:sync_bot(root,int(self.get_setting('managed_reseller_bot_id')))
+            finally:root.close()
+        return result
 
 
     def edit_category(self, cat_id: int, name: str, icon_custom_emoji_id: str = None):
+        managed = bool(self.get_setting('managed_reseller_bot_id',''))
         with self._get_conn() as conn:
             if icon_custom_emoji_id is None:
-                conn.execute("UPDATE categories SET name=? WHERE id=?", (name, cat_id))
+                conn.execute('UPDATE categories SET name=? WHERE id=?',(name,cat_id))
             else:
-                conn.execute("UPDATE categories SET name=?,icon_custom_emoji_id=? WHERE id=?", (name, icon_custom_emoji_id, cat_id))
+                conn.execute('UPDATE categories SET name=?,icon_custom_emoji_id=? WHERE id=?',(name,icon_custom_emoji_id,cat_id))
+            if managed:
+                conn.execute('UPDATE categories SET managed_name_override=1,managed_icon_override=CASE WHEN ? THEN 1 ELSE managed_icon_override END WHERE id=?',(icon_custom_emoji_id is not None,cat_id))
 
 
     def delete_category(self, cat_id: int):
@@ -372,6 +384,9 @@ class CatalogMixin:
                 raise ValueError("محصول بالادست یافت نشد.")
             enabled = 0 if product["managed_local_enabled"] else 1
             if enabled:
+                category = self.get_category(product['category_id'])
+                if category and not category['is_active']:
+                    raise ValueError('ابتدا دسته‌بندی این محصول را فعال کنید.')
                 from managed_resellers import rate
                 from database import Database
                 central = Database(self.get_setting("managed_root_db_path", ""))

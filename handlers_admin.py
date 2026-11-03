@@ -489,7 +489,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await state.clear()
         try:
             categories = (await asyncio.to_thread(db.get_categories, active_only=False))
-            shown = await replace_admin_view(call, tr("📂 مدیریت دسته‌بندی‌ها:"), kb.admin_categories_kb(categories))
+            shown = await replace_admin_view(call, tr("📂 مدیریت دسته‌بندی‌ها:"), kb.admin_categories_kb(categories, managed=bool(db.get_setting("managed_reseller_bot_id", ""))))
             if not shown:
                 return await call.answer("نمایش دسته‌بندی‌ها ناموفق بود؛ منوی قبلی حفظ شد. دوباره تلاش کنید.", show_alert=True)
             await call.answer()
@@ -509,7 +509,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             (await asyncio.to_thread(db.toggle_category, cat_id))
             (await asyncio.to_thread(db.log_admin_action, call.from_user.id, "category_toggle", f"دسته‌بندی #{cat_id}"))
             categories = (await asyncio.to_thread(db.get_categories, active_only=False))
-            await safe_edit(call, db.get_text('handlers_admin.auto_e7f6733a', '📂 مدیریت دسته\u200cبندی\u200cها:'), kb.admin_categories_kb(categories))
+            await safe_edit(call, db.get_text('handlers_admin.auto_e7f6733a', '📂 مدیریت دسته\u200cبندی\u200cها:'), kb.admin_categories_kb(categories, managed=bool(db.get_setting("managed_reseller_bot_id", ""))))
             await call.answer(db.get_text('handlers_admin.auto_d5ebb39c', 'وضعیت تغییر کرد.'))
         except Exception:
             await call.answer(db.get_text('handlers_admin.auto_0040e660', '⚠️ تغییر وضعیت دسته\u200cبندی ناموفق بود. دوباره تلاش کنید.'), show_alert=True)
@@ -527,7 +527,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             (await asyncio.to_thread(db.delete_category, cat_id))
             (await asyncio.to_thread(db.log_admin_action, call.from_user.id, "category_delete", f"دسته‌بندی #{cat_id}"))
             categories = (await asyncio.to_thread(db.get_categories, active_only=False))
-            await safe_edit(call, db.get_text('handlers_admin.auto_e7f6733a', '📂 مدیریت دسته\u200cبندی\u200cها:'), kb.admin_categories_kb(categories))
+            await safe_edit(call, db.get_text('handlers_admin.auto_e7f6733a', '📂 مدیریت دسته\u200cبندی\u200cها:'), kb.admin_categories_kb(categories, managed=bool(db.get_setting("managed_reseller_bot_id", ""))))
             await call.answer(db.get_text('handlers_admin.auto_333cfcc1', 'دسته\u200cبندی حذف شد.'))
         except Exception:
             await call.answer(db.get_text('handlers_admin.auto_f0a51b8a', '⚠️ حذف دسته\u200cبندی ناموفق بود. دوباره تلاش کنید.'), show_alert=True)
@@ -566,7 +566,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await asyncio.to_thread(db.log_admin_action, message.from_user.id, "category_edit", name)
         await state.clear()
         categories = await asyncio.to_thread(db.get_categories, active_only=False)
-        await message.answer("✅ نام دسته‌بندی تغییر کرد.", reply_markup=kb.admin_categories_kb(categories))
+        await message.answer("✅ نام دسته‌بندی تغییر کرد.", reply_markup=kb.admin_categories_kb(categories, managed=bool(db.get_setting("managed_reseller_bot_id", ""))))
         await send_icon_preview(message, name, custom_icon)
 
     @router.callback_query(F.data == "adm_cat_add")
@@ -13366,7 +13366,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             lines.append(f"🤝 نماینده است (سطح: {stats['agent_tier'] or '—'})")
         return "\n".join(lines)
 
-    @router.callback_query(F.data == "adm_stats_user")
+    @router.callback_query(F.data.in_({"adm_stats_user", "adm_users"}))
     async def cb_admin_stats_user(call: CallbackQuery, state: FSMContext):
         if not senior_admin_only(call.from_user.id):
             return await deny_mid(call)
@@ -13374,7 +13374,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await replace_admin_view(
             call,
             tr("آیدی عددی تلگرام یا یوزرنیم کاربر را بفرست."),
-            reply_markup=kb.admin_back_kb("adm_stats"),
+            reply_markup=kb.admin_back_kb("adm_back_panel" if db.get_setting("managed_reseller_bot_id", "") else "adm_stats"),
         )
         await call.answer()
 
