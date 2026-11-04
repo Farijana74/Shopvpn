@@ -338,14 +338,14 @@ class CatalogMixin:
         with self._get_conn() as conn:
             if active_only:
                 rows = conn.execute(
-                    "SELECT * FROM products WHERE category_id=? AND is_active=1 ORDER BY sort_order, id",
+                    "SELECT * FROM products WHERE category_id=? AND is_active=1 AND NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||products.id AND value='1') ORDER BY sort_order, id",
                     (category_id,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM products WHERE category_id=? ORDER BY sort_order, id", (category_id,)
+                    "SELECT * FROM products WHERE category_id=? AND NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||products.id AND value='1') ORDER BY sort_order, id", (category_id,)
                 ).fetchall()
-        return [row for row in rows if self.get_setting(f"volume_template:{row['id']}",'')!='1']
+        return rows
 
 
     def get_all_products(self):
@@ -353,9 +353,9 @@ class CatalogMixin:
         with self._get_conn() as conn:
             rows=conn.execute(
                 "SELECT p.*, c.name as category_name FROM products p "
-                "JOIN categories c ON p.category_id=c.id ORDER BY c.sort_order, p.sort_order, p.id"
+                "JOIN categories c ON p.category_id=c.id WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||p.id AND value='1') ORDER BY c.sort_order, p.sort_order, p.id"
             ).fetchall()
-        return [row for row in rows if self.get_setting(f"volume_template:{row['id']}",'')!='1']
+        return rows
 
 
     def reorder_products(self, category_id: int, product_ids: list):

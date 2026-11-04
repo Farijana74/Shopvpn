@@ -2070,6 +2070,7 @@ def admin_panel_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
     if db.get_setting("managed_reseller_bot_id", ""):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏪 مدیریت نمایندگی و محصولات",callback_data="agency:home")],
+            [InlineKeyboardButton(text="🛠 حجم دلخواه",callback_data="volume:settings")],
             [InlineKeyboardButton(text="⚙️ تنظیمات فروشگاه و قیمت اختصاصی",callback_data="merchant:home")],
             [InlineKeyboardButton(text="📦 سفارش‌ها",callback_data="adm_pending_orders")],
             [InlineKeyboardButton(text="💳 تنظیمات پرداخت",callback_data="adm_cat:finance")],
@@ -4369,6 +4370,7 @@ def custom_config_menu_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
     ]
     rows.append([InlineKeyboardButton(text=tr("💰 مدیریت قیمت‌گذاری بر اساس بازه (تنظیم قدیمی/پیش‌فرض)"), callback_data="adm_pricing_tiers")])
     rows.append([InlineKeyboardButton(text=tr("🧩 محصولات کانفیگ‌ساز (چندمحصولی)"), callback_data="adm_ccp_list")])
+    if is_main_bot:rows.append([InlineKeyboardButton(text="🏪 دسترسی و نرخ حجم دلخواه نمایندگان",callback_data="volume:settings")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:products")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

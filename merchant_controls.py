@@ -84,9 +84,11 @@ def prefix_uri(uri,prefix):
 
 
 def purchase_allowed(db,product_id,user_id):
-    if db.get_setting(f'volume_template:{int(product_id)}','')!='1':return True
-    quote=json.loads(db.get_setting(f'volume_quote:{int(product_id)}','{}'))
-    return quote.get('user_id')==user_id
+    with db._get_conn() as conn:
+        hidden=conn.execute("SELECT value FROM settings WHERE key=?",(f'volume_template:{int(product_id)}',)).fetchone()
+        if not hidden or hidden[0]!='1':return True
+        saved=conn.execute("SELECT value FROM settings WHERE key=?",(f'volume_quote:{int(product_id)}',)).fetchone()
+    return bool(saved) and json.loads(saved[0]).get('user_id')==user_id
 
 
 def priced_products(db,products,user_id):

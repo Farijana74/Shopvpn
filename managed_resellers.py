@@ -128,9 +128,9 @@ def bootstrap(root, bot_id, product_ids=None, parent_id=None):
         existing = conn.execute('SELECT 1 FROM managed_catalog WHERE bot_id=? LIMIT 1', (bot_id,)).fetchone()
         if product_ids is None and not existing:
             if parent_id:
-                product_ids = [r[0] for r in conn.execute('SELECT product_id FROM managed_catalog WHERE bot_id=? AND allowed=1 AND selected=1', (parent_id,))]
+                product_ids = [r[0] for r in conn.execute("SELECT product_id FROM managed_catalog WHERE bot_id=? AND allowed=1 AND selected=1 AND NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||managed_catalog.product_id AND value='1')", (parent_id,))]
             else:
-                product_ids = [r[0] for r in conn.execute('SELECT id FROM products WHERE is_active=1 AND is_auto_provision=1 AND provision_server_id IS NOT NULL')]
+                product_ids = [r[0] for r in conn.execute("SELECT id FROM products WHERE is_active=1 AND is_auto_provision=1 AND provision_server_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||products.id AND value='1')")]
         for product_id in product_ids or []:
             conn.execute('INSERT OR IGNORE INTO managed_catalog(bot_id,product_id) VALUES(?,?)', (bot_id,int(product_id)))
     local = Database(bot['db_path'])
@@ -164,7 +164,7 @@ def sync_bot(root, bot_id):
     changed = 0
     try:
         with root._get_conn() as conn:
-            offers = [dict(r) for r in conn.execute('SELECT * FROM managed_catalog WHERE bot_id=?', (bot_id,))]
+            offers = [dict(r) for r in conn.execute("SELECT * FROM managed_catalog WHERE bot_id=? AND NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||managed_catalog.product_id AND value='1')", (bot_id,))]
         for offer in offers:
             if root.get_setting(f"volume_template:{offer['product_id']}",'')=='1':continue
             product = root.get_product(offer['product_id'])
@@ -225,6 +225,9 @@ def sync_bot(root, bot_id):
             if local.get_setting('btn_referral','') in ('🤝 زیرمجموعه‌گیری من','زیرمجموعه‌گیری','زیر مجموعه گیری'):
                 local.set_setting('btn_referral','🤝 دعوت دوستان')
             local.set_setting('managed_referral_label_migrated','1')
+        from managed_native_volume import available,plans
+        local.set_setting('volume_native_visible','1')
+        local.set_setting('custom_config_enabled','1' if available(local,root,bot_id) else '0')
         local.set_setting('btn_custom_config_text', root.get_setting('btn_custom_config_text', root.get_setting('btn_custom_config','🛠 حجم دلخواه')))
         return changed
     finally:
@@ -336,12 +339,18 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
     try:
         volume_quote=json.loads(local_db.get_setting(f"volume_quote:{product['id']}",'{}'))
         if volume_quote and volume_quote['user_id']!=user_id:raise AgencyError('این پیش‌فاکتور برای کاربر دیگری است.')
+        with root._get_conn() as conn:
+            funded=conn.execute("SELECT 1 FROM managed_purchases WHERE request_key=? AND status!='refunded'",(f'{bot_id}:{order_id}',)).fetchone()
+        native=volume_quote.get('native_plan_id') is not None
+        if native and not funded:
+            from managed_native_volume import refresh
+            refresh(local_db,root,bot_id,product['upstream_product_id'],volume_quote['native_plan_id'],int(volume_quote['gb']))
         original=root.get_product(product['upstream_product_id'])
         if not original:
             raise AgencyError('محصول بالادست حذف شده است؛ پشتیبانی باید بررسی کند.')
         if volume_quote:
             from managed_volume import policy
-            rules=policy(root,bot_id)
+            rules={"enabled":True,"product_id":original["id"]} if native else policy(root,bot_id)
             original={**dict(original),'auto_provision_volume_gb':int(volume_quote['gb']),'duration_days':30}
         if trial_policy:
             original={**dict(original),'auto_provision_volume_gb':trial_policy['volume_mb']/1024,
@@ -379,8 +388,9 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
                 conn.execute('UPDATE managed_purchases SET is_trial=1 WHERE request_key=?',(f'{bot_id}:{order_id}',))
         else:
             purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],quantity,Fraction(cost_factor,1),extra)
+        name=(str(volume_quote['username'])+f'a{bot_id}') if volume_quote.get('username') else f"{local_db.get_custom_config_prefix()+'-' if local_db.get_custom_config_prefix() else ''}a{bot_id}o{purchase}"
         with root._get_conn() as conn:
-            conn.execute('UPDATE orders SET config_name=COALESCE(config_name,?),user_limit=? WHERE id=?',(f"{local_db.get_custom_config_prefix()+'-' if local_db.get_custom_config_prefix() else ''}a{bot_id}o{purchase}",users,purchase))
+            conn.execute('UPDATE orders SET config_name=COALESCE(config_name,?),user_limit=? WHERE id=?',(name,users,purchase))
             ledger=conn.execute('SELECT status FROM managed_purchases WHERE request_key=?',(f'{bot_id}:{order_id}',)).fetchone()
             if ledger and ledger['status']=='completed':
                 count=conn.execute('SELECT COUNT(*) FROM custom_configs WHERE order_id=?',(purchase,)).fetchone()[0]
@@ -685,9 +695,9 @@ def discover_products(root, bot_id):
     parent=dict(bot).get('managed_parent_bot_id')
     with root._get_conn() as conn:
         if parent:
-            ids=[r[0] for r in conn.execute('SELECT product_id FROM managed_catalog WHERE bot_id=? AND allowed=1 AND selected=1',(parent,))]
+            ids=[r[0] for r in conn.execute("SELECT product_id FROM managed_catalog WHERE bot_id=? AND allowed=1 AND selected=1 AND NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||managed_catalog.product_id AND value='1')",(parent,))]
         else:
-            ids=[r[0] for r in conn.execute('SELECT id FROM products WHERE is_active=1 AND is_auto_provision=1 AND provision_server_id IS NOT NULL')]
+            ids=[r[0] for r in conn.execute("SELECT id FROM products WHERE is_active=1 AND is_auto_provision=1 AND provision_server_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM settings WHERE key='volume_template:'||products.id AND value='1')")]
         for pid in ids:
             if conn.execute("SELECT 1 FROM settings WHERE key=? AND value='1'",(f'volume_template:{pid}',)).fetchone():continue
             current=conn.execute('SELECT * FROM products WHERE id=? AND is_active=1',(pid,)).fetchone()
