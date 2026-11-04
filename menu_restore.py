@@ -13,4 +13,4 @@ def main_menu_markup(db, user_id):
 
 async def restore_main_menu(bot, db, user_id):
     markup = await asyncio.to_thread(main_menu_markup, db, user_id)
-    await bot.send_message(user_id, '📋 منو:', reply_markup=markup)
+    await bot.send_message(user_id, db.get_text('handlers_user.auto_f368dac9','📋 منو:'), reply_markup=markup)

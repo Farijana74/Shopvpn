@@ -2258,7 +2258,7 @@ def api_tier_quote(product_id: int, quantity: int = 1, auth=Depends(get_verified
     product = db.get_product(product_id)
     if not product:
         raise HTTPException(status_code=404, detail=tr("محصول یافت نشد."))
-    return db.get_tier_price_info(tg_id, product["price"], max(1, quantity))
+    return db.get_tier_price_info(tg_id, product["price"], max(1, quantity), product["id"])
 
 
 @app.post("/api/orders")
@@ -2285,7 +2285,7 @@ async def api_create_order(body: OrderCreate, request: Request, auth=Depends(req
         if quantity > stock:
             raise HTTPException(status_code=400, detail=tr(f"موجودی کافی نیست. فقط {stock} عدد موجود است."))
 
-    tier_info = db.get_tier_price_info(tg_id, product["price"], quantity)
+    tier_info = db.get_tier_price_info(tg_id, product["price"], quantity, product["id"])
     total_price = tier_info["total_after"]
     discount_code_id = None
     discount_amount = 0

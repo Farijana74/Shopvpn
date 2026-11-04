@@ -166,6 +166,7 @@ def sync_bot(root, bot_id):
         with root._get_conn() as conn:
             offers = [dict(r) for r in conn.execute('SELECT * FROM managed_catalog WHERE bot_id=?', (bot_id,))]
         for offer in offers:
+            if root.get_setting(f"volume_template:{offer['product_id']}",'')=='1':continue
             product = root.get_product(offer['product_id'])
             try:
                 purchase_price = rate(root, bot_id, offer['product_id'],require_selected=False)
@@ -333,9 +334,15 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
     root=Database(root_path)
     bot_id=int(local_db.get_setting('managed_reseller_bot_id','0'))
     try:
+        volume_quote=json.loads(local_db.get_setting(f"volume_quote:{product['id']}",'{}'))
+        if volume_quote and volume_quote['user_id']!=user_id:raise AgencyError('این پیش‌فاکتور برای کاربر دیگری است.')
         original=root.get_product(product['upstream_product_id'])
         if not original:
             raise AgencyError('محصول بالادست حذف شده است؛ پشتیبانی باید بررسی کند.')
+        if volume_quote:
+            from managed_volume import policy
+            rules=policy(root,bot_id)
+            original={**dict(original),'auto_provision_volume_gb':int(volume_quote['gb']),'duration_days':30}
         if trial_policy:
             original={**dict(original),'auto_provision_volume_gb':trial_policy['volume_mb']/1024,
                       'duration_days':trial_policy['hours']/24,'base_users':1,'max_users':1,'extra_user_price':0,
@@ -344,6 +351,7 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
                 original.update(provision_server_id=trial_policy['panel_id'],is_auto_provision=1,delivery_mode=trial_policy.get('delivery_mode','normal'))
         with root._get_conn() as conn:
             funded=conn.execute("SELECT 1 FROM managed_purchases WHERE request_key=? AND status!='refunded'",(f'{bot_id}:{order_id}',)).fetchone()
+        if volume_quote and not funded and (not rules.get('enabled') or rules.get('product_id')!=original['id']):raise AgencyError('حجم دلخواه این نماینده غیرفعال شده است.')
         current_cost=rate(root,bot_id,product['upstream_product_id']) if not funded and not (trial_policy and trial_policy.get('panel_id')) else 0
         if not trial_policy and not funded and int(product['price']) < current_cost:
             raise AgencyError('نرخ تأمین تغییر کرده؛ ابتدا محصولات را بروزرسانی کنید.')
@@ -362,16 +370,17 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
         if users and maximum and users > maximum:
             raise AgencyError('تعداد کاربر بالاتر از حد مجاز محصول بالادست است.')
         extra=max(0,int(users or base_users)-base_users)*int(original['extra_user_price'] or 0)
-        if not trial_policy and not funded and int(local_order['base_price']) < (current_cost+extra)*quantity:
+        cost_factor=int(volume_quote['gb']) if volume_quote else 1
+        if not trial_policy and not funded and int(local_order['base_price']) < (current_cost*cost_factor+extra)*quantity:
             raise AgencyError('قیمت سفارش از نرخ تأمین جدید کمتر است؛ ابتدا قیمت‌ها را بروزرسانی کنید.')
         if trial_policy:
             purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],1,Fraction(0,1),trial_policy['cost'],allow_zero=True,panel_trial=bool(trial_policy.get('panel_id')))
             with root._get_conn() as conn:
                 conn.execute('UPDATE managed_purchases SET is_trial=1 WHERE request_key=?',(f'{bot_id}:{order_id}',))
         else:
-            purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],quantity,Fraction(1,1),extra)
+            purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],quantity,Fraction(cost_factor,1),extra)
         with root._get_conn() as conn:
-            conn.execute('UPDATE orders SET config_name=COALESCE(config_name,?),user_limit=? WHERE id=?',(f'a{bot_id}o{purchase}',users,purchase))
+            conn.execute('UPDATE orders SET config_name=COALESCE(config_name,?),user_limit=? WHERE id=?',(f"{local_db.get_custom_config_prefix()+'-' if local_db.get_custom_config_prefix() else ''}a{bot_id}o{purchase}",users,purchase))
             ledger=conn.execute('SELECT status FROM managed_purchases WHERE request_key=?',(f'{bot_id}:{order_id}',)).fetchone()
             if ledger and ledger['status']=='completed':
                 count=conn.execute('SELECT COUNT(*) FROM custom_configs WHERE order_id=?',(purchase,)).fetchone()[0]
@@ -456,6 +465,7 @@ async def notify_root_sales(root, bot):
 
 
 async def reconcile(root, manager=None):
+    from database import Database
     for bot in root.list_reseller_bots(active_only=True):
         from database import Database
         local=Database(bot['db_path'])
@@ -465,7 +475,7 @@ async def reconcile(root, manager=None):
                 await asyncio.to_thread(bootstrap,root,bot['id'],parent_id=dict(bot).get('managed_parent_bot_id'))
                 marked=str(bot['id'])
             if marked:
-                await asyncio.to_thread(sync_bot,root,bot['id'])
+                await asyncio.to_thread(discover_products,root,bot['id'])
                 if manager:
                     instance=manager.instances.get(bot['bot_token'])
                     if instance and not instance.get('managed_reseller'):
@@ -486,14 +496,23 @@ async def reconcile(root, manager=None):
             instance=manager.instances.get(notice['bot_token'])
             if not instance:
                 continue
-            try:
-                product=root.get_product(notice['product_id'])
-                name=product['name'] if product else f"#{notice['product_id']}"
-                await instance['bot'].send_message(notice['owner_telegram_id'],f"🔔 نرخ تأمین «{name}» تغییر کرد: {notice['old_price']} ← {notice['new_price']} تومان. نرخ جدید در خریدهای بعدی اعمال می‌شود.",parse_mode=None)
-            except Exception:
-                continue
-            with root._get_conn() as conn:
-                conn.execute('UPDATE managed_notices SET delivered=1 WHERE id=?',(notice['id'],))
+            bot_row=root.get_reseller_bot(notice['bot_id'])
+            child=Database(bot_row['db_path'])
+            try:recipients=set(child.list_admins())|{notice['owner_telegram_id']}
+            finally:child.close()
+            product=root.get_product(notice['product_id'])
+            name=product['name'] if product else f"#{notice['product_id']}"
+            text=(f"📦 محصول جدید «{name}» به فهرست بالادست اضافه شد. نرخ تأمین: {notice['new_price']:,} تومان. از بخش محصولات، دریافت لیست جدید را بزنید و قیمت فروش را تعیین کنید." if notice['old_price'] is None else f"🔔 نرخ تأمین «{name}» تغییر کرد: {notice['old_price']} ← {notice['new_price']} تومان. نرخ جدید در خریدهای بعدی اعمال می‌شود.")
+            key=f"managed_notice_sent:{notice['id']}"
+            sent=set(json.loads(root.get_setting(key,'[]')))
+            for uid in recipients-sent:
+                try:await instance['bot'].send_message(uid,text,parse_mode=None)
+                except Exception:continue
+                sent.add(uid);root.set_setting(key,json.dumps(sorted(sent)))
+            if recipients<=sent:
+                with root._get_conn() as conn:
+                    conn.execute('UPDATE managed_notices SET delivered=1 WHERE id=?',(notice['id'],))
+
 
 
 def refund_reservation(root, bot_id, local_order_id):
@@ -615,6 +634,8 @@ async def renew_service(local, order):
         elif mode=='time':
             if package_days<=0:raise AgencyError('این محصول مدت نامحدود دارد.')
             factor=Fraction(add_days,package_days)
+            if root.get_setting(f"volume_template:{product['id']}",'')=='1':
+                factor*=max(Fraction(1,1),Fraction(str(cc['volume_gb'] or 0)))
         elif mode=='full':
             factor=max(Fraction(1,1),add_volume/package_volume if package_volume>0 else Fraction(1,1),Fraction(add_days,package_days) if package_days>0 else Fraction(1,1))
         new_users=int(order['renewal_user_limit'] or cc['user_limit'] or product['base_users'] or 0)
@@ -668,7 +689,17 @@ def discover_products(root, bot_id):
         else:
             ids=[r[0] for r in conn.execute('SELECT id FROM products WHERE is_active=1 AND is_auto_provision=1 AND provision_server_id IS NOT NULL')]
         for pid in ids:
-            conn.execute('INSERT OR IGNORE INTO managed_catalog(bot_id,product_id,allowed,selected) VALUES(?,?,1,0)',(bot_id,pid))
+            if conn.execute("SELECT 1 FROM settings WHERE key=? AND value='1'",(f'volume_template:{pid}',)).fetchone():continue
+            current=conn.execute('SELECT * FROM products WHERE id=? AND is_active=1',(pid,)).fetchone()
+            if not current:continue
+            added=conn.execute('INSERT OR IGNORE INTO managed_catalog(bot_id,product_id,allowed,selected) VALUES(?,?,1,0)',(bot_id,pid)).rowcount
+            if added:
+                product=dict(current)
+                price=int(product.get('reseller_wholesale_price') if product.get('reseller_wholesale_price') is not None else product['price'])
+                if parent:
+                    upstream=conn.execute('SELECT buy_price FROM managed_catalog WHERE bot_id=? AND product_id=?',(parent,pid)).fetchone()
+                    price=max(price,int(upstream['buy_price'] or 0)) if upstream else price
+                conn.execute('INSERT INTO managed_notices(bot_id,product_id,old_price,new_price) VALUES(?,?,NULL,?)',(bot_id,pid,price))
     return sync_bot(root,bot_id)
 
 

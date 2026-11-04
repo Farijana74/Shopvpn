@@ -46,6 +46,7 @@ DSUB_DEFAULTS: Dict[str, str] = {
     "dsub_show_qr": "1",                # دکمه‌های QR
     "dsub_show_apps": "1",              # بخش «برنامه‌ها»
     "dsub_show_faq": "1",               # بخش «اگر وصل نشد»
+    "shop_display_prefix": "",
     "dsub_profile_title": "{name}",     # عنوان پروفایل داخل اپ؛ متغیرها: {name} {user} {brand}
     "dsub_update_interval": "12",       # ساعت؛ هدر profile-update-interval (۰ = از پنل)
     "dsub_info_line": "0",              # «خط اول ساب»: حجم و روز باقی‌مانده
@@ -649,6 +650,7 @@ def compose_client_reply(up_status: Optional[int], up_headers: Dict[str, str], u
             settings.get("dsub_profile_title") or "", name=service_name(cc), user=_row(cc, "username", ""), brand=brand
         ).strip()
         if title:
+            title=(settings.get("shop_display_prefix") or "")+title
             headers["profile-title"] = b64_header(title[:80])
         try:
             interval = int(settings.get("dsub_update_interval") or 0)
@@ -676,6 +678,9 @@ def compose_client_reply(up_status: Optional[int], up_headers: Dict[str, str], u
 
     if body.kind == "uris":
         out_text = body.text
+        if settings.get("shop_display_prefix"):
+            from merchant_controls import prefix_uri
+            out_text="\n".join(prefix_uri(line,settings["shop_display_prefix"]) for line in out_text.splitlines())
         if extra_uris:
             out_text = out_text.rstrip("\n") + "\n" + "\n".join(extra_uris)
         if settings.get("dsub_info_line") == "1" and state == "active":

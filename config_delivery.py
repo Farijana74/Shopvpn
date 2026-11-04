@@ -136,6 +136,9 @@ def build_qr_bytes(link: str, db=None) -> bytes:
     اگر ادمین پس‌زمینه‌ای برای QR تنظیم و فعال کرده باشد (db داده شده و
     qr_background_enabled(db) درست باشد)، همان تصویر دور کد QR چیده می‌شود؛
     در غیر این صورت همان کد QR ساده‌ی سیاه/سفید قبلی برگردانده می‌شود."""
+    if db is not None:
+        from merchant_controls import prefix_uri
+        link=prefix_uri(link,db.get_setting("shop_display_prefix", ""))
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
@@ -425,13 +428,24 @@ async def prepare_delivery(link: str, product_name: str, idx: int, total: int,
     else:
         L = lambda t: t
     svc = await collect_service_info(link, product_name)
+    if db is not None:
+        from merchant_controls import prefix_uri
+        prefix=db.get_setting("shop_display_prefix", "")
+        if prefix:
+            svc["configs"]=[prefix_uri(uri,prefix) for uri in svc["configs"]]
+            name=str(svc.get("name") or product_name)
+            svc["name"]=name if name.startswith(prefix) else prefix+name
+            if svc.get("sub_url"):svc["sub_url"]=prefix_uri(svc["sub_url"],prefix)
     alternates = []
     if db is not None and svc["is_sub"]:
         # ساب اختصاصی: به‌جای آدرس پنل، لینک روی دامنه‌ی خودِ فروشگاه نمایش داده می‌شود
         dedicated = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link)
         if dedicated != link:
             svc["sub_url"] = dedicated
-    if db is not None and sub_link_on and svc["is_sub"] and svc["sub_url"] == link:
+            if db.get_setting("shop_display_prefix", ""):
+                from merchant_controls import prefix_uri
+                svc["sub_url"]=prefix_uri(dedicated,db.get_setting("shop_display_prefix", ""))
+    if db is not None and sub_link_on and svc["is_sub"] and svc["sub_url"].split("#",1)[0] == link.split("#",1)[0]:
         try:
             alternates = await asyncio.to_thread(db.get_alternate_sub_urls, link)
         except Exception:

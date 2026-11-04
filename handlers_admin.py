@@ -326,7 +326,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         try:
             inline_kb = (await asyncio.to_thread(kb.inline_menu_for_user, db, user_tg_id, is_main_bot))
             if inline_kb is not None:
-                await bot.send_message(user_tg_id, tr("📋 منو:"), reply_markup=inline_kb)
+                await bot.send_message(user_tg_id, db.get_text("handlers_user.auto_f368dac9", "📋 منو:"), reply_markup=inline_kb)
         except Exception:
             pass
 
@@ -15523,6 +15523,10 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         for i, chunk in enumerate(chunks):
             await message.answer(chunk, reply_markup=_ai_admin_end_kb() if i == len(chunks) - 1 else None)
 
+    import managed_volume
+    managed_volume.register(router,db,is_main_bot)
+    import merchant_controls
+    merchant_controls.register(router,db)
     import legacy_import_bot
     legacy_import_bot.register(router,db,is_main_bot)
 

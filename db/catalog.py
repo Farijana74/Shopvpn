@@ -345,16 +345,17 @@ class CatalogMixin:
                 rows = conn.execute(
                     "SELECT * FROM products WHERE category_id=? ORDER BY sort_order, id", (category_id,)
                 ).fetchall()
-            return rows
+        return [row for row in rows if self.get_setting(f"volume_template:{row['id']}",'')!='1']
 
 
     def get_all_products(self):
         self.expire_product_discounts()
         with self._get_conn() as conn:
-            return conn.execute(
+            rows=conn.execute(
                 "SELECT p.*, c.name as category_name FROM products p "
                 "JOIN categories c ON p.category_id=c.id ORDER BY c.sort_order, p.sort_order, p.id"
             ).fetchall()
+        return [row for row in rows if self.get_setting(f"volume_template:{row['id']}",'')!='1']
 
 
     def reorder_products(self, category_id: int, product_ids: list):

@@ -14,6 +14,7 @@ import random
 import re
 import asyncio
 import logging
+import merchant_controls
 from service_alerts import send_service_alert
 import math
 from datetime import datetime, timezone, timedelta
@@ -316,6 +317,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         markup = await asyncio.to_thread(main_menu_markup, db, message.from_user.id)
         await message.answer("عملیات لغو شد. از منو انتخاب کنید:", reply_markup=markup)
 
+    import managed_volume
+    managed_volume.register(router,db,is_main_bot)
     extra_gateway_user.register_early(router, db, is_main_bot)
 
     async def _safe_edit(message: Message, text: str, reply_markup=None, parse_mode=None) -> None:
@@ -329,6 +332,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         چنین خطاهایی را می‌گیرد و در بدترین حالت، به‌جای ویرایش، پیام قدیمی را
         حذف و یک پیام تازه می‌فرستد تا منو همیشه به کاربر برگردد.
         """
+        if reply_markup is None:
+            from menu_restore import main_menu_markup
+            candidate=await asyncio.to_thread(main_menu_markup,db,message.chat.id)
+            if isinstance(candidate, InlineKeyboardMarkup):reply_markup=candidate
         kwargs = {"reply_markup": reply_markup}
         try:
             if parse_mode is not None:
@@ -1165,7 +1172,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             )
             await message.answer(text)
             return
-        tier_info = await _tier_info(message.from_user.id, product["price"], 1)
+        tier_info = await _tier_info(message.from_user.id, product["price"], 1, product["id"])
         discount_amount, discount_label = await _apply_pending_discount(
             state, tier_info["total_after"], product_id, user_id=message.from_user.id
         )
@@ -1267,7 +1274,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     async def show_categories(message: Message, state: FSMContext):
         await state.clear()
         categories = (await asyncio.to_thread(db.get_categories, active_only=True))
-        custom_enabled = full_access_bot and (
+        custom_enabled = (full_access_bot or bool(db.get_setting("managed_reseller_bot_id", ""))) and (
             (await asyncio.to_thread(db.get_setting, "custom_config_enabled", "0")) == "1"
             or (await asyncio.to_thread(db.count_active_custom_config_products)) > 0
         )
@@ -1287,13 +1294,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data == "custom_config_start")
     async def cb_custom_config_start(call: CallbackQuery, state: FSMContext):
         await call.answer()
-        if not full_access_bot:
+        if not full_access_bot and not db.get_setting("managed_reseller_bot_id", ""):
             return
         try:
             await call.message.delete()
         except Exception:
             pass
-        await custom_config_start(call.message, state)
+        await custom_config_start(call.message.model_copy(update={"from_user":call.from_user}), state)
 
     @router.callback_query(F.data == "back_main")
     async def cb_back_main(call: CallbackQuery, state: FSMContext):
@@ -1324,12 +1331,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         await _safe_edit(
             call.message,
             db.get_text("handlers_user.category.choose_product", "یک محصول را انتخاب کنید:"),
-            reply_markup=kb.products_kb(db, products, cat_id),
+            reply_markup=kb.products_kb(db, merchant_controls.priced_products(db,products,call.from_user.id), cat_id),
         )
         await call.answer()
 
-    async def _tier_info(user_id: int, unit_price: int, quantity: int) -> dict:
-        return await asyncio.to_thread(db.get_tier_price_info, user_id, unit_price, quantity)
+    async def _tier_info(user_id: int, unit_price: int, quantity: int, product_id=None) -> dict:
+        from merchant_controls import purchase_allowed
+        if product_id is not None and not purchase_allowed(db,product_id,user_id):raise ValueError("این محصول در دسترس شما نیست.")
+        return await asyncio.to_thread(db.get_tier_price_info, user_id, unit_price, quantity, product_id)
 
     async def _users_option(product) -> int:
         return await asyncio.to_thread(ul.selectable_max_users, db, product)
@@ -1341,6 +1350,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
     def _product_confirm_text(product, quantity: int, stock: int, wallet_credit: int, discount_amount: int = 0, discount_label: str = "", tier_info: dict = None, users: int = 0, included_users: int = 0) -> str:
         unit_price = ul.price_for_users(product, users)
+        if tier_info and tier_info.get("title")=="قیمت اختصاصی":
+            unit_price=tier_info["total_after"]//quantity
         stock_line = (
             db.get_text(
                 "handlers_user.product.stock_line_auto",
@@ -1455,6 +1466,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
     @router.callback_query(F.data.startswith("prod:"))
     async def cb_product(call: CallbackQuery, state: FSMContext):
+        from merchant_controls import purchase_allowed
+        if not purchase_allowed(db,int(call.data.split(':')[1]),call.from_user.id):return await call.answer("این محصول در دسترس شما نیست.",show_alert=True)
         product_id = int(call.data.split(":")[1])
         product = (await asyncio.to_thread(db.get_product, product_id))
         if not product:
@@ -1499,7 +1512,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         users = _chosen_users(data, product)
         included = 0 if users else await asyncio.to_thread(ul.included_users, db, product)
         wallet_credit = (await asyncio.to_thread(db.get_wallet_credit, call.from_user.id))
-        tier_info = await _tier_info(call.from_user.id, ul.price_for_users(product, users), quantity)
+        tier_info = await _tier_info(call.from_user.id, ul.price_for_users(product, users), quantity, product["id"])
         discount_amount, discount_label = await _apply_pending_discount(
             state, tier_info["total_after"], product["id"], user_id=call.from_user.id
         )
@@ -1590,7 +1603,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         quantity = max(1, min(quantity, stock)) if stock > 0 else quantity
 
         users = _chosen_users(data, product)
-        tier_info = await _tier_info(message.from_user.id, ul.price_for_users(product, users), quantity)
+        tier_info = await _tier_info(message.from_user.id, ul.price_for_users(product, users), quantity, product["id"])
         total_price = tier_info["total_after"]
         code_row = (await asyncio.to_thread(db.get_discount_code, message.text.strip()))
         invalid_reason = (await asyncio.to_thread(
@@ -2150,7 +2163,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         allowed_methods = (await asyncio.to_thread(db.get_product_payment_methods, product_id))
         wallet_allowed = allowed_methods is None or "wallet" in allowed_methods
 
-        tier_info = await _tier_info(call.from_user.id, ul.price_for_users(product, users), quantity)
+        tier_info = await _tier_info(call.from_user.id, ul.price_for_users(product, users), quantity, product["id"])
         total_price = tier_info["total_after"]
         price_after_code = max(total_price - discount_amount, 0)
         plan = await asyncio.to_thread(db.plan_wallet_spend, call.from_user.id, price_after_code, wallet_allowed)
@@ -2700,6 +2713,9 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         return "\n".join(lines)
 
     async def custom_config_start(message: Message, state: FSMContext):
+        if db.get_setting("managed_reseller_bot_id", ""):
+            from managed_volume import start
+            return await start(message,state,db)
         if not full_access_bot:
             await message.answer(db.get_text('handlers_user.auto_1be04045', 'این بخش در حال حاضر غیرفعال است.'))
             return
@@ -8124,7 +8140,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
         allowed_methods = await asyncio.to_thread(db.get_product_payment_methods, product_id)
         wallet_allowed = allowed_methods is None or "wallet" in allowed_methods
-        tier_info = await _tier_info(user_id, product["price"], quantity)
+        tier_info = await _tier_info(user_id, product["price"], quantity, product["id"])
         total_price = tier_info["total_after"]
         wallet_credit = await asyncio.to_thread(db.get_wallet_credit, user_id)
         plan = await asyncio.to_thread(db.plan_wallet_spend, user_id, total_price, wallet_allowed)

@@ -490,7 +490,7 @@ class BotManager:
             )
             fsm_storage = MemoryStorage()
         dp = Dispatcher(storage=fsm_storage)
-        dp.callback_query.outer_middleware(InlineNavigationMiddleware())
+        dp.callback_query.outer_middleware(InlineNavigationMiddleware(db))
         async def _error_with_report(event: ErrorEvent, _bot=bot, _db=db) -> bool:
             await _report_error_to_group(_bot, _db, event)
             return await _global_error_handler(event)

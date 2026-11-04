@@ -15,6 +15,7 @@ class Navigation:
     message_id: int
     used: bool = False
     task: object = None
+    fallback_markup: object = None
 
 
 _navigation = contextvars.ContextVar('inline_navigation', default=None)
@@ -31,6 +32,9 @@ _PREFIXES = ('mm:', 'acct:', 'cat:', 'prod:', 'mo_v:', 'mo_back', 'mo_refresh:',
 
 
 class InlineNavigationMiddleware(BaseMiddleware):
+    def __init__(self,db=None):
+        self.db=db
+
     async def __call__(self, handler, event, data):
         message = getattr(event, 'message', None)
         callback = getattr(event, 'data', '') or ''
@@ -38,7 +42,12 @@ class InlineNavigationMiddleware(BaseMiddleware):
             return await handler(event, data)
         if not message or not callback.startswith(_PREFIXES):
             return await handler(event, data)
-        token = _navigation.set(Navigation(message.chat.id, message.message_id, task=asyncio.current_task()))
+        fallback=None
+        if self.db is not None:
+            from menu_restore import main_menu_markup
+            candidate=await asyncio.to_thread(main_menu_markup,self.db,event.from_user.id)
+            if isinstance(candidate,InlineKeyboardMarkup):fallback=candidate
+        token = _navigation.set(Navigation(message.chat.id, message.message_id, task=asyncio.current_task(),fallback_markup=fallback))
         try:
             return await handler(event, data)
         finally:
@@ -49,6 +58,8 @@ async def send_navigation(method, send):
     context = _navigation.get()
     if context is None or context.task is not asyncio.current_task() or str(getattr(method, 'chat_id', '')) != str(context.chat_id):
         return await send(method)
+    if isinstance(method,(SendMessage,EditMessageText)) and method.reply_markup is None and context.fallback_markup is not None:
+        method=method.model_copy(update={"reply_markup":context.fallback_markup})
     if isinstance(method, EditMessageText) and method.message_id == context.message_id:
         context.used = True
     elif isinstance(method, SendMessage) and not context.used and not method.reply_parameters:

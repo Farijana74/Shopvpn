@@ -72,7 +72,7 @@ async def _restore_menu_web(bot_token, user_tg_id, db):
         from menu_restore import main_menu_markup
         try:
             markup = await asyncio.to_thread(main_menu_markup, db, user_tg_id)
-            await tg_send(bot_token, user_tg_id, "📋 منو:", reply_markup=markup.model_dump(mode="json", exclude_none=True))
+            await tg_send(bot_token, user_tg_id, db.get_text("handlers_user.auto_f368dac9", "📋 منو:"), reply_markup=markup.model_dump(mode="json", exclude_none=True))
         except Exception:
             import logging
             logging.getLogger(__name__).warning("Restoring post-delivery menu failed for user %s",user_tg_id)

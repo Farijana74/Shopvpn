@@ -10,6 +10,7 @@ from managed_resellers import AgencyError, bootstrap, configure, select_product,
 
 class AgencyFlow(StatesGroup):
     price=State()
+    select_price=State()
     description=State()
     grant=State()
     discount=State()
@@ -155,6 +156,7 @@ def create_agency_router(local, is_main_bot):
                 bot_id=int(parts[2]) if action=='offers' else parent_id
                 own_bot(bot_id)
                 if action=='products':
+                    await state.clear()
                     await asyncio.to_thread(discover_products,root,bot_id)
                 with root._get_conn() as conn:
                     offers={r['product_id']:dict(r) for r in conn.execute('SELECT * FROM managed_catalog WHERE bot_id=?',(bot_id,))}
@@ -167,15 +169,20 @@ def create_agency_router(local, is_main_bot):
                         with root._get_conn() as conn:
                             ids=[r[0] for r in conn.execute('SELECT product_id FROM managed_catalog WHERE bot_id=? AND allowed=1 AND selected=1',(parent_id,))]
                         candidates=[dict(root.get_product(pid)) for pid in ids if root.get_product(pid)]
+                    candidates=[p for p in candidates if root.get_setting(f"volume_template:{p['id']}",'')!='1']
                     rows=[[Button(text=('✅ ' if offers.get(p['id'],{}).get('allowed') else '☑️ ')+p['name'],callback_data=f"agency:allow:{bot_id}:{p['id']}")] for p in candidates]
                 else:
                     rows=[]
                     for pid,offer in offers.items():
+                        if root.get_setting(f'volume_template:{pid}','')=='1':continue
                         product=root.get_product(pid)
                         if not product or not offer['allowed']: continue
-                        rows.append([Button(text=('✅ ' if offer['selected'] else '☑️ ')+product['name'],callback_data=f'agency:select:{pid}')])
+                        try:cost_label=f"{rate(root,bot_id,pid,require_selected=False):,} تومان"
+                        except AgencyError:cost_label='ناموجود در بالادست'
+                        rows.append([Button(text=('✅ ' if offer['selected'] else '🆕 ')+product['name']+f" | تأمین: {cost_label}",callback_data=f'agency:select:{pid}')])
                     with local._get_conn() as conn:
                         products=conn.execute('SELECT id,name,price,is_active FROM products WHERE upstream_product_id IS NOT NULL').fetchall()
+                    products=[p for p in products if local.get_setting(f"volume_template:{p['id']}",'')!='1']
                     rows += [[Button(text=f"ویرایش محصول: {p['name']} | {p['price']:,} تومان | {'فعال' if p['is_active'] else 'غیرفعال'}",callback_data=f"agency:edit:{p['id']}")] for p in products]
                 prefix=f'agency:offers:{bot_id}' if action=='offers' else 'agency:products'
                 requested=int(parts[3]) if action=='offers' and len(parts)>3 else (int(parts[2]) if action=='products' and len(parts)>2 else 0)
@@ -186,6 +193,7 @@ def create_agency_router(local, is_main_bot):
                 if page:navigation.append(Button(text='قبلی',callback_data=prefix+f':{page-1}'))
                 if (page+1)*40<total:navigation.append(Button(text='بعدی',callback_data=prefix+f':{page+1}'))
                 if navigation:rows.append(navigation)
+                if action=='products':rows.append([Button(text='🔄 دریافت لیست جدید محصولات',callback_data='agency:products')])
                 rows.append([Button(text='⬅️ بازگشت',callback_data='agency:home')])
                 await display(call,'محصولات مجاز را انتخاب کنید؛ تغییر مشخصات فنی فقط از ربات اصلی انجام می‌شود.',rows)
             elif action=='allow':
@@ -205,7 +213,12 @@ def create_agency_router(local, is_main_bot):
                 with root._get_conn() as conn:
                     offer=conn.execute('SELECT selected FROM managed_catalog WHERE bot_id=? AND product_id=?',(parent_id,pid)).fetchone()
                 if not offer: raise AgencyError('محصول یافت نشد.')
-                await asyncio.to_thread(select_product,root,parent_id,pid,not bool(offer['selected']))
+                if not offer['selected']:
+                    cost=rate(root,parent_id,pid,require_selected=False)
+                    await state.set_state(AgencyFlow.select_price);await state.update_data(agency_source_product=pid)
+                    await display(call,f"قیمت فروش «{root.get_product(pid)['name']}» را به تومان ارسال کنید.\nنرخ تأمین فعلی: {cost:,} تومان",[[Button(text='انصراف',callback_data='agency:products')]])
+                    return await call.answer()
+                await asyncio.to_thread(select_product,root,parent_id,pid,False)
                 await display(call,'✅ انتخاب ذخیره و محصولات بروزرسانی شد.',[[Button(text='ادامه',callback_data='agency:products')]])
             elif action in ('edit','toggle'):
                 if not parent_id: raise AgencyError('این بخش برای فروشگاه نماینده است.')
@@ -271,6 +284,25 @@ def create_agency_router(local, is_main_bot):
                 await message.answer('سرویس تست روی کدام پنل ساخته شود؟' if servers else 'پنل فعالی ثبت نشده است. ابتدا پنل را در ربات اصلی اضافه کنید.',reply_markup=Markup(inline_keyboard=rows))
         except ValueError as exc:
             await message.answer(str(exc) if isinstance(exc,AgencyError) else 'لطفاً فقط یک عدد بفرستید.')
+
+    @router.message(AgencyFlow.select_price)
+    async def select_price_message(message,state):
+        if not authorized(message.from_user.id) or not parent_id:return
+        try:
+            value=int((message.text or '').strip())
+            pid=(await state.get_data())['agency_source_product']
+            minimum=rate(root,parent_id,pid,require_selected=False)
+            if value<minimum:raise AgencyError(f'قیمت فروش حداقل {minimum:,} تومان باشد.')
+            # Create an unselected mirror first; it cannot be sold before pricing succeeds.
+            await asyncio.to_thread(sync_bot,root,parent_id)
+            with local._get_conn() as conn:
+                row=conn.execute('SELECT id FROM products WHERE upstream_product_id=?',(pid,)).fetchone()
+            if not row:raise AgencyError('محصول مجاز نیست یا حذف شده است.')
+            await asyncio.to_thread(local.edit_product,row['id'],price=value)
+            await asyncio.to_thread(select_product,root,parent_id,pid,True)
+            await state.clear()
+            await message.answer('✅ محصول با قیمت فروش انتخاب‌شده اضافه شد.',reply_markup=Markup(inline_keyboard=home_rows()))
+        except ValueError as exc:await message.answer(str(exc))
 
     @router.message(AgencyFlow.price)
     async def price_message(message,state):

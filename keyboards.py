@@ -351,7 +351,7 @@ def reseller_tier_detail_kb(code: str) -> InlineKeyboardMarkup:
 def categories_kb(db, categories, is_main_bot: bool = True) -> InlineKeyboardMarkup:
     rows = []
     custom_enabled = db.get_setting("custom_config_enabled", "0") == "1" or db.count_active_custom_config_products() > 0
-    if db.is_full_access_bot(is_main_bot) and custom_enabled:
+    if (db.is_full_access_bot(is_main_bot) or db.get_setting("managed_reseller_bot_id", "")) and custom_enabled:
         text = db.get_setting("btn_custom_config_text", "🛠 حجم دلخواه")
         rows.append([_styled_inline(db, text, "custom_config_start", "btn_custom_config_style")])
     for cat in categories:
@@ -2070,6 +2070,7 @@ def admin_panel_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
     if db.get_setting("managed_reseller_bot_id", ""):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏪 مدیریت نمایندگی و محصولات",callback_data="agency:home")],
+            [InlineKeyboardButton(text="⚙️ تنظیمات فروشگاه و قیمت اختصاصی",callback_data="merchant:home")],
             [InlineKeyboardButton(text="📦 سفارش‌ها",callback_data="adm_pending_orders")],
             [InlineKeyboardButton(text="💳 تنظیمات پرداخت",callback_data="adm_cat:finance")],
             [InlineKeyboardButton(text="👤 کاربران",callback_data="adm_stats_user")],
@@ -2091,6 +2092,7 @@ def admin_panel_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
         button = _styled_inline(db, label, f"adm_cat:{cat_key}", f"catlbl_{cat_key}_style")
         entries.append((cat_key, label, button))
     rows = _layout_group_rows(db, "admin_categories", entries, wide_pack=True)
+    rows.append([InlineKeyboardButton(text="⚙️ تنظیمات فروشگاه و قیمت اختصاصی",callback_data="merchant:home")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_exit_panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

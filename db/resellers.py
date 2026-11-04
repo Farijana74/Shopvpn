@@ -317,7 +317,17 @@ class ResellersMixin:
             return conn.execute("DELETE FROM reseller_tier_qty_discounts WHERE id=?", (discount_id,)).rowcount > 0
 
 
-    def get_tier_price_info(self, user_tg_id: int, unit_price: int, quantity: int = 1) -> dict:
+    def get_tier_price_info(self, user_tg_id: int, unit_price: int, quantity: int = 1, product_id=None) -> dict:
+        if product_id is not None:
+            from merchant_controls import personal_price,purchase_allowed
+            if not purchase_allowed(self,product_id,user_tg_id):raise ValueError("این محصول در دسترس شما نیست.")
+            override=personal_price(self,user_tg_id,product_id)
+            if override is not None:
+                product=self.get_product(product_id)
+                extra=max(0,int(unit_price)-int(product['price']))
+                floor=int(dict(product).get('managed_buy_price') or 0)
+                amount=(max(override,floor)+extra)*quantity
+                return {"percent":0,"amount":0,"total":amount,"total_after":amount,"title":"قیمت اختصاصی","icon":""}
         total = unit_price * quantity
         info = {"percent": 0, "amount": 0, "total": total, "total_after": total, "title": "", "icon": ""}
         with self._get_conn() as conn:
