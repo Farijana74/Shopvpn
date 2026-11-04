@@ -264,6 +264,18 @@ else
     echo "$(L "✅ فایل .env از قبل موجود است، دست‌نخورده باقی می‌ماند." "✅ The .env file already exists and is left untouched.")"
 fi
 
+# Optional legacy import is prepared and reviewed before the new service starts.
+if [ -f "${SHOPVPN_LEGACY_DB:-$HOME/v2ray_bot/bot_database.db}" ]; then
+    echo "$(L 'دیتابیس نسخه قدیمی v2ray_bot پیدا شد.' 'An older v2ray_bot database was found.')"
+    read -rp "$(L 'جایگزینی اطلاعات با دیتابیس قدیمی را باز کنم؟ [y/N]: ' 'Open the legacy database replacement tool? [y/N]: ')" legacy_import_answer
+    if [[ "$legacy_import_answer" =~ ^[Yy]$ ]]; then
+        if ! bash "$INSTALL_DIR/legacy_migration.sh"; then
+            echo "$(L 'انتقال انجام نشد؛ گزارش را بررسی کنید. اطلاعات قدیمی دست‌نخورده است.' 'Import was not applied; review the report. The old data is unchanged.')"
+            exit 1
+        fi
+    fi
+fi
+
 # ----------------------------------------------------------------------------
 # ۵. نصب و راه‌اندازی خودکار موتور ترجمه محلی
 #    کاربر نباید هیچ مدل Argos یا LibreTranslate را دستی نصب کند.

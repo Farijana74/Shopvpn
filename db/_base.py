@@ -182,7 +182,7 @@ class DatabaseBase:
         return pre_restore_path
 
 
-    def init_db(self, owner_id: int):
+    def init_db(self, owner_id: int, *, maintenance: bool = False):
         """Initialize/migrate the schema, retrying transient SQLite lock races.
 
         The bot and the admin panel are separate processes that open the same
@@ -191,10 +191,10 @@ class DatabaseBase:
         in a restart loop (or behind nginx as a 502).
         """
         return self._sqlite_retry(
-            lambda: self._init_db_once(owner_id), attempts=5, delay=0.5,
+            lambda: self._init_db_once(owner_id, maintenance=True) if maintenance else self._init_db_once(owner_id), attempts=5, delay=0.5,
         )
 
-    def _init_db_once(self, owner_id: int):
+    def _init_db_once(self, owner_id: int, *, maintenance: bool = False):
         """owner_id: آیدی عددی کسی که مالک/ادمین اصلی همین یک نمونه از بات است
         (برای بات اصلی همان مالک بات، برای هر بات نمایندگی همان نماینده)."""
         with self._get_conn() as conn:
@@ -1692,6 +1692,8 @@ class DatabaseBase:
 # قابلیت ۵۰: هر بار این نمونه از بات بالا می‌آید، کد را برای فراخوانی‌های
         # get_text(...) اسکن می‌کند تا متن‌های جدید خودکار در پنل وب ظاهر شوند
         # (نگاه کن: text_scanner.py، _sync_text_registry).
+        if maintenance:
+            return
         self._sync_text_registry()
 
         # صف هدیه باید بعد از هر ری‌استارت خودکار ادامه پیدا کند. worker خودش

@@ -2131,6 +2131,8 @@ def admin_backup_menu_kb(show_full_backup: bool = False) -> InlineKeyboardMarkup
         [InlineKeyboardButton(text=tr("📥 دریافت بکاپ فوری"), callback_data="adm_backup_now")],
     ]
     if show_full_backup:
+        rows.append([InlineKeyboardButton(text='📦 مهاجرت از دیتابیس ربات قدیمی',callback_data='legacyui:start')])
+    if show_full_backup:
         # فقط برای مالک اصلی روی بات اصلی نمایش داده می‌شود (نه هر بات نمایندگی):
         # این بکاپ، دیتابیس اصلی + دیتابیس تک‌تک نماینده‌ها (سطح ۱ و ۲) را با هم
         # در یک فایل واحد می‌فرستد؛ همان چیزی که برای جابجایی کامل بین دو سرور لازم است.

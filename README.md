@@ -855,3 +855,8 @@ Created by **Mehdi Rafatpanah**
 The application supports multiple UI languages with persisted user language selection and automatic RTL/LTR switching. The built-in catalog has 16 languages (Persian, English, Turkish, Arabic, Russian, German, French, Spanish, Italian, Portuguese, Chinese, Japanese, Korean, Dutch, Polish, Ukrainian); they are chosen at install time and managed from the admin panel's language manager, which auto-generates the in-app translations.
 <!--‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍-->
 <!-- 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 -->
+
+
+### Importing a legacy v2ray_bot database
+
+The installer detects the legacy database. For existing installations, management menu option 41 or `bash legacy_migration.sh` opens the staged replacement tool with previews, backups and final confirmation. See the [migration guide](LEGACY_MIGRATION.fa.md) for complete replacement, backups and optional merge support.

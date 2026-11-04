@@ -739,6 +739,9 @@ async def get_current_admin(request: Request):
     if not tenant:
         raise HTTPException(401, tr("پنل وب این نماینده دیگر فعال نیست."))
     _current_tenant.set(tenant)
+    epoch=await asyncio.to_thread(tenant.db.get_setting,'admin_auth_epoch','')
+    if payload.get('ae','')!=epoch:
+        raise HTTPException(401,tr('پس از تغییر دیتابیس دوباره وارد پنل شوید.'))
 
     admin = (await asyncio.to_thread(tenant.db.get_web_admin, payload["id"]))
     if not admin or not admin["is_active"]:
@@ -884,7 +887,7 @@ def api_login(body: LoginBody, response: Response, request: Request):
         )
         raise HTTPException(401, tr("یوزرنیم یا پسورد اشتباه است."))
     token = create_session_token(
-        ADMIN_PANEL_SECRET, admin["id"], admin["username"], admin["role"], tenant=tenant.slug,
+        ADMIN_PANEL_SECRET, admin["id"], admin["username"], admin["role"], tenant=tenant.slug, auth_epoch=tenant.db.get_setting("admin_auth_epoch", ""),
     )
     tenant.db.touch_web_admin_login(admin["id"])
     report_router.fire_and_forget_raw(
@@ -958,7 +961,7 @@ def api_setup_submit(body: SetupBody, response: Response):
     main_db.consume_reseller_web_panel_setup_token(row["id"])
 
     tenant_slug = row["link_slug"] or str(row["id"])
-    token = create_session_token(ADMIN_PANEL_SECRET, admin_id, username, "owner", tenant=tenant_slug)
+    token = create_session_token(ADMIN_PANEL_SECRET, admin_id, username, "owner", tenant=tenant_slug, auth_epoch=tenant_db.get_setting("admin_auth_epoch", ""))
     tenant_db.touch_web_admin_login(admin_id)
     response.set_cookie(COOKIE_NAME, token, httponly=True, samesite="lax", max_age=12 * 3600, path="/")
     return {"id": admin_id, "username": username, "role": "owner", "tenant": tenant_slug}
@@ -1303,7 +1306,7 @@ async def app_webview_bridge(token: str, next: str = "/"):
         raise HTTPException(401, tr("توکن نامعتبر است."))
     tenant = _current_tenant.get()
     session_token = create_session_token(
-        ADMIN_PANEL_SECRET, admin["id"], admin["username"], admin["role"], tenant=tenant.slug,
+        ADMIN_PANEL_SECRET, admin["id"], admin["username"], admin["role"], tenant=tenant.slug, auth_epoch=tenant.db.get_setting("admin_auth_epoch", ""),
     )
     response = RedirectResponse(url=next)
     response.set_cookie(COOKIE_NAME, session_token, httponly=True, samesite="lax", max_age=3600, path="/")
@@ -2637,6 +2640,82 @@ async def api_backup_create(admin=Depends(require_permission("backup"))):
         f"(پنل وب - {admin['username']})",
     ))
     return {"ok": True, "filename": os.path.basename(backup_path), "size_mb": size_mb, "sent": sent, "failed": failed}
+
+
+def require_legacy_import_owner(admin=Depends(require_owner)):
+    if admin.get('tenant') or _current_tenant.get().slug:
+        raise HTTPException(403,'مهاجرت دیتابیس فقط در پنل بات اصلی در دسترس است.')
+    return admin
+
+
+def _legacy_principal(admin):return 'web:'+str(admin['id'])
+
+
+@app.post('/api/system/legacy-import/preview')
+async def api_legacy_import_preview(file: UploadFile=File(...),admin=Depends(require_legacy_import_owner)):
+    import legacy_import_jobs as jobs
+    if not file.filename or not file.filename.lower().endswith(jobs.UPLOAD_SUFFIXES):
+        raise HTTPException(400,'فایل بکاپ .db، .sqlite یا .zip ارسال کنید.')
+    state=await asyncio.to_thread(jobs.new_job,_legacy_principal(admin))
+    path=jobs.folder(state['job_id'])/'source.db'
+    try:
+        total=0
+        with open(path,'wb') as output:
+            os.chmod(path,0o600)
+            while chunk:=await file.read(1024*1024):
+                total+=len(chunk)
+                if total>jobs.MAX_UPLOAD:raise HTTPException(413,'حجم فایل بیشتر از حد مجاز است.')
+                output.write(chunk)
+        try:await asyncio.to_thread(jobs.unpack_backup,state['job_id'],_legacy_principal(admin))
+        except jobs.MigrationError as exc:raise HTTPException(400,str(exc)) from None
+        result=await asyncio.to_thread(jobs.prepare_job,state['job_id'],_legacy_principal(admin))
+        if result['status']!='ready':raise HTTPException(400,result.get('error','فایل قابل تبدیل نیست.'))
+        return result
+    except Exception:
+        if path.exists() and path.stat().st_size>jobs.MAX_UPLOAD:path.unlink()
+        raise
+
+
+@app.post('/api/system/legacy-import/local-preview')
+async def api_legacy_import_local_preview(admin=Depends(require_legacy_import_owner)):
+    import legacy_import_jobs as jobs
+    try:
+        state=await asyncio.to_thread(jobs.new_job,_legacy_principal(admin),True)
+        result=await asyncio.to_thread(jobs.prepare_job,state['job_id'],_legacy_principal(admin))
+        if result['status']!='ready':raise HTTPException(400,result.get('error','بررسی ناموفق بود.'))
+        return result
+    except jobs.MigrationError as exc:raise HTTPException(400,str(exc)) from None
+
+
+@app.post('/api/system/legacy-import/{job_id}/confirm')
+async def api_legacy_import_confirm(job_id: str,confirm_phrase: str=Form(''),admin=Depends(require_legacy_import_owner)):
+    import legacy_import_jobs as jobs
+    try:return await asyncio.to_thread(jobs.queue_job,job_id,_legacy_principal(admin),confirm_phrase)
+    except jobs.MigrationError as exc:raise HTTPException(400,str(exc)) from None
+
+
+@app.post('/api/system/legacy-import/{job_id}/cancel')
+async def api_legacy_import_cancel(job_id: str,admin=Depends(require_legacy_import_owner)):
+    import legacy_import_jobs as jobs
+    try:return await asyncio.to_thread(jobs.cancel_job,job_id,_legacy_principal(admin))
+    except jobs.MigrationError as exc:raise HTTPException(400,str(exc)) from None
+
+
+@app.get('/api/system/legacy-import/{job_id}')
+async def api_legacy_import_status(job_id: str,admin=Depends(require_legacy_import_owner)):
+    import legacy_import_jobs as jobs
+    try:return jobs.public(await asyncio.to_thread(jobs.load,job_id,_legacy_principal(admin)))
+    except jobs.MigrationError as exc:raise HTTPException(404,str(exc)) from None
+
+
+@app.get('/api/system/legacy-import/{job_id}/backup')
+async def api_legacy_import_backup(job_id: str,admin=Depends(require_legacy_import_owner)):
+    import legacy_import_jobs as jobs
+    try:state=await asyncio.to_thread(jobs.load,job_id,_legacy_principal(admin))
+    except jobs.MigrationError as exc:raise HTTPException(404,str(exc)) from None
+    path=jobs.folder(job_id)/'execution'/'before.db'
+    if not path.is_file():raise HTTPException(404,'بکاپ هنوز آماده نشده است.')
+    return FileResponse(path,filename='before-legacy-import.db',media_type='application/octet-stream')
 
 
 @app.post("/api/system/backup/restore")

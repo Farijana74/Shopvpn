@@ -138,6 +138,8 @@ toggle_lang() {
 
 declare -A MSG_EN
 declare -A MSG_FA
+MSG_FA[menu_legacy_import]="انتقال اطلاعات از v2ray_bot قدیمی"
+MSG_EN[menu_legacy_import]="Import data from legacy v2ray_bot"
 
 # Status / وضعیت
 MSG_EN[not_installed]="Not installed"
@@ -3572,6 +3574,7 @@ while true; do
     menu_item 38 menu_22
     menu_item 39 menu_23
     menu_section sec_userbot
+    menu_item 41 menu_legacy_import
     menu_item 40 menu_33
     draw_rule
     menu_item L menu_lang "$MAGENTA"
@@ -3620,6 +3623,7 @@ while true; do
         37) restore_backup_cli; pause ;;
         38) setup_bot_mode; pause ;;
         39) change_admin_panel_credentials; pause ;;
+        41) bash "$INSTALL_DIR/legacy_migration.sh"; pause ;;
         40) telegram_accounts_menu ;;
         [Ss]) web_store_status; pause ;;
         [Dd]) dedicated_sub_status; pause ;;

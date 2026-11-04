@@ -15523,6 +15523,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         for i, chunk in enumerate(chunks):
             await message.answer(chunk, reply_markup=_ai_admin_end_kb() if i == len(chunks) - 1 else None)
 
+    import legacy_import_bot
+    legacy_import_bot.register(router,db,is_main_bot)
+
     admin_tools.register(
         router, db, is_main_bot, full_admin_only, senior_admin_only,
         deny_support, deny_mid, safe_edit, replace_admin_view,

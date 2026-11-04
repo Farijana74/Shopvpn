@@ -10264,6 +10264,17 @@ async function renderSystem() {
         <button class="btn btn-primary" id="backup-create-btn">📥 گرفتن بکاپ فوری و ارسال به تلگرام</button>
       </div>
       <div id="backup-create-status"></div>
+      ${!ME.tenant ? `
+      <div class="card-head" style="margin-top:20px"><h3>مهاجرت از ربات قدیمی</h3></div>
+      <p class="card-sub">فایل بکاپ ربات قدیمی (دیتابیس یا ZIP) را بارگذاری کن. پس از پیش‌نمایش و تأیید REPLACE، اطلاعات فعلی جایگزین می‌شود و بکاپ آخرین وضعیت نگه داشته می‌شود. هنگام اجرا بات و پنل موقتاً قطع می‌شوند؛ بعد از پایان دوباره وارد پنل شو. حساب ورود مالک فعلی حفظ می‌شود.</p>
+      <input type="file" class="input" id="legacy-import-file" accept=".db,.sqlite,.sqlite3,.zip">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-primary" id="legacy-preview">آپلود بکاپ و پیش‌نمایش مهاجرت</button>
+        <button class="btn btn-ghost" id="legacy-local-preview">خواندن v2ray_bot همین سرور</button>
+      </div>
+      <div id="legacy-import-result" style="margin-top:12px"></div>
+      ` : ''}
+
 
       <div class="card-head" style="margin-top:10px"><h3>بازیابی از فایل بکاپ</h3></div>
       <p class="card-sub" style="margin-bottom:10px">⚠️ با تایید، کل دیتابیس فعلی با فایل آپلودی جایگزین می‌شود. این کار قابل بازگشت نیست مگر با بکاپ دیگر. قبل از جایگزینی، یک نسخه از وضعیت فعلی خودکار ذخیره می‌شود.</p>
@@ -10307,6 +10318,72 @@ async function renderSystem() {
   }));
 
   if (!isOwner) return;
+
+  if (!ME.tenant) {
+    let legacyJob = sessionStorage.getItem('shopvpn-legacy-import-job') || '';
+    const legacyBox = $('#legacy-import-result', content());
+    const legacyLabels = { ready: 'آماده تأیید', queued: 'در صف اجرا', running: 'در حال اجرا؛ ممکن است پنل موقتاً قطع شود', completed: 'مهاجرت تکمیل شد', failed: 'مهاجرت ناموفق بود', cancelled: 'لغو شد' };
+    async function legacyRequest(path, form) {
+      const response = await fetch('/api/system/legacy-import' + path, { method: 'POST', credentials: 'include', body: form });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(formatApiError(data.detail));
+      return data;
+    }
+    function renderLegacy(data) {
+      legacyJob = data.job_id;
+      sessionStorage.setItem('shopvpn-legacy-import-job', legacyJob);
+      const old = data.source_counts || {}, current = data.current_counts || {};
+      legacyBox.innerHTML = `<p><strong>${esc(legacyLabels[data.status] || data.status)}</strong></p>
+        <p class="card-sub">قدیمی: ${fmt(old.users || 0)} کاربر، ${fmt(old.orders || 0)} سفارش، ${fmt(old.custom_configs || 0)} سرویس پنلی</p>
+        <p class="card-sub">فعلی که جایگزین می‌شود: ${fmt(current.users || 0)} کاربر، ${fmt(current.orders || 0)} سفارش، ${fmt(current.custom_configs || 0)} سرویس پنلی</p>
+        ${data.error ? `<p class="err">${esc(data.error)}</p>` : ''}
+        ${data.status === 'ready' ? `<p class="card-sub">تمام اطلاعات فعلی با دیتابیس قدیمی جایگزین خواهد شد. برای تأیید REPLACE بنویس.</p>
+        <input class="input" id="legacy-confirm-phrase" placeholder="REPLACE" dir="ltr" autocomplete="off">
+        <button class="btn btn-danger" id="legacy-confirm">تأیید و شروع مهاجرت</button>
+        <button class="btn btn-ghost" id="legacy-cancel">انصراف</button>` : ''}
+        <button class="btn btn-ghost" id="legacy-refresh">بروزرسانی وضعیت</button>
+        ${data.backup_available ? `<a class="btn btn-ghost" href="/api/system/legacy-import/${encodeURIComponent(legacyJob)}/backup">دریافت بکاپ قبل از مهاجرت</a>` : ''}`;
+      $('#legacy-refresh', legacyBox).onclick = async () => {
+        try { renderLegacy(await apiGet('/system/legacy-import/' + legacyJob)); }
+        catch (e) { toast('اگر پنل در دسترس نیست چند لحظه صبر کن و دوباره وارد شو. ' + e.message, 'error'); }
+      };
+      if (data.status === 'ready') {
+        $('#legacy-confirm', legacyBox).onclick = async (event) => {
+          const phrase = $('#legacy-confirm-phrase', legacyBox).value.trim();
+          if (phrase !== 'REPLACE') return toast('عبارت REPLACE را دقیق وارد کن.', 'error');
+          event.target.disabled = true;
+          try { const form = new FormData(); form.append('confirm_phrase', phrase); renderLegacy(await legacyRequest('/' + legacyJob + '/confirm', form)); }
+          catch (e) { event.target.disabled = false; toast(e.message, 'error'); }
+        };
+        $('#legacy-cancel', legacyBox).onclick = async () => {
+          try { renderLegacy(await legacyRequest('/' + legacyJob + '/cancel')); } catch (e) { toast(e.message, 'error'); }
+        };
+      }
+    }
+    async function legacyPreview(local) {
+      const selected = $('#legacy-import-file', content()).files[0];
+      if (!local && !selected) return toast('فایل دیتابیس را انتخاب کن.', 'error');
+      $('#legacy-preview', content()).disabled = true;
+      $('#legacy-local-preview', content()).disabled = true;
+      legacyBox.textContent = 'در حال بررسی؛ دیتابیس فعلی تغییر نمی‌کند...';
+      try {
+        const form = new FormData(); if (selected && !local) form.append('file', selected);
+        renderLegacy(await legacyRequest(local ? '/local-preview' : '/preview', form));
+      } catch (e) { legacyBox.textContent = e.message; }
+      finally {
+        const uploadBtn = $('#legacy-preview', content()), localBtn = $('#legacy-local-preview', content());
+        if (uploadBtn) uploadBtn.disabled = false;
+        if (localBtn) localBtn.disabled = false;
+      }
+    }
+    $('#legacy-preview', content()).onclick = () => legacyPreview(false);
+    $('#legacy-local-preview', content()).onclick = () => legacyPreview(true);
+    if (legacyJob) {
+      try { renderLegacy(await apiGet('/system/legacy-import/' + legacyJob)); }
+      catch (_) { sessionStorage.removeItem('shopvpn-legacy-import-job'); }
+    }
+  }
+
 
   $('#backup-create-btn').addEventListener('click', async () => {
     const btn = $('#backup-create-btn');
