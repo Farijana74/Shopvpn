@@ -8794,6 +8794,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
     @router.callback_query(F.data.startswith("mm:"))
     async def cb_main_menu_inline(call: CallbackQuery, state: FSMContext, bot: Bot):
+        if await state.get_state() in {managed_volume.VolumeFlow.volume.state,managed_volume.VolumeFlow.username.state,managed_volume.VolumeFlow.plan.state}:
+            await state.clear()
         await call.answer()
         key = call.data.split(":", 1)[1]
         # پیام جعلی: همان پیام بات ولی از_user واقعیِ کلیک‌کننده، تا هندلرهای

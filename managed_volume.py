@@ -78,6 +78,19 @@ async def start(message,state,local):
 
 def register(router,local,is_main_bot):
     from database import Database
+    async def flow_input(message,state):
+        # Reply-menu buttons belong to their navigation handlers, not numeric/name input.
+        import keyboards
+        from i18n import tr
+        text=(message.text or '').strip()
+        labels=[local.get_setting(key,'') for key in local.get_menu_order()]
+        labels += [keyboards.LANGUAGE_BTN_TEXT,keyboards.MINIAPP_BTN_TEXT]
+        menu={label.strip() for label in labels if label}
+        menu.update(tr(label,'en').strip() for label in labels if label)
+        if text and (text in menu or text.startswith('/')):
+            await state.clear()
+            return False
+        return True
     @router.callback_query(F.data=='volume:settings')
     async def settings(call,state):
         if not local.is_senior_admin(call.from_user.id):return await call.answer('دسترسی ندارید.',show_alert=True)
@@ -147,7 +160,7 @@ def register(router,local,is_main_bot):
         except ValueError as exc:await call.answer(str(exc),show_alert=True)
         finally:root.close()
 
-    @router.message(VolumeFlow.username)
+    @router.message(VolumeFlow.username,flow_input)
     async def receive_username(message,state):
         import re
         from managed_native_volume import ask_volume
@@ -162,7 +175,7 @@ def register(router,local,is_main_bot):
         except ValueError as exc:await message.answer(str(exc))
         finally:root.close()
 
-    @router.message(VolumeFlow.settings)
+    @router.message(VolumeFlow.settings,flow_input)
     async def save_settings(message,state):
         if not local.is_senior_admin(message.from_user.id):return
         text=(message.text or '').strip()
@@ -209,18 +222,20 @@ def register(router,local,is_main_bot):
             from menu_restore import main_menu_markup
             await message.answer('✅ تنظیمات ذخیره شد.',reply_markup=main_menu_markup(local,message.from_user.id))
         except ValueError as exc:await message.answer(str(exc))
-    @router.message(VolumeFlow.volume)
+    @router.message(VolumeFlow.volume,flow_input)
     async def receive_volume(message,state):
         from menu_restore import main_menu_markup
         if (message.text or '').strip() in ('انصراف','/cancel'):
             await state.clear();return await message.answer('لغو شد.',reply_markup=main_menu_markup(local,message.from_user.id))
+        text=(message.text or '').strip()
+        if not text.isdecimal():return await message.answer('لطفاً حجم را فقط با عدد صحیح مثبت به گیگابایت وارد کنید؛ مثلاً ۱۰. برای خروج «انصراف» بفرستید.')
         root=Database(local.get_setting('managed_root_db_path',''))
         try:
             data=await state.get_data()
             if data.get('native_plan_id') is not None:
                 from managed_native_volume import quote as native_quote
-                pid,price=await asyncio.to_thread(native_quote,local,root,int(local.get_setting('managed_reseller_bot_id')),message.from_user.id,int(message.text),data['native_plan_id'],data.get('native_username'))
-            else:pid,price=await asyncio.to_thread(quote,local,root,int(local.get_setting('managed_reseller_bot_id')),message.from_user.id,int(message.text))
+                pid,price=await asyncio.to_thread(native_quote,local,root,int(local.get_setting('managed_reseller_bot_id')),message.from_user.id,int(text),data['native_plan_id'],data.get('native_username'))
+            else:pid,price=await asyncio.to_thread(quote,local,root,int(local.get_setting('managed_reseller_bot_id')),message.from_user.id,int(text))
             await state.clear()
             await message.answer(f'قیمت سفارش: {price:,} تومان\nمدت: ۳۰ روز',reply_markup=M(inline_keyboard=[[B(text='ادامه خرید و پرداخت',callback_data=f'prod:{pid}')],[B(text='بازگشت',callback_data='acct:main_menu')]]))
         except (ValueError,TypeError) as exc:await message.answer(str(exc))

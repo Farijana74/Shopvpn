@@ -525,6 +525,9 @@ class BotManager:
         dp.message.outer_middleware(force_join_mw)
         dp.callback_query.outer_middleware(force_join_mw)
 
+        from reply_menu_compat import ReplyMenuCompatibilityMiddleware
+        dp.message.outer_middleware(ReplyMenuCompatibilityMiddleware(db,is_main_bot))
+
         tutorial_hub.install(bot, dp, db)
 
         from managed_reseller_ui import create_agency_router
