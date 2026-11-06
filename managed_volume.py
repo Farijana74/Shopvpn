@@ -55,7 +55,9 @@ def quote(local,root,bot_id,user_id,gb,*,data_override=None,extras=None):
     maximum=int(data.get('max_gb',1000))
     if not data.get('enabled') or not minimum<=gb<=maximum:raise AgencyError(f'حجم دلخواه غیرفعال است یا حجم خارج از بازه {minimum} تا {maximum} گیگ است.')
     cost=rate(root,bot_id,data['product_id'])
-    selling=max(cost,int(local.get_setting('volume_sell_per_gb',str(cost))))
+    from volume_personal_prices import personal_volume_rate
+    override=personal_volume_rate(local,user_id,extras['native_plan_id']) if extras and extras.get('native_plan_id') is not None else None
+    selling=max(cost,override if override is not None else int(local.get_setting('volume_sell_per_gb',str(cost))))
     source=root.get_product(data['product_id']);server=root.get_panel_server(source['provision_server_id'])
     with local._get_conn() as conn:
         category=conn.execute('SELECT id FROM categories WHERE is_active=1 ORDER BY id LIMIT 1').fetchone()
@@ -65,6 +67,7 @@ def quote(local,root,bot_id,user_id,gb,*,data_override=None,extras=None):
         pid=conn.execute('INSERT INTO products(category_id,name,price,duration_days,is_auto_provision,auto_provision_volume_gb,provision_server_id,upstream_product_id,managed_buy_price,delivery_mode) VALUES(?,?,?,30,1,?,?,?,?,?)',(cid,f'حجم دلخواه {gb} گیگ / ۳۰ روز',selling*gb,gb,proxy_id,source['id'],cost*gb,source['delivery_mode'])).lastrowid
         conn.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(f'volume_quote:{pid}',json.dumps({'user_id':user_id,'gb':gb,'bot_id':bot_id,**(extras or {})})))
         conn.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(f'volume_template:{pid}','1'))
+        if override is not None:conn.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(f'personal_price:{user_id}:{pid}',str(selling*gb)))
     local._settings_cache=None
     return pid,selling*gb
 

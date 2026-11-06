@@ -39,9 +39,17 @@ def register(router,db):
     def markup():
         return M(inline_keyboard=[[B(text='تنظیم حجم دلخواه نمایندگان / نرخ فروش',callback_data='volume:settings')],[B(text='قیمت اختصاصی کاربر و محصول',callback_data='merchant:price')],[B(text='پیشوند نام کاربری پنل',callback_data='merchant:username')],[B(text='پیشوند نام نمایشی کانفیگ',callback_data='merchant:display')],[B(text='تغییر متن منوی اصلی',callback_data='merchant:menu')],[B(text='بازگشت',callback_data='adm_back_panel')]])
     def product_list(user_id,page=0):
-        products=db.get_all_products();page=max(0,min(page,max(0,(len(products)-1)//12)))
+        from volume_personal_prices import entries,personal_volume_rate
+        products=[{**p,'volume_plan':True} for p in entries(db)]+list(db.get_all_products())
+        page=max(0,min(page,max(0,(len(products)-1)//12)))
         rows=[]
         for product in products[page*12:(page+1)*12]:
+            if dict(product).get('volume_plan'):
+                custom=personal_volume_rate(db,user_id,product['id'])
+                label=f"{custom:,} تومان/گیگ" if custom is not None else 'نرخ عمومی'
+                callback=f"merchant:pick:{user_id}:v{product['id']}"
+                rows.append([B(text=f"حجم دلخواه: {product['name']} | {label}",callback_data=callback),B(text='تغییر نرخ هر گیگ',callback_data=callback)])
+                continue
             custom=personal_price(db,user_id,product['id'])
             price=custom if custom is not None else product['price']
             rows.append([B(text=f"{product['name']} | {price:,} تومان",callback_data=f"merchant:pick:{user_id}:{product['id']}"),B(text="تغییر قیمت",callback_data=f"merchant:pick:{user_id}:{product['id']}")])
@@ -71,12 +79,25 @@ def register(router,db):
                     await state.set_state(ControlsFlow.price_user)
                     await call.message.answer(f'محصولات و قیمت‌های کاربر {user_id}:',reply_markup=await asyncio.to_thread(product_list,user_id,int(parts[3])))
                 else:
+                    if parts[3].startswith('v'):
+                        from volume_personal_prices import entries,floor,personal_volume_rate
+                        pid=int(parts[3][1:]);items=await asyncio.to_thread(entries,db)
+                        product=next((p for p in items if p['id']==pid),None)
+                        if not product:raise ValueError('پلن حجم دلخواه در دسترس نیست.')
+                        minimum=await asyncio.to_thread(floor,db,pid)
+                        current=personal_volume_rate(db,user_id,pid)
+                        await state.update_data(merchant_product=pid,merchant_volume=True)
+                        await state.set_state(ControlsFlow.price_amount)
+                        import html
+                        label=f'{current:,} تومان' if current is not None else 'نرخ عمومی پلن'
+                        await call.message.answer(f"حجم دلخواه «{html.escape(product['name'])}» برای کاربر {user_id}\nنرخ فعلی هر گیگ: {label}\nحداقل مجاز هر گیگ: {minimum:,} تومان\nنرخ جدید هر گیگ را به تومان بفرستید؛ برای حذف نرخ اختصاصی «حذف» بفرستید.",reply_markup=M(inline_keyboard=[[B(text='فهرست محصولات کاربر',callback_data=f'merchant:list:{user_id}:0')]]))
+                        return await call.answer()
                     pid=int(parts[3]);product=await asyncio.to_thread(db.get_product,pid)
                     if not product:raise ValueError('محصول یافت نشد.')
                     floor=await asyncio.to_thread(supply_floor,db,product)
                     current=personal_price(db,user_id,pid)
                     price=current if current is not None else product['price']
-                    await state.update_data(merchant_product=pid)
+                    await state.update_data(merchant_product=pid,merchant_volume=False)
                     await state.set_state(ControlsFlow.price_amount)
                     import html
                     await call.message.answer(f"تغییر قیمت «{html.escape(product['name'])}» برای کاربر {user_id}\nقیمت فعلی: {price:,} تومان\nحداقل مجاز: {max(1,floor):,} تومان\nقیمت جدید را به تومان بفرستید؛ برای برگشت به قیمت عمومی «حذف» را بفرستید.",reply_markup=M(inline_keyboard=[[B(text='فهرست محصولات کاربر',callback_data=f'merchant:list:{user_id}:0')]]))
@@ -109,7 +130,10 @@ def register(router,db):
         if text!='حذف' and not text.isdecimal():return await message.answer('قیمت را فقط به عدد و به تومان بفرستید، یا برای حذف نرخ اختصاصی «حذف» بنویسید.')
         try:
             user_id=data['merchant_user'];pid=data['merchant_product']
-            await asyncio.to_thread(set_personal_price,db,user_id,pid,None if text=='حذف' else int(text))
+            if data.get('merchant_volume'):
+                from volume_personal_prices import set_rate
+                await asyncio.to_thread(set_rate,db,user_id,pid,None if text=='حذف' else int(text))
+            else:await asyncio.to_thread(set_personal_price,db,user_id,pid,None if text=='حذف' else int(text))
             await state.set_state(ControlsFlow.price_user)
             await message.answer('✅ قیمت این کاربر به قیمت عمومی برگشت.' if text=='حذف' else '✅ قیمت اختصاصی این محصول برای کاربر ذخیره شد.',reply_markup=await asyncio.to_thread(product_list,user_id))
         except (ValueError,KeyError) as exc:await message.answer(str(exc))

@@ -116,6 +116,9 @@ async def ask_volume(message,state,local,root,username):
     source=rules(local,root,int(local.get_setting('managed_reseller_bot_id')),plan_id)
     await state.update_data(native_username=username)
     await state.set_state(VolumeFlow.volume)
-    selling=local.get_setting('volume_sell_per_gb','')
+    from volume_personal_prices import personal_volume_rate
+    user_id=message.chat.id
+    override=personal_volume_rate(local,user_id,plan_id)
+    selling=override if override is not None else local.get_setting('volume_sell_per_gb','')
     note=f'نرخ فروش هر گیگ: {int(selling):,} تومان (حداقل برابر نرخ تأمین همان حجم)' if selling else 'قیمت‌گذاری بر اساس پلن حجم دلخواه ربات اصلی است؛ مبلغ نهایی بعد از انتخاب حجم نمایش داده می‌شود.'
     await message.answer(f"🛠 {html.escape(source['name'])}\nنام کانفیگ: {html.escape(username)}\nحجم را بین {source['min_gb']} تا {source['max_gb']} گیگ وارد کنید.\nمدت ثابت: ۳۰ روز\n{note}\nبرای لغو «انصراف» بفرستید.")

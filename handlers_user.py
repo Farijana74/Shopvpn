@@ -2824,6 +2824,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     async def _custom_config_apply_username(message: Message, state: FSMContext, username: str):
         data = await state.get_data()
         product_id = data.get("product_id")
+        from volume_personal_prices import personal_volume_rate
+        override=await asyncio.to_thread(personal_volume_rate,db,message.chat.id,product_id or 0)
         await state.update_data(custom_username=username)
         await state.set_state(CustomConfigFlow.waiting_volume)
         if product_id:
@@ -2838,6 +2840,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 if product["pricing_mode"] == "flat"
                 else _format_pricing_table((await asyncio.to_thread(db.get_custom_config_product_tiers, product_id)))
             )
+            if override is not None:pricing_note=f"💰 نرخ اختصاصی: {override:,} تومان/گیگ"
             await message.answer(
                 tr(f"✅ نام کاربری: {username}\n\n"
                 f"{pricing_note}\n\n"
@@ -2849,9 +2852,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         else:
             settings = (await asyncio.to_thread(db.get_custom_config_settings))
             tiers = (await asyncio.to_thread(db.get_pricing_tiers))
+            pricing_note=f"💰 نرخ اختصاصی: {override:,} تومان/گیگ" if override is not None else _format_pricing_table(tiers)
             await message.answer(
                 tr(f"✅ نام کاربری: {username}\n\n"
-                f"{_format_pricing_table(tiers)}\n\n"
+                f"{pricing_note}\n\n"
                 f"📶 حالا حجم مورد نظر خود را به گیگابایت وارد کنید.\n"
                 f"حداقل: {settings['min_gb']} گیگ — حداکثر: {settings['max_gb']} گیگ\n"
                 f"⏳ مدت اعتبار: {settings['duration_days']} روز (ثابت)"),
@@ -2897,6 +2901,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 return
             price = (await asyncio.to_thread(db.calc_custom_config_price, volume_gb))
 
+        from volume_personal_prices import personal_volume_rate
+        override=await asyncio.to_thread(personal_volume_rate,db,message.from_user.id,product_id or 0)
+        if override is not None:price=override*volume_gb
+
         if price <= 0:
             await message.answer(db.get_text('handlers_user.auto_9aee5aa0', '⚠️ قیمت\u200cگذاری برای این بخش هنوز تنظیم نشده. لطفاً با پشتیبانی تماس بگیرید.'))
             await state.clear()
@@ -2925,7 +2933,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await state.clear()
             return
 
-        tier_info = await _tier_info(message.from_user.id, price, 1)
+        from volume_personal_prices import tier_info as volume_tier_info
+        tier_info = await asyncio.to_thread(volume_tier_info,db,message.from_user.id,price,product_id or 0)
         price = tier_info["total_after"]
         allowed_methods = await asyncio.to_thread(db.get_effective_custom_config_payment_methods, product_id)
         wallet_allowed = allowed_methods is None or "wallet" in allowed_methods
