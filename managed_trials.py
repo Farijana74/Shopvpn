@@ -62,7 +62,7 @@ def _claim(local,user_id,policy):
     billing_id=_billing_product(local) if policy.get('panel_id') else None
     with local._get_conn() as conn:
         old=conn.execute('SELECT * FROM managed_trials WHERE user_id=?',(user_id,)).fetchone()
-        if old and old['status']=='completed':raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر در کل زنجیره فقط یک بار می‌تواند تست بگیرد.')
+        if old and old['status']=='completed':raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر فقط یک بار می‌تواند تست بگیرد.')
         if old and old['status']=='processing':
             raise AgencyError('درخواست تست شما در حال پردازش است؛ دوباره درخواست ندهید. اگر متوقف مانده، پشتیبانی باید بررسی کند.')
         product=conn.execute('SELECT id FROM products WHERE id=?',(billing_id,)).fetchone() if billing_id else conn.execute('SELECT id FROM products WHERE upstream_product_id=?',(policy['product_id'],)).fetchone()
@@ -89,7 +89,7 @@ async def provide_trial(local,user_id):
             with root._get_conn() as conn:
                 recorded=conn.execute('SELECT status FROM chain_trial_claims WHERE user_id=?',(user_id,)).fetchone()
             if recorded and recorded['status']=='completed':
-                raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر در کل زنجیره فقط یک بار می‌تواند تست بگیرد.')
+                raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر فقط یک بار می‌تواند تست بگیرد.')
         try:claim=await asyncio.to_thread(_claim,local,user_id,policy)
         except Exception:
             if acquired:await asyncio.to_thread(chain_release,root,user_id,local.db_path)

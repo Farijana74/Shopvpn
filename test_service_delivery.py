@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import logging
+from customer_messages import customer_error
 import sqlite3
 import tempfile
 import types
@@ -87,7 +88,7 @@ class ServiceDeliveryTests(unittest.IsolatedAsyncioTestCase):
                          escape_md=lambda x: x, to_jalali_str=lambda *a, **k: 'date',
                          service_delivery_links=service_delivery_links, HappDeliveryError=HappDeliveryError,
                          fetch_sub_info=AsyncMock(return_value={}), format_sub_info_fa=lambda info: '',
-                         _item_has_individual_links=lambda item: False, logging=logging)
+                         _item_has_individual_links=lambda item: False, logging=logging,customer_error=customer_error)
         exec(compile(ast.Module(body=[renderer], type_ignores=[]), 'handlers_user.py', 'exec'), namespace)
         service = {**self.service, 'display_name': None, 'volume_gb': 10, 'duration_days': 30,
                    'created_at': 'date', 'user_limit': 1, 'start_on_first_use': 0, 'expires_at': None}
@@ -95,6 +96,9 @@ class ServiceDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('happ://crypt5/encrypted', text)
         self.assertNotIn(service['subscription_url'], text)
         self.provider.get_user.assert_not_awaited()
+        namespace['service_delivery_links']=AsyncMock(side_effect=HappDeliveryError('نرخ تأمین نماینده روی پنل بالادست نامعتبر است.'))
+        failed=await namespace['_my_orders_item_text']({'kind':'custom','custom':service})
+        for private in ('بالادست','نرخ تأمین','نماینده',service['subscription_url']):self.assertNotIn(private,failed)
 
 
 class ServiceDeliveryDatabaseTests(unittest.TestCase):

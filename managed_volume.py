@@ -1,5 +1,6 @@
 """Thirty-day volume quotes using the existing managed purchase ledger."""
 import asyncio
+from customer_messages import customer_error
 import json
 from aiogram import F
 from aiogram.fsm.state import State,StatesGroup
@@ -148,7 +149,7 @@ def register(router,local,is_main_bot):
             plan_id=int(call.data.rsplit(':',1)[1])
             rules(local,root,int(local.get_setting('managed_reseller_bot_id')),plan_id)
             await ask_username(call.message,state,plan_id);await call.answer()
-        except ValueError as exc:await call.answer(str(exc),show_alert=True)
+        except ValueError as exc:await call.answer(customer_error(exc),show_alert=True)
         finally:root.close()
 
     @router.callback_query(F.data=='volume:random',VolumeFlow.username)
@@ -160,7 +161,7 @@ def register(router,local,is_main_bot):
             prefix=local.get_custom_config_prefix()
             name=(prefix+'-' if prefix else '')+'u'+secrets.token_hex(4)
             await ask_volume(call.message,state,local,root,name);await call.answer()
-        except ValueError as exc:await call.answer(str(exc),show_alert=True)
+        except ValueError as exc:await call.answer(customer_error(exc),show_alert=True)
         finally:root.close()
 
     @router.message(VolumeFlow.username,flow_input)
@@ -175,7 +176,7 @@ def register(router,local,is_main_bot):
         try:
             prefix=local.get_custom_config_prefix()
             await ask_volume(message,state,local,root,(prefix+'-' if prefix else '')+text)
-        except ValueError as exc:await message.answer(str(exc))
+        except ValueError as exc:await message.answer(customer_error(exc))
         finally:root.close()
 
     @router.message(VolumeFlow.settings,flow_input)
@@ -241,5 +242,5 @@ def register(router,local,is_main_bot):
             else:pid,price=await asyncio.to_thread(quote,local,root,int(local.get_setting('managed_reseller_bot_id')),message.from_user.id,int(text))
             await state.clear()
             await message.answer(f'قیمت سفارش: {price:,} تومان\nمدت: ۳۰ روز',reply_markup=M(inline_keyboard=[[B(text='ادامه خرید و پرداخت',callback_data=f'prod:{pid}')],[B(text='بازگشت',callback_data='acct:main_menu')]]))
-        except (ValueError,TypeError) as exc:await message.answer(str(exc))
+        except (ValueError,TypeError) as exc:await message.answer(customer_error(exc))
         finally:root.close()

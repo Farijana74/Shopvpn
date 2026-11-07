@@ -14,6 +14,7 @@ import random
 import re
 import asyncio
 import logging
+from customer_messages import customer_error
 import merchant_controls
 from service_alerts import send_service_alert
 import math
@@ -414,7 +415,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 card_to_card_payment.create_invoice, db, kind, ref_id, user_id, base_amount,
             )
         except card_to_card_payment.CardToCardError as e:
-            await target.answer(f"⚠️ {e}")
+            await target.answer(f"⚠️ {customer_error(e)}")
             return
         timeout_minutes = int((await asyncio.to_thread(
             db.get_setting, "card_to_card_auto_timeout_minutes", "15")) or 15)
@@ -472,7 +473,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=order_name, customer_phone=customer_phone,
             )
         except custom_gateway_payment.CustomGatewayPaymentError as e:
-            await target_message.answer(f"⚠️ {e}", reply_markup=ReplyKeyboardRemove())
+            await target_message.answer(f"⚠️ {customer_error(e)}", reply_markup=ReplyKeyboardRemove())
             return
         if not result.get("invoice_url"):
             await target_message.answer(
@@ -2232,7 +2233,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                         await _notify_admins_of_order(bot, order_id)
                         await _safe_edit(
                             call.message,
-                            f"⛔️ {e}\nمبلغ کسرشده از کیف پول شما به‌طور کامل بازگردانده شد."
+                            f"⛔️ {customer_error(e)}\nمبلغ کسرشده از کیف پول شما به‌طور کامل بازگردانده شد."
                         )
                         await call.answer()
                         return
@@ -2240,7 +2241,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                         links = await get_product_delivery_links(db, product, prov_results, order_id)
                     except HappDeliveryError as exc:
                         await _notify_admins_of_order(bot, order_id)
-                        await _safe_edit(call.message, f"⚠️ پرداخت ثبت شد؛ سفارش برای تلاش مجدد باقی ماند. {exc}")
+                        await _safe_edit(call.message, f"⚠️ پرداخت ثبت شد؛ سفارش برای تلاش مجدد باقی ماند. {customer_error(exc)}")
                         await call.answer()
                         return
                     if not await asyncio.to_thread(db.approve_order_auto, order_id):
@@ -2480,7 +2481,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"سفارش #{order_id} - {product['name'] if product else ''}",
             )
         except crypto_payment.CryptoPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         await call.message.answer(
             db.get_text('handlers_user.auto_bed9e374', '🪙 فاکتور پرداخت ساخته شد. روی دکمه\u200cی زیر بزن، ارز و مبلغ رو انتخاب کن و پرداخت رو تکمیل کن.\n⏳ اعتبار این فاکتور فقط ۸۰ دقیقه است.\nبه\u200cمحض تایید تراکنش روی بلاک\u200cچین، سفارش شما به\u200cصورت خودکار تحویل داده می\u200cشود.'),
@@ -2510,7 +2511,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"سفارش #{order_id} - {product['name'] if product else ''}",
             )
         except abangateway_payment.AbanGatewayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_abangateway_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -2542,7 +2543,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"سفارش #{order_id} - {product['name'] if product else ''}",
             )
         except blupal_payment.BluPalPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_blupal_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -2574,7 +2575,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"سفارش #{order_id} - {product['name'] if product else ''}",
             )
         except noapay_payment.NoapayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_noapay_invoice_by_token, result["invoice_token"]))
         await call.message.answer(
@@ -2947,8 +2948,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
         capacity_ok = await asyncio.to_thread(db.panel_has_capacity, server["id"], 1)
         if not capacity_ok:
-            cap = await asyncio.to_thread(db.get_panel_capacity_info, server["id"])
-            await message.answer(tr(f"⛔️ ظرفیت پنل تکمیل است ({cap['active_services']}/{cap['max_services']} سرویس فعال)."))
+            await message.answer(tr("⛔️ ظرفیت این سرویس فعلاً تکمیل است. لطفاً بعداً تلاش کنید."))
             await state.clear()
             return
 
@@ -2980,7 +2980,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                     return
                 except Exception as e:
                     (await asyncio.to_thread(db.reject_order, order_id))
-                    await message.answer(tr(f"⛔️ خطا در ساخت کانفیگ روی پنل: {e}\nمبلغ به کیف پول بازگردانده شد."))
+                    await message.answer(tr(f"⛔️ ساخت سرویس انجام نشد: {customer_error(e)}\nمبلغ به کیف پول بازگردانده شد."))
                     return
                 (await asyncio.to_thread(db.approve_custom_config_order, order_id))
                 (await asyncio.to_thread(db.add_custom_config, 
@@ -3135,7 +3135,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"کانفیگ شخصی #{order_id} - {order['custom_username']}",
             )
         except crypto_payment.CryptoPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         await call.message.answer(
             db.get_text('handlers_user.auto_c7ac1436', '🪙 فاکتور پرداخت ساخته شد. روی دکمه\u200cی زیر بزن، ارز و مبلغ رو انتخاب کن و پرداخت رو تکمیل کن.\n⏳ اعتبار این فاکتور فقط ۸۰ دقیقه است.\nبه\u200cمحض تایید تراکنش روی بلاک\u200cچین، کانفیگ شما به\u200cصورت خودکار ساخته می\u200cشود.'),
@@ -3164,7 +3164,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"کانفیگ شخصی #{order_id} - {order['custom_username']}",
             )
         except abangateway_payment.AbanGatewayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_abangateway_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -3195,7 +3195,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"کانفیگ شخصی #{order_id} - {order['custom_username']}",
             )
         except blupal_payment.BluPalPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_blupal_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -3226,7 +3226,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"کانفیگ شخصی #{order_id} - {order['custom_username']}",
             )
         except noapay_payment.NoapayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_noapay_invoice_by_token, result["invoice_token"]))
         await call.message.answer(
@@ -3261,7 +3261,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"کانفیگ شخصی #{order_id} - {order['custom_username']}",
             )
         except custom_gateway_payment.CustomGatewayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         if not result.get("invoice_url"):
             await call.message.answer(
@@ -3361,7 +3361,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                     await _send_test_config_link(message,link,'🧪 کانفیگ تست شما:')
                 await _send_test_success_message(message,username=items[0]['username'])
             except (AgencyError,HappDeliveryError) as exc:
-                await message.answer(f'⛔️ {exc}')
+                await message.answer(f'⛔️ {customer_error(exc)}')
             return
 
         user = (await asyncio.to_thread(db.get_user, message.from_user.id))
@@ -3430,14 +3430,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 result = await provision_test_config(db, plan, user_id=message.from_user.id)
             except ProvisionError as e:
                 (await asyncio.to_thread(db.release_test_slot, message.from_user.id))
-                await message.answer(f"⛔️ {e}")
+                await message.answer(f"⛔️ {customer_error(e)}")
                 return
         else:
             try:
                 result = await provision_test_plan(db, plan, user_id=message.from_user.id)
             except TestPlanProvisionError as e:
                 (await asyncio.to_thread(db.release_test_slot, message.from_user.id))
-                await message.answer(f"⛔️ {e}")
+                await message.answer(f"⛔️ {customer_error(e)}")
                 return
 
         await asyncio.to_thread(db.complete_test_slot,message.from_user.id)
@@ -3543,7 +3543,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 if candidate and candidate["is_active"]:
                     server = candidate
         if not server or not server["is_active"]:
-            await call.answer(db.get_text('handlers_user.auto_40732a42', 'برای این محصول هیچ پنل فعالی برای ساخت کانفیگ پیدا نشد.'), show_alert=True); return
+            await call.answer(db.get_text('handlers_user.auto_40732a42', 'این سرویس فعلاً برای خرید در دسترس نیست.'), show_alert=True); return
         await state.clear(); await state.set_state(ResellerFlow.waiting_fixed_product_username)
         await state.update_data(fixed_product_id=product_id, panel_server_id=server["id"])
         await call.answer()
@@ -3574,7 +3574,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         try:
             result = (await provision_reseller_fixed_product(reseller_backend, call.from_user.id, product_id, 1, username_prefix=prefix or "r", username=candidate))[0]
         except ProvisionError as e:
-            await state.clear(); await call.answer(str(e), show_alert=True); return
+            await state.clear(); await call.answer(customer_error(e), show_alert=True); return
         try:
             local_panel_id = await asyncio.to_thread(db.get_or_create_mirror_panel_server, server)
             await asyncio.to_thread(db.add_custom_config, call.from_user.id, local_panel_id, result["username"], result["volume_gb"], result["duration_days"], result["subscription_url"], source="reseller", reseller_product_id=product_id)
@@ -3612,7 +3612,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         try:
             result=(await provision_reseller_fixed_product(reseller_backend, message.from_user.id, product_id, 1, username_prefix=prefix or "r", username=username))[0]
         except ProvisionError as e:
-            await state.clear(); await message.answer(f"⛔️ {e}"); return
+            await state.clear(); await message.answer(f"⛔️ {customer_error(e)}"); return
         try:
             local_panel_id = await asyncio.to_thread(db.get_or_create_mirror_panel_server, server)
             await asyncio.to_thread(db.add_custom_config, message.from_user.id, local_panel_id, result["username"], result["volume_gb"], result["duration_days"], result["subscription_url"], source="reseller", reseller_product_id=product_id)
@@ -3724,10 +3724,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         try:
             result = await provider.create_user(data["reseller_username"], volume_gb, duration_days)
         except PanelUsernameTakenError:
-            await message.answer(db.get_text('handlers_user.auto_69d7d6ca', '❌ این نام کاربری روی پنل تکراری است. دوباره از ابتدا با نام دیگری امتحان کن.'))
+            await message.answer(db.get_text('handlers_user.auto_69d7d6ca', '❌ این نام کاربری قبلاً استفاده شده است. نام دیگری انتخاب کنید.'))
             return
         except PanelError as e:
-            await message.answer(tr(f"⛔️ خطا در ساخت کانفیگ: {e}"))
+            await message.answer(tr(f"⛔️ خطا در ساخت کانفیگ: {customer_error(e)}"))
             return
 
         # کسر اتمیک، نه فقط یک UPDATE بدون قید: اگر بین چک بالا و همین لحظه یک
@@ -3878,7 +3878,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         await state.update_data(addsvc_candidates=[])
         prompt = (
             tr("➕ افزودن حساب") + "\n\n"
-            + tr("اگر قبل از استفاده از این بات روی پنل کانفیگ داشتید، می‌توانید آن را به حساب خود اضافه کنید.") + "\n\n"
+            + tr("اگر از قبل سرویس دارید، می‌توانید آن را به حساب خود اضافه کنید.") + "\n\n"
             + (
                 tr("لینک اشتراک (ساب) یا نام کاربری کانفیگ را ارسال کنید.")
                 if by_username else tr("لینک اشتراک (ساب) کانفیگ را ارسال کنید.")
@@ -3928,7 +3928,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 account_link.register_fail(user_id)
                 text = tr("⛔ این کانفیگ قبلاً به حساب دیگری متصل شده است. برای بررسی با پشتیبانی تماس بگیرید.")
             elif result["unreachable"]:
-                text = tr("❌ اتصال به پنل برقرار نشد. کمی بعد دوباره تلاش کنید.")
+                text = tr("❌ دریافت اطلاعات سرویس انجام نشد. کمی بعد دوباره تلاش کنید.")
             else:
                 account_link.register_fail(user_id)
                 text = tr("❌ کانفیگی با این مشخصات پیدا نشد. ورودی را بررسی کنید و دوباره ارسال کنید.")
@@ -4188,7 +4188,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                     links = await service_delivery_links(db, service)
                 except HappDeliveryError as exc:
                     # Keep the card usable without exposing the normal URL.
-                    return text + "\n" + str(exc)
+                    return text + "\n" + customer_error(exc)
                 for link in links:
                     if link.startswith("happ://"):
                         text += f"📲 Happ: `{link}`\n"
@@ -4305,7 +4305,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         cc = item["custom"]
         if not cc["panel_server_id"] or not cc["subscription_url"]:
-            await call.answer(db.get_text('handlers_user.auto_304a0c67', 'این سرویس به پنل VPN متصل نیست.'), show_alert=True)
+            await call.answer(db.get_text('handlers_user.auto_304a0c67', 'استعلام وضعیت این سرویس در دسترس نیست.'), show_alert=True)
             return
         await call.answer()
 
@@ -4562,7 +4562,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 links = await service_delivery_links(db, item["custom"])
                 link = links[-1] if links else None
             except HappDeliveryError as exc:
-                await call.message.answer(str(exc))
+                await call.message.answer(customer_error(exc))
                 return
         if not link:
             await call.answer(db.get_text('handlers_user.auto_4e32a60a', 'لینکی برای ساخت کیوآر پیدا نشد.'), show_alert=True)
@@ -4612,7 +4612,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         cc = item["custom"]
         server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if cc["panel_server_id"] else None
         if not server or not server["is_active"]:
-            await call.answer(db.get_text('handlers_user.auto_55aad2d4', 'سرور پنل مربوط به این سرویس یافت نشد یا غیرفعال است.'), show_alert=True)
+            await call.answer(db.get_text('handlers_user.auto_55aad2d4', 'این سرویس فعلاً در دسترس نیست.'), show_alert=True)
             return
         await call.answer()
         try:
@@ -4620,7 +4620,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             result = await rotate_service_credentials(db, cc, provider)
         except (PanelError, HappDeliveryError) as e:
             await _safe_edit(
-                call.message, f"⛔️ قطع دسترسی ناموفق بود: {e}",
+                call.message, f"⛔️ قطع دسترسی ناموفق بود: {customer_error(e)}",
                 reply_markup=kb.my_order_error_back_kb(),
             )
             return
@@ -4676,13 +4676,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         new_enabled = not ((cc["enabled"] if "enabled" in cc.keys() else 1) == 1)
         server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if cc["panel_server_id"] else None
         if not server or not server["is_active"]:
-            await call.answer(db.get_text('handlers_user.auto_55aad2d4', 'سرور پنل مربوط به این سرویس یافت نشد یا غیرفعال است.'), show_alert=True)
+            await call.answer(db.get_text('handlers_user.auto_55aad2d4', 'این سرویس فعلاً در دسترس نیست.'), show_alert=True)
             return
         try:
             provider = get_provider(server)
             await provider.set_enabled(cc["username"], new_enabled)
         except PanelError as e:
-            await call.answer(tr(f"⛔️ ناموفق بود: {e}"), show_alert=True)
+            await call.answer(tr(f"⛔️ ناموفق بود: {customer_error(e)}"), show_alert=True)
             return
         (await asyncio.to_thread(db.set_custom_config_enabled, cc["id"], user_tg_id, new_enabled))
         (await asyncio.to_thread(
@@ -4750,13 +4750,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if cc["panel_server_id"] else None
         panel_username = None
-        note = "(فقط نام نمایشی داخل بات تغییر کرد؛ لینک/کانفیگ فعلی روی پنل بدون تغییر کار می‌کند)"
+        note = "(نام نمایشی تغییر کرد؛ لینک اتصال فعلی همچنان کار می‌کند.)"
         if server and server["is_active"]:
             try:
                 provider = get_provider(server)
                 await provider.rename_user(cc["username"], new_label)
                 panel_username = new_label
-                note = "(روی خودِ پنل هم اعمال شد)"
+                note = "(نام سرویس به‌روز شد.)"
             except PanelError:
                 pass
         old_label = current_label
@@ -4956,7 +4956,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.message.answer(db.get_text('handlers_user.auto_ca2aa6c8', '⛔️ نام کاربری این سرویس روی لوکیشن مقصد از قبل وجود دارد؛ سرویس قدیمی دست\u200cنخورده باقی ماند.'))
             return
         except PanelError as e:
-            await call.message.answer(tr(f"⛔️ ساخت سرویس روی لوکیشن مقصد ناموفق بود؛ سرویس قدیمی دست‌نخورده باقی ماند.\n{e}"))
+            await call.message.answer(tr(f"⛔️ ساخت سرویس روی لوکیشن مقصد ناموفق بود؛ سرویس قدیمی دست‌نخورده باقی ماند.\n{customer_error(e)}"))
             return
         except Exception:
             logging.getLogger("handlers_user").exception("location transfer create failed")
@@ -5182,7 +5182,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                     result_text = await execute_renewal(db, order)
                 except RenewalError as e:
                     (await asyncio.to_thread(db.reject_order, order_id))
-                    await edit_fn(f"⛔️ تمدید ناموفق بود: {e}\nمبلغ کسرشده از کیف پول شما بازگردانده شد.")
+                    await edit_fn(f"⛔️ تمدید ناموفق بود: {customer_error(e)}\nمبلغ کسرشده از کیف پول شما بازگردانده شد.")
                     return
                 (await asyncio.to_thread(db.approve_renewal_order, order_id))
                 renewal_reward_info = (await asyncio.to_thread(
@@ -5281,7 +5281,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             if not products:
                 products = all_products
             if not products:
-                await call.answer(db.get_text('handlers_user.auto_4559ece1', 'در حال حاضر پلن تمدیدی روی همین پنل VPN تعریف نشده.'), show_alert=True)
+                await call.answer(db.get_text('handlers_user.auto_4559ece1', 'در حال حاضر پلن تمدید برای این سرویس موجود نیست.'), show_alert=True)
                 return
             await call.answer()
             await _safe_edit(
@@ -5683,7 +5683,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"تمدید سرویس #{order_id}",
             )
         except crypto_payment.CryptoPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         await call.message.answer(
             db.get_text('handlers_user.auto_d456f435', '🪙 فاکتور پرداخت ساخته شد. روی دکمه\u200cی زیر بزن، ارز و مبلغ رو انتخاب کن و پرداخت رو تکمیل کن.\n⏳ اعتبار این فاکتور فقط ۸۰ دقیقه است.\nبه\u200cمحض تایید تراکنش روی بلاک\u200cچین، سرویس شما به\u200cصورت خودکار تمدید می\u200cشود.'),
@@ -5711,7 +5711,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"تمدید سرویس #{order_id}",
             )
         except abangateway_payment.AbanGatewayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_abangateway_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -5741,7 +5741,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"تمدید سرویس #{order_id}",
             )
         except blupal_payment.BluPalPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_blupal_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -5771,7 +5771,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"تمدید سرویس #{order_id}",
             )
         except noapay_payment.NoapayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_noapay_invoice_by_token, result["invoice_token"]))
         await call.message.answer(
@@ -6147,7 +6147,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         try:
             result = await asyncio.to_thread(db.convert_coins_to_wallet, message.from_user.id, int(text))
         except ValueError as e:
-            await message.answer(tr(f"❌ {e}\nدوباره تلاش کنید یا انصراف بدهید."), reply_markup=kb.cancel_kb())
+            await message.answer(tr(f"❌ {customer_error(e)}\nدوباره تلاش کنید یا انصراف بدهید."), reply_markup=kb.cancel_kb())
             return
         await state.clear()
         balance = await asyncio.to_thread(db.get_wallet_credit, message.from_user.id)
@@ -6248,7 +6248,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         try:
             result = await asyncio.to_thread(db.redeem_wallet_gift_code, message.from_user.id, code)
         except ValueError as e:
-            await message.answer(tr(f"❌ {e}\nدوباره تلاش کنید یا انصراف بدهید."), reply_markup=kb.cancel_kb())
+            await message.answer(tr(f"❌ {customer_error(e)}\nدوباره تلاش کنید یا انصراف بدهید."), reply_markup=kb.cancel_kb())
             return
         await state.clear()
         await message.answer(
@@ -6418,7 +6418,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"شارژ کیف پول #{topup_id}",
             )
         except crypto_payment.CryptoPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         await call.message.answer(
             db.get_text('handlers_user.auto_18b31b92', '🪙 فاکتور پرداخت ساخته شد. روی دکمه\u200cی زیر بزن، ارز و مبلغ رو انتخاب کن و پرداخت رو تکمیل کن.\n⏳ اعتبار این فاکتور فقط ۸۰ دقیقه است.\nبه\u200cمحض تایید تراکنش روی بلاک\u200cچین، کیف پول شما به\u200cصورت خودکار شارژ می\u200cشود.'),
@@ -6447,7 +6447,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"شارژ کیف پول #{topup_id}",
             )
         except abangateway_payment.AbanGatewayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_abangateway_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -6478,7 +6478,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"شارژ کیف پول #{topup_id}",
             )
         except blupal_payment.BluPalPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_blupal_invoice_by_invoice_id, result["invoice_id"]))
         await call.message.answer(
@@ -6509,7 +6509,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 order_name=f"شارژ کیف پول #{topup_id}",
             )
         except noapay_payment.NoapayPaymentError as e:
-            await call.message.answer(f"⚠️ {e}")
+            await call.message.answer(f"⚠️ {customer_error(e)}")
             return
         invoice_row = (await asyncio.to_thread(db.get_noapay_invoice_by_token, result["invoice_token"]))
         await call.message.answer(
@@ -7309,7 +7309,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text('handlers_user.auto_2b4bbfde', 'روش پرداخت انتخاب شد.'))
         except Exception as e:
             logging.getLogger("handlers_user").exception("reseller payment invoice failed")
-            await call.answer(str(e)[:180], show_alert=True)
+            await call.answer(customer_error(e)[:180], show_alert=True)
 
     @router.message(ResellerRequestFlow.waiting_payment_phone)
     async def reseller_request_payment_phone(message: Message, state: FSMContext):
@@ -7333,7 +7333,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await message.answer(db.get_text('handlers_user.auto_8815c25a', '💠 فاکتور درگاه سفارشی ساخته شد.'), reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=tr("🔗 پرداخت"), url=inv["invoice_url"])]]))
         except Exception as e:
             logging.getLogger("handlers_user").exception("reseller custom gateway phone invoice failed")
-            await message.answer(str(e)[:180])
+            await message.answer(customer_error(e)[:180])
 
     @router.callback_query(F.data.startswith("resreq_cancel:"))
     async def reseller_request_cancel(call: CallbackQuery):
@@ -8205,13 +8205,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
                     await asyncio.to_thread(db.reject_order, order_id)
                     await _notify_admins_of_order(bot, order_id)
-                    await message.answer(tr(f"⛔️ {e}\nمبلغ کسرشده از کیف پول شما به‌طور کامل بازگردانده شد."))
+                    await message.answer(tr(f"⛔️ {customer_error(e)}\nمبلغ کسرشده از کیف پول شما به‌طور کامل بازگردانده شد."))
                     return
                 try:
                     links = await get_product_delivery_links(db, product, prov_results, order_id)
                 except HappDeliveryError as exc:
                     await _notify_admins_of_order(bot, order_id)
-                    await message.answer(tr(f"⚠️ پرداخت ثبت شد؛ سفارش برای تلاش مجدد باقی ماند. {exc}"))
+                    await message.answer(tr(f"⚠️ پرداخت ثبت شد؛ سفارش برای تلاش مجدد باقی ماند. {customer_error(exc)}"))
                     return
                 if not await asyncio.to_thread(db.approve_order_auto, order_id):
                     raise RuntimeError("automatic order approval failed")
@@ -8355,7 +8355,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 links = await service_delivery_links(db, item["custom"])
                 link = links[-1] if links else None
             except HappDeliveryError as exc:
-                await message.answer(str(exc))
+                await message.answer(customer_error(exc))
                 return
         else:
             link = _item_sub_link(item)
@@ -8405,13 +8405,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         new_enabled = bool(enabled)
         server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if cc["panel_server_id"] else None
         if not server or not server["is_active"]:
-            await message.answer(db.get_text('handlers_user.auto_bced6392', '⛔️ سرور پنل مربوط به این سرویس یافت نشد یا غیرفعال است.'))
+            await message.answer(db.get_text('handlers_user.auto_bced6392', '⛔️ این سرویس فعلاً در دسترس نیست.'))
             return
         try:
             provider = get_provider(server)
             await provider.set_enabled(cc["username"], new_enabled)
         except PanelError as e:
-            await message.answer(tr(f"⛔️ ناموفق بود: {e}"))
+            await message.answer(tr(f"⛔️ ناموفق بود: {customer_error(e)}"))
             return
         (await asyncio.to_thread(db.set_custom_config_enabled, cc["id"], user_id, new_enabled))
         (await asyncio.to_thread(
@@ -8445,13 +8445,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if cc["panel_server_id"] else None
         panel_username = None
-        note = "(فقط نام نمایشی داخل بات تغییر کرد؛ لینک/کانفیگ فعلی روی پنل بدون تغییر کار می‌کند)"
+        note = "(نام نمایشی تغییر کرد؛ لینک اتصال فعلی همچنان کار می‌کند.)"
         if server and server["is_active"]:
             try:
                 provider = get_provider(server)
                 await provider.rename_user(cc["username"], new_label)
                 panel_username = new_label
-                note = "(روی خودِ پنل هم اعمال شد)"
+                note = "(نام سرویس به‌روز شد.)"
             except PanelError:
                 pass
         (await asyncio.to_thread(db.rename_custom_config, cc["id"], user_id, new_label, panel_username))
@@ -8479,7 +8479,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         cc = item["custom"]
         server = (await asyncio.to_thread(db.get_panel_server, cc["panel_server_id"])) if cc["panel_server_id"] else None
         if not server or not server["is_active"]:
-            await message.answer(db.get_text('handlers_user.auto_bced6392', '⛔️ سرور پنل مربوط به این سرویس یافت نشد یا غیرفعال است.'))
+            await message.answer(db.get_text('handlers_user.auto_bced6392', '⛔️ این سرویس فعلاً در دسترس نیست.'))
             return
         await message.answer(
             db.get_text('handlers_user.auto_a0f85a3c', '⚠️ این عملیات غیرقابل\u200cبازگشت است: لینک فعلی از کار می\u200cافتد و لینک جدیدی (با همان حجم/زمان باقی\u200cمانده) صادر می\u200cشود.\nبرای تایید نهایی روی دکمه\u200cی زیر بزن:'),
@@ -8538,8 +8538,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         deps = await asyncio.to_thread(db.list_ticket_departments, True)
         dep = next((d for d in deps if d["name"] == "فنی"), deps[0] if deps else None)
         subject = f"گزارش اختلال سرویس «{cc['display_name'] or cc['username']}»"
-        ticket_text = (f"کاربر گزارش اختلال سرویس را ثبت کرد.\n\nنام کاربری پنل: {cc['username']}\n"
-                       f"شناسه سرویس: {cc['id']}\nپنل: {cc['panel_server_id'] or '-'}")
+        ticket_text = (f"کاربر گزارش اختلال سرویس را ثبت کرد.\n\nنام سرویس: {cc['display_name'] or cc['username']}\n"
+                       f"شناسه سرویس: {cc['id']}")
         ticket_id = await asyncio.to_thread(db.create_ticket, call.from_user.id, subject, ticket_text, dep["id"] if dep else None)
         await call.message.answer(tr(f"✅ گزارش اختلال ثبت شد. شماره تیکت: #{ticket_id}\nبخش فنی در حال بررسی است."))
         await report_router.notify(bot, db, "support", report_router.format_event(
@@ -8547,6 +8547,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 ("تیکت", report_router.code(f"#{ticket_id}")),
                 ("کاربر", report_router.user_link(call.from_user.id, call.from_user.first_name or "", call.from_user.username or "")),
                 ("سرویس", cc["display_name"] or cc["username"]),
+                ("شناسه سرویس", cc["id"]),
+                ("پنل", cc["panel_server_id"] or "-"),
                 ("بخش", dep["name"] if dep else "عمومی"),
             ], icon="⚠️"))
         for admin_id in await asyncio.to_thread(db.list_ticket_admin_ids_for_department, dep["id"] if dep else None):

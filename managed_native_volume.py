@@ -100,7 +100,7 @@ async def begin(message,state,local,root):
     if not choices:return await message.answer('حجم دلخواه فعلاً در دسترس نیست.',reply_markup=main_menu_markup(local,message.from_user.id))
     if len(choices)==1:return await ask_username(message,state,choices[0]['id'])
     await state.set_state(VolumeFlow.plan)
-    await message.answer('🛠 حجم دلخواه\nیکی از پلن‌های ربات اصلی را انتخاب کنید:',reply_markup=M(inline_keyboard=[[B(text=p['name'],callback_data=f"volume:native:{p['id']}")] for p in choices]+[[B(text='بازگشت',callback_data='acct:main_menu')]]))
+    await message.answer('🛠 حجم دلخواه\nیکی از پلن‌ها را انتخاب کنید:',reply_markup=M(inline_keyboard=[[B(text=p['name'],callback_data=f"volume:native:{p['id']}")] for p in choices]+[[B(text='بازگشت',callback_data='acct:main_menu')]]))
 
 async def ask_username(message,state,plan_id):
     from aiogram.types import InlineKeyboardButton as B,InlineKeyboardMarkup as M
@@ -120,5 +120,5 @@ async def ask_volume(message,state,local,root,username):
     user_id=message.chat.id
     override=personal_volume_rate(local,user_id,plan_id)
     selling=override if override is not None else local.get_setting('volume_sell_per_gb','')
-    note=f'نرخ فروش هر گیگ: {int(selling):,} تومان (حداقل برابر نرخ تأمین همان حجم)' if selling else 'قیمت‌گذاری بر اساس پلن حجم دلخواه ربات اصلی است؛ مبلغ نهایی بعد از انتخاب حجم نمایش داده می‌شود.'
+    note=f'قیمت هر گیگ: {int(selling):,} تومان' if selling else 'مبلغ نهایی بعد از انتخاب حجم نمایش داده می‌شود.'
     await message.answer(f"🛠 {html.escape(source['name'])}\nنام کانفیگ: {html.escape(username)}\nحجم را بین {source['min_gb']} تا {source['max_gb']} گیگ وارد کنید.\nمدت ثابت: ۳۰ روز\n{note}\nبرای لغو «انصراف» بفرستید.")

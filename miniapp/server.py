@@ -26,6 +26,7 @@ import secrets
 import base64
 import html as html_lib
 import asyncio
+from customer_messages import customer_error
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -1108,7 +1109,7 @@ async def api_custom_config_renew_full(custom_config_id: int, body: RenewFullBod
                 result_text = await execute_renewal(db, order)
             except RenewalError as e:
                 db.reject_order(order_id)
-                raise HTTPException(status_code=409, detail=str(e))
+                raise HTTPException(status_code=409, detail=customer_error(e))
             db.approve_renewal_order(order_id)
             await report_order_completed(tenant, db, order_id, "wallet")
             return {"status": "approved", "order_id": order_id, "message": result_text}
@@ -1478,7 +1479,7 @@ async def api_test_config_claim(payload: TestConfigClaim, auth=Depends(require_j
             product,items=await provide_trial(db,tg_id)
             links=await get_product_delivery_links(db,product,items)
         except (AgencyError,HappDeliveryError) as exc:
-            raise HTTPException(status_code=409,detail=str(exc)) from None
+            raise HTTPException(status_code=409,detail=customer_error(exc)) from None
         rendered=[link if link.startswith('happ://') else dedicated_sub.dedicated_link_for_upstream(db,link) for link in links]
         return {'link':rendered[0],'links':rendered}
     user = db.get_user(tg_id)
@@ -1515,13 +1516,13 @@ async def api_test_config_claim(payload: TestConfigClaim, auth=Depends(require_j
                 result = await provision_test_plan(db, plan, user_id=tg_id)
             except TestPlanProvisionError as e:
                 await asyncio.to_thread(db.release_test_slot,tg_id)
-                raise HTTPException(status_code=409, detail=str(e))
+                raise HTTPException(status_code=409, detail=customer_error(e))
         else:
             try:
                 result = await provision_test_config(db, plan, user_id=tg_id)
             except ProvisionError as e:
                 await asyncio.to_thread(db.release_test_slot,tg_id)
-                raise HTTPException(status_code=409, detail=str(e))
+                raise HTTPException(status_code=409, detail=customer_error(e))
         await asyncio.to_thread(db.complete_test_slot,tg_id)
         _schedule_test_claim_report(
             tenant, db, tg_id,
@@ -2330,10 +2331,10 @@ async def api_create_order(body: OrderCreate, request: Request, auth=Depends(req
                         prov_results = await provision_auto_config(db, product, quantity, user_id=tg_id, order_id=order_id)
                     delivery_links = await get_product_delivery_links(db, product, prov_results, order_id)
                 except HappDeliveryError as exc:
-                    return {"status": "pending", "order_id": order_id, "detail": str(exc)}
+                    return {"status": "pending", "order_id": order_id, "detail": customer_error(exc)}
                 except (ProvisionError, DirectProvisionError) as e:
                     db.reject_order(order_id)
-                    raise HTTPException(status_code=409, detail=str(e))
+                    raise HTTPException(status_code=409, detail=customer_error(e))
                 db.approve_order_auto(order_id)
                 await report_order_completed(tenant, db, order_id, "wallet")
                 db.reward_referrer_if_first_purchase(tg_id, order["final_price"] or total_price)
@@ -4487,7 +4488,7 @@ async def api_wheel_spin(auth=Depends(require_joined)):
             result = await provision_test_plan(db, plan, user_id=tg_id, source="wheel", track_product=False)
         except TestPlanProvisionError as e:
             db.release_wheel_spin(tg_id)
-            raise HTTPException(status_code=409, detail=str(e))
+            raise HTTPException(status_code=409, detail=customer_error(e))
         amount = format_plan_amount(plan)
         await report_router.notify_prize_raw(
             tenant.bot_token, db, "برنده‌ی گردونه شانس (کانفیگ)", tg_id, name, username,
