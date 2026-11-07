@@ -228,7 +228,9 @@ def _run_job(job_id,runner=subprocess.run,delay=3,notify=True):
         for prefix in (old,new):
             for suffix in suffixes:
                 unit=prefix+suffix
-                if runner(['systemctl','is-active','--quiet',unit],capture_output=True,timeout=20).returncode==0:
+                status=runner(['systemctl','is-active','--quiet',unit],capture_output=True,timeout=20).returncode
+                if status not in (0,3,4):raise MigrationError('بررسی وضعیت سرویس‌ها ممکن نیست؛ انتقال انجام نشد.')
+                if status==0:
                     stopped.append(unit)
                     value['stopped_units']=stopped;save(base/'state.json',value)
                     runner(['systemctl','stop',unit],check=True,capture_output=True,timeout=120)
@@ -255,16 +257,26 @@ def _run_job(job_id,runner=subprocess.run,delay=3,notify=True):
         else:
             value.update(status='failed',error=str(exc) if isinstance(exc,MigrationError) else 'مهاجرت کامل نشد؛ برای جزئیات، گزارش درخواست را بررسی کنید.')
     finally:
+        final_status=value['status']
+        value['status']='running'
         try:save(base/'state.json',value)
         except OSError:pass
+        restart_failed=[]
         for unit in stopped:
             if success and unit in {old+s for s in ('','-adminpanel','-miniapp','-api','-sub','-store')}:continue
-            try:runner(['systemctl','start',unit],capture_output=True,timeout=120)
-            except Exception:pass
+            try:
+                result=runner(['systemctl','start',unit],capture_output=True,timeout=120)
+                if result.returncode:restart_failed.append(unit)
+            except Exception:restart_failed.append(unit)
+        value['status']=final_status
+        if restart_failed:
+            value['error']='دیتابیس منتقل شد، اما راه‌اندازی این سرویس‌ها ناموفق بود: '+', '.join(restart_failed) if success else 'عملیات ناموفق بود و راه‌اندازی دوباره این سرویس‌ها هم ناموفق بود: '+', '.join(restart_failed)
+        try:save(base/'state.json',value)
+        except OSError:pass
     if notify:
         try:
             from admin_panel.telegram_notify import send_message
-            text='✅ مهاجرت دیتابیس قدیمی کامل شد. اطلاعات قبلی در بکاپ محفوظ است. برای ورود پنل وب دوباره لاگین کنید.' if success else '❌ مهاجرت انجام نشد. وضعیت درخواست و گزارش خطا را بررسی کنید.'
+            text=('⚠️ دیتابیس منتقل شد، اما راه‌اندازی برخی سرویس‌ها ناموفق بود؛ وضعیت درخواست را بررسی کنید.' if restart_failed else '✅ مهاجرت دیتابیس قدیمی کامل شد. اطلاعات قبلی در بکاپ محفوظ است. برای ورود پنل وب دوباره لاگین کنید.') if success else '❌ مهاجرت انجام نشد. وضعیت درخواست و گزارش خطا را بررسی کنید.'
             asyncio.run(send_message(BOT_TOKEN,OWNER_ID,text))
         except Exception:pass
     return public(value)

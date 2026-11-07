@@ -150,3 +150,25 @@ class ImportJobTests(unittest.TestCase):
                 for name,data in entries.items():zf.writestr(name,data)
             with self.assertRaises(MigrationError):jobs.unpack_backup(job,self.principal)
         self.assertEqual(before,self.f.fingerprint(self.f.new))
+
+    def test_failed_service_restart_is_reported_after_successful_import(self):
+        job_id=self.preview();jobs.queue_job(job_id,self.principal,'REPLACE',lambda _:None)
+        def runner(argv,**kwargs):
+            import types
+            if argv[1]=='is-active':return types.SimpleNamespace(returncode=0 if argv[-1]=='shopvpn-independent' else 3)
+            return types.SimpleNamespace(returncode=1 if argv[1]=='start' else 0)
+        result=jobs.run_job(job_id,runner=runner,delay=0,notify=False)
+        self.assertEqual(result['status'],'completed')
+        self.assertIn('shopvpn-independent',result['error'])
+        self.assertTrue(result['backup_available'])
+
+    def test_systemd_status_error_aborts_before_replacement(self):
+        job_id=self.preview();before=self.f.fingerprint(self.f.new)
+        jobs.queue_job(job_id,self.principal,'REPLACE',lambda _:None)
+        def runner(argv,**kwargs):
+            import types
+            return types.SimpleNamespace(returncode=1)
+        result=jobs.run_job(job_id,runner=runner,delay=0,notify=False)
+        self.assertEqual(result['status'],'failed')
+        self.assertEqual(self.f.fingerprint(self.f.new),before)
+        self.assertIn('بررسی وضعیت',result['error'])

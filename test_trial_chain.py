@@ -129,3 +129,11 @@ class ChainTrialTests(unittest.TestCase):
                 with self.assertRaises(AgencyError):await provide_trial(self.local,303)
                 self.assertEqual(provider.await_count,1)
         asyncio.run(run())
+
+    def test_missing_live_reseller_database_blocks_unverifiable_history(self):
+        other=self.other();path=other.db_path;other.close()
+        Path(path).unlink()
+        with self.assertRaises(AgencyError):claim(self.root,303,self.local.db_path)
+        with self.root._get_conn() as c:
+            exists=c.execute("SELECT 1 FROM sqlite_master WHERE name='chain_trial_claims'").fetchone()
+            if exists:self.assertIsNone(c.execute('SELECT 1 FROM chain_trial_claims WHERE user_id=303').fetchone())

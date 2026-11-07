@@ -88,6 +88,18 @@ async def provide_trial(local,user_id):
         if not acquired:
             with root._get_conn() as conn:
                 recorded=conn.execute('SELECT status FROM chain_trial_claims WHERE user_id=?',(user_id,)).fetchone()
+            if recorded and recorded['status']=='processing':
+                with local._get_conn() as conn:
+                    done=conn.execute("SELECT order_id FROM managed_trials WHERE user_id=? AND status='completed'",(user_id,)).fetchone()
+                    local_service=conn.execute('SELECT 1 FROM custom_configs WHERE order_id=?',(done['order_id'],)).fetchone() if done else None
+                if done and local_service:
+                    with root._get_conn() as conn:
+                        purchase=conn.execute("SELECT root_order_id FROM managed_purchases WHERE request_key=? AND status='completed'",(f"{bot_id}:{done['order_id']}",)).fetchone()
+                        if purchase:
+                            conn.execute("UPDATE custom_configs SET source='test' WHERE order_id=?",(purchase['root_order_id'],))
+                    if purchase:
+                        await asyncio.to_thread(chain_complete,root,user_id,local.db_path)
+                        raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر فقط یک بار می‌تواند تست بگیرد.')
             if recorded and recorded['status']=='completed':
                 raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر فقط یک بار می‌تواند تست بگیرد.')
         try:claim=await asyncio.to_thread(_claim,local,user_id,policy)

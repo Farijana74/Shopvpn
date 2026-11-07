@@ -135,3 +135,14 @@ class ManagedTrialTests(unittest.TestCase):
             self.assertEqual(links,['https://example.invalid/sub'])
             provider.get_happ_link.assert_not_awaited()
         asyncio.run(run())
+
+    def test_recovers_completed_trial_when_central_status_was_interrupted(self):
+        async def run():
+            with patch('direct_panel_provision.provision_direct',new=AsyncMock(side_effect=self.create)) as provider:
+                await provide_trial(self.local,303)
+                with self.root._get_conn() as c:c.execute("UPDATE chain_trial_claims SET status='processing' WHERE user_id=303")
+                with self.assertRaises(AgencyError):await provide_trial(self.local,303)
+                with self.root._get_conn() as c:status=c.execute('SELECT status FROM chain_trial_claims WHERE user_id=303').fetchone()[0]
+                self.assertEqual(status,'completed')
+                self.assertEqual(provider.await_count,1)
+        asyncio.run(run())

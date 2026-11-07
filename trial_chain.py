@@ -1,5 +1,6 @@
 """One atomic trial reservation per Telegram ID across a root and all its shops."""
 import os
+import logging
 import sqlite3
 from pathlib import Path
 from managed_resellers import AgencyError
@@ -10,7 +11,11 @@ def historical_shops(root,user_id):
     for bot in root.list_reseller_bots(active_only=False):
         path=Path(bot['db_path'])
         if not path.is_absolute():path=Path(root.db_path).resolve().parent/path
-        if not path.is_file():continue
+        if not path.is_file():
+            if dict(bot).get('has_live_bot',1):
+                logging.getLogger(__name__).error('Trial history database is missing for reseller #%s',bot['id'])
+                raise AgencyError('بررسی سوابق تست یکی از فروشگاه‌ها ممکن نیست؛ با پشتیبانی تماس بگیرید.')
+            continue
         conn=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=4)
         try:
             tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
