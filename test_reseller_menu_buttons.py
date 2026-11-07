@@ -12,6 +12,20 @@ class ResellerMenuButtonTests(unittest.TestCase):
     setUp = fixtures.ManagedAgencyTests.setUp
     tearDown = fixtures.ManagedAgencyTests.tearDown
 
+    def test_open_button_editor_escapes_current_name(self):
+        import asyncio
+        from states import AdminEditButton
+        router = create_admin_router(self.root, True)
+        callback = next(h.callback for h in router.callback_query.handlers if h.callback.__name__ == 'cb_admin_btn_edit')
+        self.root.set_setting('btn_reseller_tiers', 'همکاری <موبایل> & فروش')
+        state = AsyncMock()
+        call = types.SimpleNamespace(data='adm_btn_edit:btn_reseller_tiers', from_user=types.SimpleNamespace(id=1), message=types.SimpleNamespace(edit_text=AsyncMock()), answer=AsyncMock())
+        async def run():
+            await callback(call, state)
+            self.assertIn('همکاری &lt;موبایل&gt; &amp; فروش', call.message.edit_text.await_args.args[0])
+            state.set_state.assert_awaited_with(AdminEditButton.waiting_text)
+        asyncio.run(run())
+
     def test_editing_each_label_and_color_updates_both_menus(self):
         import asyncio
         router = create_admin_router(self.root, True)

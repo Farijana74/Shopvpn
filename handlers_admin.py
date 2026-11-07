@@ -10460,7 +10460,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await state.set_state(AdminEditButton.waiting_text)
         current = (await asyncio.to_thread(db.get_setting, key, MENU_BUTTON_META.get(key, {}).get('default_text') or ''))
         await safe_edit(call, 
-            f"متن فعلی: {escape_html(current)}\n\nمتن همراه ایموجی پرمیوم را بفرستید؛ ارسال فقط ایموجی یا شناسه، نام فعلی را حفظ می‌کند:",
+            f"متن فعلی: {html.escape(current)}\n\nمتن همراه ایموجی پرمیوم را بفرستید؛ ارسال فقط ایموجی یا شناسه، نام فعلی را حفظ می‌کند:",
             reply_markup=kb.admin_back_kb("adm_edit_buttons"),
         )
         await call.answer()

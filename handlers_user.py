@@ -3327,20 +3327,6 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     # کانفیگ تست
     # -----------------------------------------------------------------------
 
-    async def _send_test_success_message(message: Message, plan_name: str = "", amount: str = "", username: str = "") -> None:
-        template = (await asyncio.to_thread(db.get_setting, "test_success_message", "")) or ""
-        if not template.strip():
-            return
-        try:
-            text = template.format(plan_name=plan_name or "", amount=amount or "", username=username or "")
-        except (KeyError, ValueError):
-            text = template
-        try:
-            await message.answer(text)
-        except Exception:
-            # پیام سفارشی نباید باعث شکست تحویل کانفیگ تست شود.
-            pass
-
     async def _send_test_config_link(message: Message, link: str, prefix: str) -> None:
         """تحویل کانفیگ تست با همان قالب کانفیگ خریداری‌شده (QR + اطلاعات سرویس + لینک‌ها)."""
         await deliver_config_to_user(
@@ -3363,9 +3349,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             try:
                 product,items=await provide_trial(db,message.from_user.id)
                 links=await get_product_delivery_links(db,product,items)
-                for link in links:
-                    await _send_test_config_link(message,link,'🧪 کانفیگ تست شما:')
-                await _send_test_success_message(message,username=items[0]['username'])
+                from trial_delivery import send_trial
+                await send_trial(message.bot,db,message.from_user.id,links,username=items[0]['username'])
             except (AgencyError,HappDeliveryError) as exc:
                 await message.answer(f'⛔️ {customer_error(exc)}')
             return
@@ -3408,8 +3393,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
 
         await asyncio.to_thread(db.complete_test_slot,message.from_user.id)
-        await _send_test_config_link(message, result['link'], "🧪 کانفیگ تست شما:")
-        await _send_test_success_message(message, username=result.get("username", ""))
+        from trial_delivery import send_trial
+        await send_trial(message.bot,db,message.from_user.id,result['link'],username=result.get('username', ''))
         await report_router.notify_test_config(
             message.bot, db, message.from_user.id, message.from_user.full_name, message.from_user.username,
             "📦 از بانک لینک دستی",
@@ -3447,21 +3432,33 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 return
 
         await asyncio.to_thread(db.complete_test_slot,message.from_user.id)
-        await _send_test_config_link(
-            message, result['subscription_url'],
-            f"🧪 کانفیگ تست شما ({plan['name']} - {format_plan_amount(plan)}):",
-        )
-        await _send_test_success_message(
-            message,
-            plan_name=plan["name"],
-            amount=format_plan_amount(plan),
-            username=result.get("username", ""),
-        )
+        from trial_delivery import send_trial
+        await send_trial(message.bot,db,message.from_user.id,result['subscription_url'],
+                         plan_name=plan['name'],amount=format_plan_amount(plan),username=result.get('username', ''))
         await report_router.notify_test_config(
             message.bot, db, message.from_user.id, message.from_user.full_name, message.from_user.username,
             f"📦 {escape_html(plan['name'])} - {escape_html(format_plan_amount(plan))}\n"
             f"🔑 <code>{escape_html(result.get('username') or '')}</code>",
         )
+
+    @router.callback_query(F.data == "trial:main_menu")
+    async def cb_trial_main_menu(call: CallbackQuery):
+        from menu_restore import restore_main_menu
+        await call.answer()
+        await restore_main_menu(call.bot, db, call.from_user.id)
+
+    @router.callback_query(F.data == "trial:help")
+    async def cb_trial_help(call: CallbackQuery):
+        from config_delivery import get_post_delivery_text, strip_html
+        text = get_post_delivery_text(db, is_test=True) or '📱 لینک اتصال را کپی کنید یا کد QR را در برنامه سازگار اسکن کنید.'
+        markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text='🏠 بازگشت به منو', callback_data='trial:main_menu')
+        ]])
+        await call.answer()
+        try:
+            await call.message.answer(text, parse_mode='HTML', reply_markup=markup)
+        except TelegramBadRequest:
+            await call.message.answer(strip_html(text), parse_mode=None, reply_markup=markup)
 
     @router.callback_query(F.data.startswith("user_test_plan:"))
     async def cb_user_test_plan_pick(call: CallbackQuery):
