@@ -32,7 +32,7 @@ import qrcode
 
 import dedicated_sub
 from aiogram import Bot
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 import config
 from jalali import to_jalali_str
@@ -514,29 +514,13 @@ async def deliver_config_to_user(
         for extra in extras:
             await _send_html(bot, user_tg_id, extra)
 
-    if final_price is not None:
-        await bot.send_message(
-            user_tg_id,
-            localized(build_summary_text(final_price, total if summary_count is None else summary_count), db, user_tg_id),
-        )
-
     post_text = get_post_delivery_text(db, is_test=is_test)
-    if post_text:
-        try:
-            await bot.send_message(user_tg_id, post_text)
-        except Exception:
-            pass
-
-    if db is not None:
-        try:
-            import tutorial
-            await tutorial.send_device_picker(bot, user_tg_id, db)
-        except Exception:
-            pass
-        from menu_restore import restore_main_menu
-        try:
-            await restore_main_menu(bot, db, user_tg_id)
-        except Exception:
-            logging.getLogger(__name__).warning("Restoring post-delivery menu failed for user %s", user_tg_id)
+    summary = localized(build_summary_text(final_price, total if summary_count is None else summary_count), db, user_tg_id) if final_price is not None else ''
+    guide = '\n\n'.join(part for part in (summary, post_text) if part) or '✅ کانفیگ شما آماده استفاده است.'
+    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🏠 بازگشت به منو', callback_data='trial:main_menu')]])
+    try:
+        await bot.send_message(user_tg_id, guide, reply_markup=markup)
+    except Exception:
+        await bot.send_message(user_tg_id, strip_html(guide), parse_mode=None, reply_markup=markup)
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 # 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

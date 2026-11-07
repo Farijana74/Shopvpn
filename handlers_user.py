@@ -2997,7 +2997,6 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                     db.get_text('handlers_user.auto_5f36061a', '✅ مبلغ سفارش شما به\u200cطور کامل از کیف پول پوشش داده شد.\nکانفیگ شما در پیام بعدی ارسال می\u200cشود 👇'),
                     reply_markup=kb.menu_for_user(db, message.from_user.id, is_main_bot),
                 )
-                await _send_inline_main_menu(message, message.from_user.id)
                 await deliver_config_to_user(
                     message.bot, message.from_user.id, "کانفیگ شخصی",
                     [result.subscription_url], final_price=0, order_id=order_id, db=db,

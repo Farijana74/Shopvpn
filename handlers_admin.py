@@ -7427,7 +7427,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                 await state.clear()
                 await message.answer(db.get_text('handlers_admin.auto_9bd7ece4', '⛔️ این پنل هیچ inbound ای ندارد. اول از داخل پنل یک inbound بساز.'))
                 return
-            await state.update_data(server_id=server_id, inbounds=inbounds, selected_inbound_ids=[])
+            await state.update_data(server_id=server_id, inbounds=inbounds, selected_inbound_ids=[], edit_inbounds=False)
             await state.set_state(AdminAddPanelServer.waiting_inbound_select)
             await message.answer(
                 db.get_text('handlers_admin.auto_4d77a9ff', 'کدام inbound(ها) برای ساخت کاربرهای جدید استفاده شود؟ (می\u200cتوانی چند مورد را تیک بزنی)'),
@@ -7457,6 +7457,26 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             "کانفیگ‌های شخصی جدید استفاده می‌شود."
         )
 
+    @router.callback_query(F.data.startswith("adm_inbounds_edit:"))
+    async def cb_edit_panel_inbounds(call: CallbackQuery, state: FSMContext):
+        if not full_access_bot or not senior_admin_only(call.from_user.id):
+            return await call.answer('دسترسی مجاز نیست.', show_alert=True)
+        server_id = callback_id(call.data, 'adm_inbounds_edit')
+        server = await asyncio.to_thread(db.get_panel_server, server_id) if server_id else None
+        if not server or server['panel_type'] not in INBOUND_SELECT_PANEL_TYPES:
+            return await call.answer('پنل یافت نشد.', show_alert=True)
+        try:
+            inbounds = await get_provider(server).list_inbounds()
+        except PanelError:
+            return await call.answer('دریافت اینباندها ناموفق بود؛ اتصال و تنظیمات پنل را بررسی کنید.', show_alert=True)
+        if not inbounds:
+            return await call.answer('اینباندی در پنل پیدا نشد.', show_alert=True)
+        await state.update_data(server_id=server_id, panel_type=server['panel_type'], inbounds=inbounds,
+                                selected_inbound_ids=parse_xui_inbound_ids(server), edit_inbounds=True)
+        await state.set_state(AdminAddPanelServer.waiting_inbound_select)
+        await safe_edit(call, 'اینباندهای مورد استفاده برای ساخت سرویس جدید را انتخاب کنید.', reply_markup=kb.inbound_select_kb(inbounds, parse_xui_inbound_ids(server)))
+        await call.answer()
+
     @router.callback_query(F.data.startswith("adm_xui_inbound_toggle:"), AdminAddPanelServer.waiting_inbound_select)
     async def cb_panel_server_inbound_toggle(call: CallbackQuery, state: FSMContext):
         inbound_id = int(call.data.split(":")[1])
@@ -7483,6 +7503,14 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         if data.get("panel_type") in SINGLE_INBOUND_PANEL_TYPES and len(selected) > 1:
             await call.answer(db.get_text('handlers_admin.auto_d262862a', 'برای این نوع پنل فقط یک inbound قابل انتخاب است.'), show_alert=True)
             return
+        if data.get('edit_inbounds'):
+            import json
+            server_id = data['server_id']
+            await asyncio.to_thread(db.update_panel_server, server_id, xui_inbound_ids=json.dumps(selected))
+            await state.clear()
+            server = await asyncio.to_thread(db.get_panel_server, server_id)
+            await safe_edit(call, '✅ اینباندهای انتخاب‌شده ذخیره شدند.', reply_markup=kb.panel_server_view_kb(server))
+            return await call.answer()
         await state.update_data(inbound_ids=selected)
         await state.set_state(AdminAddPanelServer.waiting_sub_base_url)
         await call.answer()

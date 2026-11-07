@@ -124,17 +124,11 @@ async def deliver_config_to_user_web(
         for extra in extras:
             await _send_html(extra)
 
-    if final_price is not None:
-        await tg_send(bot_token, user_tg_id, build_summary_text(final_price, total))
-
     post_text = get_post_delivery_text(db)
-    if post_text:
-        try:
-            await tg_send(bot_token, user_tg_id, post_text)
-        except Exception:
-            pass
-
-    await _send_tutorial_picker_web(bot_token, user_tg_id, db)
-    await _restore_menu_web(bot_token, user_tg_id, db)
+    summary = build_summary_text(final_price, total) if final_price is not None else ''
+    guide = '\n\n'.join(part for part in (summary, post_text) if part) or '✅ کانفیگ شما آماده استفاده است.'
+    markup = {'inline_keyboard': [[{'text': '🏠 بازگشت به منو', 'callback_data': 'trial:main_menu'}]]}
+    if not await tg_send(bot_token, user_tg_id, guide, parse_mode='HTML', reply_markup=markup):
+        await tg_send(bot_token, user_tg_id, strip_html(guide), reply_markup=markup)
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 # 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

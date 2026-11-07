@@ -4577,6 +4577,7 @@ def panel_server_view_kb(server) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=tr("🧩 تغییر کاربر نمونه (قالب)"), callback_data=f"adm_panel_server_template:{server['id']}")],
     ]
     if server["panel_type"] in INBOUND_SELECT_PANEL_TYPES:
+        rows.append([InlineKeyboardButton(text="📋 مدیریت اینباندهای انتخاب‌شده", callback_data=f"adm_inbounds_edit:{server['id']}")])
         rows.append([InlineKeyboardButton(
             text=tr("🔗 تغییر لینک Subscription"), callback_data=f"adm_panel_server_suburl:{server['id']}",
         )])
