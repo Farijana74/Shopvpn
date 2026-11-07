@@ -583,6 +583,7 @@ class AdminAddPanelServer(StatesGroup):
 
 
 class AdminEditProduct(StatesGroup):
+    waiting_name = State()
     waiting_volume = State()
     waiting_src_volume = State()
     waiting_src_bank_days = State()

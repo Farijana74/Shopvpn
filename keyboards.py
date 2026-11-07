@@ -2898,6 +2898,7 @@ def admin_products_list_kb(db, products) -> InlineKeyboardMarkup:
         )
         rows.append(
             [
+                InlineKeyboardButton(text=tr("تغییر نام محصول"), callback_data=f"adm_prod_name:{p['id']}"),
                 InlineKeyboardButton(text=tr("تغییر وضعیت"), callback_data=f"adm_prod_toggle:{p['id']}"),
                 InlineKeyboardButton(text=tr("🗑حذف"), callback_data=f"adm_prod_del:{p['id']}"),
             ]

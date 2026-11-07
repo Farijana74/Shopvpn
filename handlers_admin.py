@@ -1200,9 +1200,10 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await call.answer()
 
     @router.callback_query(F.data.startswith("adm_prod_cat:"))
-    async def cb_admin_prod_cat(call: CallbackQuery):
+    async def cb_admin_prod_cat(call: CallbackQuery, state: FSMContext):
         if not senior_admin_only(call.from_user.id):
             return await deny_mid(call)
+        await state.clear()
         cat_id = callback_id(call.data, "adm_prod_cat")
         if cat_id is None:
             await call.answer(db.get_text('handlers_admin.auto_524e296b', '❌ درخواست نامعتبر است.'), show_alert=True)
@@ -1257,6 +1258,38 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await safe_edit(call, f"روش تحویل «{product['name']}»: {labels[mode]}",
                         reply_markup=kb.admin_product_delivery_kb(product))
         await call.answer("روش تحویل ذخیره شد.")
+
+    @router.callback_query(F.data.startswith("adm_prod_name:"))
+    async def cb_admin_prod_name(call: CallbackQuery, state: FSMContext):
+        if not senior_admin_only(call.from_user.id):
+            return await deny_mid(call)
+        product_id = callback_id(call.data, "adm_prod_name")
+        product = await asyncio.to_thread(db.get_product, product_id) if product_id else None
+        if not product:
+            return await call.answer(tr("این محصول دیگر وجود ندارد."), show_alert=True)
+        await state.update_data(editing_product_id=product_id)
+        await state.set_state(AdminEditProduct.waiting_name)
+        await safe_edit(call, tr("نام جدید محصول را ارسال کنید (۱ تا ۱۲۰ نویسه):"),
+                        reply_markup=kb.admin_back_kb(f"adm_prod_cat:{product['category_id']}"))
+        await call.answer()
+
+    @router.message(AdminEditProduct.waiting_name)
+    async def process_admin_prod_name(message: Message, state: FSMContext):
+        if not senior_admin_only(message.from_user.id):
+            return
+        name = (message.text or "").strip()
+        if not name or len(name) > 120:
+            return await message.answer(tr("نام محصول باید بین ۱ تا ۱۲۰ نویسه باشد."))
+        data = await state.get_data()
+        product = await asyncio.to_thread(db.get_product, data.get("editing_product_id"))
+        if not product:
+            await state.clear()
+            return await message.answer(tr("این محصول دیگر وجود ندارد."), reply_markup=kb.admin_back_kb("adm_products"))
+        await asyncio.to_thread(db.edit_product, product["id"], name=name)
+        await asyncio.to_thread(db.log_admin_action, message.from_user.id, "product_rename", f"product_id={product['id']}")
+        await state.clear()
+        products = await asyncio.to_thread(db.get_products, product["category_id"], active_only=False)
+        await message.answer(tr("نام محصول تغییر کرد."), reply_markup=kb.admin_products_list_kb(db, products))
 
     @router.callback_query(F.data.startswith("adm_prod_toggle:"))
     async def cb_admin_prod_toggle(call: CallbackQuery):

@@ -51,3 +51,30 @@ class ProductDisplayTests(unittest.TestCase):
             await name_handler(message,state)
             self.assertEqual(self.local.get_product(product['id'])['name'],'نام فروشگاه')
         asyncio.run(run())
+
+    def test_main_bot_product_editor_and_visibility(self):
+        from handlers_admin import create_admin_router
+        from states import AdminEditProduct
+        product = self.root.get_product(self.pid)
+        router = create_admin_router(self.root, True)
+        callback = next(h.callback for h in router.callback_query.handlers if h.callback.__name__ == 'cb_admin_prod_name')
+        handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == 'process_admin_prod_name')
+        state = AsyncMock()
+        state.get_data.return_value = {'editing_product_id': self.pid}
+        call = types.SimpleNamespace(data=f'adm_prod_name:{self.pid}', from_user=types.SimpleNamespace(id=1), message=types.SimpleNamespace(edit_text=AsyncMock()), answer=AsyncMock())
+        message = types.SimpleNamespace(text='نام جدید', from_user=types.SimpleNamespace(id=1), answer=AsyncMock())
+        buttons = keyboards.admin_products_list_kb(self.root, [product]).inline_keyboard
+        self.assertTrue(any(b.callback_data == f'adm_prod_name:{self.pid}' for row in buttons for b in row))
+        async def run():
+            await callback(call, state)
+            state.set_state.assert_awaited_with(AdminEditProduct.waiting_name)
+            await handler(message, state)
+        asyncio.run(run())
+        self.assertEqual(self.root.get_product(self.pid)['name'], 'نام جدید')
+        self.root.toggle_product(self.pid)
+        self.assertEqual(self.root.get_products(product['category_id'], active_only=True), [])
+        self.assertEqual(len(self.root.get_products(product['category_id'], active_only=False)), 1)
+        self.root.toggle_product(self.pid)
+        labels = [b.text for row in keyboards.products_kb(self.root, self.root.get_products(product['category_id'], active_only=True), product['category_id']).inline_keyboard for b in row if b.callback_data == f'prod:{self.pid}']
+        self.assertEqual(len(labels), 1)
+        self.assertFalse(labels[0].startswith('✅'))
