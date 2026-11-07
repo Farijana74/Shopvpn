@@ -28,7 +28,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError
 
 from md_utils import escape_md, escape_html
-from price_display import price_label_plain
+from price_display import price_label_html
 import keyboards as kb
 from gift_card_handlers import redeem_gift_for_message
 from daily_quiz import answer_quiz_for_message
@@ -1173,14 +1173,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             text += "\n" + db.get_text(
                 "handlers_user.product.out_of_stock_suffix", "⛔️ در حال حاضر موجودی این محصول تمام شده است."
             )
-            await message.answer(text)
+            await message.answer(text, parse_mode="HTML")
             return
         tier_info = await _tier_info(message.from_user.id, product["price"], 1, product["id"])
         discount_amount, discount_label = await _apply_pending_discount(
             state, tier_info["total_after"], product_id, user_id=message.from_user.id
         )
         text = _product_confirm_text(product, 1, stock, wallet_credit, discount_amount, discount_label, tier_info)
-        await message.answer(text, reply_markup=kb.product_confirm_kb(db, product_id, 1, stock, 10 if tier_info["title"] else 0))
+        await message.answer(text, parse_mode="HTML", reply_markup=kb.product_confirm_kb(db, product_id, 1, stock, 10 if tier_info["title"] else 0))
 
     async def _handle_referral_invite_rewards(bot: Bot, referrer_id: int, reward_info: dict):
         """پیام‌ها به دعوت‌کننده می‌رود؛ پس باید به زبان خودِ او رندر شوند، نه زبان
@@ -1369,7 +1369,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         text = db.get_text(
             "handlers_user.product.confirm_header",
             "📦 {name}\n💰 قیمت واحد: {price} تومان\n📝 توضیحات: {description}\n",
-        ).format(name=product_name, price=price_label_plain(product, unit_price, suffix=""), description=product["description"] or "---")
+        ).format(name=product_name, price=price_label_html(product, unit_price, suffix=""), description=product["description"] or "---")
         text += stock_line
         if product["is_auto_provision"] and (product["auto_provision_volume_gb"] or product["duration_days"]):
             volume_gb = product["auto_provision_volume_gb"]
@@ -1488,7 +1488,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if stock <= 0:
             text = _product_confirm_text(product, 1, stock, wallet_credit)
             text += "\n⛔️ در حال حاضر موجودی این محصول تمام شده است."
-            await _safe_edit(call.message, text)
+            await _safe_edit(call.message, text, parse_mode="HTML")
             await call.answer()
             return
         max_users = await _users_option(product)
@@ -1524,7 +1524,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             state, tier_info["total_after"], product["id"], user_id=call.from_user.id
         )
         text = _product_confirm_text(product, quantity, stock, wallet_credit, discount_amount, discount_label, tier_info, users, included)
-        await _safe_edit(call.message, text, reply_markup=kb.product_confirm_kb(
+        await _safe_edit(call.message, text, parse_mode="HTML", reply_markup=kb.product_confirm_kb(
             db, product["id"], quantity, stock, 10 if tier_info["title"] else 0, users_change=bool(users),
         ))
 
@@ -8094,7 +8094,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 if product["is_auto_provision"] or stock > 0:
                     text = _product_confirm_text(product, 1, stock, wallet_credit)
                     await message.answer(
-                        text, reply_markup=kb.product_confirm_kb(db, product_id, 1, max(stock, 1))
+                        text, parse_mode="HTML", reply_markup=kb.product_confirm_kb(db, product_id, 1, max(stock, 1))
                     )
                 else:
                     await message.answer(db.get_text('handlers_user.auto_46d880df', '⛔️ موجودی این محصول در حال حاضر تمام شده.'))
@@ -8178,6 +8178,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             )
             await message.answer(
                 text,
+                parse_mode="HTML",
                 reply_markup=kb.product_confirm_kb(
                     db, product_id, quantity, max(stock_display, quantity), 10 if tier_info["title"] else 0
                 ),

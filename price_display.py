@@ -82,6 +82,16 @@ def price_label_plain(product, unit_price: int = None, suffix: str = "تومان
     return price_range(old, price, suffix).rstrip()
 
 
+def price_label_html(product, unit_price: int = None, suffix: str = "تومان") -> str:
+    """Use Telegram's native strikethrough entity in HTML message bodies."""
+    price = int(unit_price if unit_price is not None else product["price"])
+    old = compare_price_for(product, price)
+    if not old:
+        return f"{_ltr(f'{price:,}')} {suffix}".rstrip()
+    tail = f" {suffix}" if suffix else ""
+    return _rtl(f"{_ltr(f'<s>{old:,}</s>')} ← {_ltr(f'{price:,}')}{tail}")
+
+
 # حداکثر طول (کاراکتر) نام + دو عدد برای نمایش کامل قیمت خط‌خورده روی دکمه؛ بیشتر از آن
 # متن زیر لبه‌ی دکمه می‌رود، پس فرم کوتاه با درصد تخفیف نشان داده می‌شود.
 _BUTTON_FULL_LIMIT = 26
