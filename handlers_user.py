@@ -1323,7 +1323,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data.startswith("cat:"))
     async def cb_category(call: CallbackQuery):
         cat_id = int(call.data.split(":")[1])
-        products = (await asyncio.to_thread(db.get_products, cat_id, active_only=False))
+        products = (await asyncio.to_thread(db.get_products, cat_id, active_only=True))
         if not products:
             await call.answer(
                 db.get_text("handlers_user.category.empty", "محصولی در این دسته‌بندی موجود نیست."), show_alert=True

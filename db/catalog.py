@@ -441,6 +441,11 @@ class CatalogMixin:
         # برمی‌گردد) و این با pattern قبلیِ «None یعنی بدون تغییر» فرق دارد.
         from managed_resellers import validate_edit
         validate_edit(self, product_id, {k:v for k,v in locals().copy().items() if k not in ("self","product_id") and not callable(v)})
+        managed_name_override = name is not None and bool(self.get_setting("managed_reseller_bot_id", ""))
+        if managed_name_override:
+            name = name.strip()
+            if not name or len(name) > 120:
+                raise ValueError("نام محصول باید بین ۱ تا ۱۲۰ نویسه باشد.")
         fields, values = [], []
         if category_id is not None:
             fields.append("category_id=?"); values.append(category_id)
@@ -489,6 +494,8 @@ class CatalogMixin:
         values.append(product_id)
         with self._get_conn() as conn:
             conn.execute(f"UPDATE products SET {', '.join(fields)} WHERE id=?", values)
+            if managed_name_override:
+                conn.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,'1')",(f"managed_product_name_override:{product_id}",))
 
     def set_category_products_delivery_mode(self, category_id: int, delivery_mode: str) -> tuple:
         """Apply a delivery mode to every product in a category, while only

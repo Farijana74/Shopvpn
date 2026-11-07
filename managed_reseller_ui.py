@@ -1,5 +1,6 @@
 """Permission-checked bot UI for root catalogs and nested gold resellers."""
 import asyncio
+import html
 import os
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
@@ -12,6 +13,7 @@ class AgencyFlow(StatesGroup):
     price=State()
     select_price=State()
     description=State()
+    name=State()
     grant=State()
     discount=State()
     token=State()
@@ -170,7 +172,7 @@ def create_agency_router(local, is_main_bot):
                             ids=[r[0] for r in conn.execute('SELECT product_id FROM managed_catalog WHERE bot_id=? AND allowed=1 AND selected=1',(parent_id,))]
                         candidates=[dict(root.get_product(pid)) for pid in ids if root.get_product(pid)]
                     candidates=[p for p in candidates if root.get_setting(f"volume_template:{p['id']}",'')!='1']
-                    rows=[[Button(text=('✅ ' if offers.get(p['id'],{}).get('allowed') else '☑️ ')+p['name'],callback_data=f"agency:allow:{bot_id}:{p['id']}")] for p in candidates]
+                    rows=[[Button(text=('مجاز | ' if offers.get(p['id'],{}).get('allowed') else 'غیرمجاز | ')+p['name'],callback_data=f"agency:allow:{bot_id}:{p['id']}")] for p in candidates]
                 else:
                     rows=[]
                     for pid,offer in offers.items():
@@ -179,7 +181,7 @@ def create_agency_router(local, is_main_bot):
                         if not product or not offer['allowed']: continue
                         try:cost_label=f"{rate(root,bot_id,pid,require_selected=False):,} تومان"
                         except AgencyError:cost_label='ناموجود در بالادست'
-                        rows.append([Button(text=('✅ ' if offer['selected'] else '🆕 ')+product['name']+f" | تأمین: {cost_label}",callback_data=f'agency:select:{pid}')])
+                        rows.append([Button(text=('انتخاب‌شده | ' if offer['selected'] else 'جدید | ')+product['name']+f" | تأمین: {cost_label}",callback_data=f'agency:select:{pid}')])
                     with local._get_conn() as conn:
                         products=conn.execute('SELECT id,name,price,is_active FROM products WHERE upstream_product_id IS NOT NULL').fetchall()
                     products=[p for p in products if local.get_setting(f"volume_template:{p['id']}",'')!='1']
@@ -230,15 +232,16 @@ def create_agency_router(local, is_main_bot):
                     notice='✅ محصول اکنون فعال شد.\n\n' if enabled else '✅ محصول اکنون غیرفعال شد.\n\n'
                     product=local.get_product(product['id'])
                 status='فعال' if product['is_active'] else 'غیرفعال'
-                rows=[[Button(text='قیمت فروش',callback_data=f"agency:price:{product['id']}")],
+                rows=[[Button(text='تغییر نام محصول',callback_data=f"agency:name:{product['id']}")],
+                      [Button(text='قیمت فروش',callback_data=f"agency:price:{product['id']}")],
                       [Button(text='توضیحات',callback_data=f"agency:description:{product['id']}")],
                       [Button(text='غیرفعال کن' if product['managed_local_enabled'] else 'فعال کن',callback_data=f"agency:toggle:{product['id']}")],
                       [Button(text='⬅️ محصولات',callback_data='agency:products')]]
-                await display(call,notice+f"ویرایش محصول: {product['name']}\nوضعیت فعلی: {status}\nنرخ تأمین: {product['managed_buy_price']} تومان\nقیمت فروش: {product['price']} تومان",rows)
-            elif action in ('price','description'):
-                await state.set_state(AgencyFlow.price if action=='price' else AgencyFlow.description)
+                await display(call,notice+f"ویرایش محصول: {html.escape(product['name'])}\nوضعیت فعلی: {status}\nنرخ تأمین: {product['managed_buy_price']} تومان\nقیمت فروش: {product['price']} تومان",rows)
+            elif action in ('price','description','name'):
+                await state.set_state({'price':AgencyFlow.price,'description':AgencyFlow.description,'name':AgencyFlow.name}[action])
                 await state.update_data(agency_product=int(parts[2]))
-                await display(call,'قیمت فروش جدید (تومان) را بفرستید؛ کمتر از نرخ تأمین مجاز نیست.' if action=='price' else 'توضیحات جدید را بفرستید.',[[Button(text='انصراف',callback_data='agency:home')]])
+                await display(call,{'price':'قیمت فروش جدید (تومان) را بفرستید؛ کمتر از نرخ تأمین مجاز نیست.','description':'توضیحات جدید را بفرستید.','name':'نام جدید محصول را بفرستید.'}[action],[[Button(text='انصراف',callback_data='agency:home')]])
             elif action in ('grant','wholesale'):
                 if action=='wholesale' and not is_main_bot: raise AgencyError('دسترسی مجاز نیست.')
                 if action=='grant': own_bot(int(parts[2]))
@@ -314,6 +317,18 @@ def create_agency_router(local, is_main_bot):
             await asyncio.to_thread(local.edit_product,product_id,price=price)
             await state.clear()
             await message.answer('✅ قیمت فروش ذخیره شد.',reply_markup=Markup(inline_keyboard=home_rows()))
+        except ValueError as exc:await message.answer(str(exc))
+
+    @router.message(AgencyFlow.name)
+    async def name_message(message,state):
+        if not authorized(message.from_user.id) or not parent_id:return
+        name=(message.text or '').strip()
+        if not name or len(name)>120:return await message.answer('نام محصول باید بین ۱ تا ۱۲۰ کاراکتر باشد.')
+        try:
+            product_id=(await state.get_data())['agency_product']
+            await asyncio.to_thread(local.edit_product,product_id,name=name)
+            await state.clear()
+            await message.answer('✅ نام محصول تغییر کرد.',reply_markup=Markup(inline_keyboard=home_rows()))
         except ValueError as exc:await message.answer(str(exc))
 
     @router.message(AgencyFlow.description)

@@ -210,6 +210,8 @@ def sync_bot(root, bot_id):
                 minimum=(purchase_price*100+99-discount)//(100-discount)
                 values['price'] = max(int(old['price']) if old else int(source['price']), minimum)
                 values['description'] = old['description'] if old else source['description']
+                if old and conn.execute("SELECT 1 FROM settings WHERE key=? AND value='1'",(f"managed_product_name_override:{old['id']}",)).fetchone():
+                    values['name']=old['name']
                 if old:
                     conn.execute('UPDATE products SET '+','.join(f'{k}=?' for k in values)+' WHERE id=?', [*values.values(),old['id']])
                 else:
@@ -240,10 +242,10 @@ def validate_edit(db, product_id, changes):
     old = db.get_product(product_id)
     if not old or not dict(old).get('upstream_product_id'):
         raise AgencyError('فقط محصولات مجاز بالادست قابل مدیریت هستند.')
-    allowed = {'price','description','is_active'}
+    allowed = {'name','price','description','is_active'}
     for key,value in changes.items():
         if key not in allowed and value is not ... and value is not None and ((key in old.keys() and value != old[key]) or (key not in old.keys() and value not in (0,''))):
-            raise AgencyError('نماینده فقط قیمت فروش، توضیحات و وضعیت محصول را تغییر می‌دهد.')
+            raise AgencyError('نماینده فقط نام، قیمت فروش، توضیحات و وضعیت محصول را تغییر می‌دهد.')
     if changes.get('price') is not None:
         from database import Database
         central=Database(db.get_setting('managed_root_db_path',''))
