@@ -21,11 +21,10 @@ def menu_snapshot(db,user_id,is_main_bot):
     from db.constants import MENU_BUTTON_META,DEFAULT_SETTINGS
     from i18n import tr
     reply=keyboards.menu_for_user(db,user_id,is_main_bot)
-    inline=None
+    inline=keyboards.inline_menu_for_user(db,user_id,is_main_bot)
     if isinstance(reply,ReplyKeyboardMarkup):
         labels={b.text for row in reply.keyboard for b in row}
     else:
-        inline=keyboards.inline_menu_for_user(db,user_id,is_main_bot)
         labels={b.text for row in inline.inline_keyboard for b in row} if inline else set()
     aliases={}
     for text in labels:
@@ -66,14 +65,12 @@ class ReplyMenuCompatibilityMiddleware(BaseMiddleware):
         async def refresh():
             from menu_restore import menu_text
             text, options = menu_text(self.db)
-            if inline is not None and not isinstance(reply, ReplyKeyboardMarkup):
-                if isinstance(reply, ReplyKeyboardRemove):
+            if inline is not None:
+                if isinstance(reply, (ReplyKeyboardRemove, ReplyKeyboardMarkup)):
                     await event.answer('منو به‌روزرسانی شد.',reply_markup=reply)
                 await event.answer(text,reply_markup=inline,**options)
             else:
                 await event.answer(text,reply_markup=reply,**options)
-            if inline is not None and isinstance(reply, ReplyKeyboardMarkup):
-                await event.answer('از منوی به‌روز انتخاب کنید:',reply_markup=inline)
             self._revisions[user.id]=revision
             self._revisions.move_to_end(user.id)
             if len(self._revisions)>4096:self._revisions.popitem(last=False)

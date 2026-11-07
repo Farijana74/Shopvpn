@@ -1,7 +1,7 @@
 import types
 import unittest
 from unittest.mock import AsyncMock,patch
-from aiogram.types import Message,Chat,User,ReplyKeyboardMarkup,KeyboardButton
+from aiogram.types import Message,Chat,User,ReplyKeyboardMarkup,ReplyKeyboardRemove,KeyboardButton,InlineKeyboardMarkup,InlineKeyboardButton
 from aiogram.dispatcher.event.bases import UNHANDLED
 from datetime import datetime
 from reply_menu_compat import ReplyMenuCompatibilityMiddleware,label_key,menu_snapshot
@@ -14,7 +14,7 @@ class ReplyMenuTests(unittest.IsolatedAsyncioTestCase):
         db=types.SimpleNamespace(get_text=lambda k,d:d,get_setting=lambda k,d='':{'btn_buy':'🚀 خرید کانفیگ'}.get(k,d))
         state=state or AsyncMock();state.get_state.return_value=active
         handler=AsyncMock(return_value=result)
-        with patch('keyboards.menu_for_user',return_value=keyboard),patch('aiogram.types.Message.answer',new_callable=AsyncMock) as send:
+        with patch('keyboards.menu_for_user',return_value=keyboard),patch('keyboards.inline_menu_for_user',return_value=None),patch('aiogram.types.Message.answer',new_callable=AsyncMock) as send:
             data={'state':state,'raw_state':active}
             result=await ReplyMenuCompatibilityMiddleware(db)(handler,self.event(text),data)
         return handler,send,state,result
@@ -73,7 +73,7 @@ class ReplyMenuTests(unittest.IsolatedAsyncioTestCase):
         middleware=ReplyMenuCompatibilityMiddleware(db)
         state=AsyncMock();state.get_state.return_value=None
         handler=AsyncMock(return_value='handled')
-        with patch('keyboards.menu_for_user',return_value=keyboard),patch('aiogram.types.Message.answer',new_callable=AsyncMock) as send:
+        with patch('keyboards.menu_for_user',return_value=keyboard),patch('keyboards.inline_menu_for_user',return_value=None),patch('aiogram.types.Message.answer',new_callable=AsyncMock) as send:
             await middleware(handler,self.event('خرید'),{'state':state})
             await middleware(handler,self.event('خرید'),{'state':state})
             self.assertEqual(send.await_count,1)
@@ -82,3 +82,18 @@ class ReplyMenuTests(unittest.IsolatedAsyncioTestCase):
             await middleware(handler,self.event('خرید'),{'state':state})
             self.assertEqual(send.await_count,2)
         self.assertEqual(handler.await_count,4)
+
+    async def test_unknown_text_includes_inline_menu_with_or_without_reply_keyboard(self):
+        inline=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='خرید',callback_data='mm:btn_buy')]])
+        reply=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='خرید')]])
+        db=types.SimpleNamespace(get_text=lambda k,d:d,get_setting=lambda k,d='':d)
+        for reply_markup in (reply,ReplyKeyboardRemove()):
+            with self.subTest(reply_markup=type(reply_markup).__name__):
+                state=AsyncMock();state.get_state.return_value=None
+                handler=AsyncMock(return_value=UNHANDLED)
+                with patch('keyboards.menu_for_user',return_value=reply_markup),patch('keyboards.inline_menu_for_user',return_value=inline),patch('aiogram.types.Message.answer',new_callable=AsyncMock) as send:
+                    await ReplyMenuCompatibilityMiddleware(db)(handler,self.event('متن ناشناخته'),{'state':state})
+                self.assertEqual(send.await_count,2)
+                self.assertEqual(send.await_args_list[-1].args[0],'📋 منو:')
+                self.assertEqual(send.await_args_list[-1].kwargs['reply_markup'],inline)
+                state.clear.assert_not_awaited()
