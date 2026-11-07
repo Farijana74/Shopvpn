@@ -82,7 +82,19 @@ async def provide_trial(local,user_id):
     try:
         policy=trial_policy(root)
         if not policy.get('enabled'):raise AgencyError('سرویس تست نماینده‌ها از ربات اصلی غیرفعال است.')
-        claim=await asyncio.to_thread(_claim,local,user_id,policy)
+        from trial_chain import claim as chain_claim,release as chain_release,complete as chain_complete
+        acquired=await asyncio.to_thread(chain_claim,root,user_id,local.db_path,True)
+        if not acquired:
+            with root._get_conn() as conn:
+                recorded=conn.execute('SELECT status FROM chain_trial_claims WHERE user_id=?',(user_id,)).fetchone()
+            if recorded and recorded['status']=='completed':
+                with local._get_conn() as conn:
+                    saved_claim=conn.execute("SELECT 1 FROM managed_trials WHERE user_id=? AND status='completed'",(user_id,)).fetchone()
+                if not saved_claim:raise AgencyError('تست شما قبلاً در این زنجیره ثبت شده است؛ ساخت تست جدید مجاز نیست.')
+        try:claim=await asyncio.to_thread(_claim,local,user_id,policy)
+        except Exception:
+            if acquired:await asyncio.to_thread(chain_release,root,user_id,local.db_path)
+            raise
         policy=json.loads(claim['policy'])
         with local._get_conn() as conn:
             product=conn.execute('SELECT p.* FROM products p JOIN orders o ON o.product_id=p.id WHERE o.id=?',(claim['order_id'],)).fetchone()
@@ -92,6 +104,7 @@ async def provide_trial(local,user_id):
         if claim['status']=='completed':
             if not saved:raise AgencyError('سرویس تست قبلی حذف شده است؛ پشتیبانی باید بررسی کند.')
             results=[dict(username=c['username'],subscription_url=c['subscription_url'],panel_server_id=c['panel_server_id'],custom_config_id=c['id'],volume_gb=c['volume_gb'],duration_days=c['duration_days'],_managed_delivery_mode=c['delivery_mode']) for c in saved]
+            await asyncio.to_thread(chain_complete,root,user_id,local.db_path)
             return product,results
         try:
             results=await provision(local,product,1,user_id,claim['order_id'],trial_policy=policy)
@@ -105,6 +118,7 @@ async def provide_trial(local,user_id):
                 conn.execute("UPDATE managed_trials SET status='failed' WHERE user_id=?",(user_id,))
                 conn.execute('UPDATE users SET test_used=MAX(test_used-1,0) WHERE telegram_id=?',(user_id,))
                 conn.execute("UPDATE orders SET status='rejected' WHERE id=?",(claim['order_id'],))
+            await asyncio.to_thread(chain_release,root,user_id,local.db_path)
             if isinstance(exc,AgencyError):raise AgencyError(str(exc)) from None
             raise AgencyError('ساخت تست ناموفق بود؛ هزینه و سهمیه برگردانده شد. دوباره تلاش کنید.') from None
         with local._get_conn() as conn:
@@ -113,5 +127,6 @@ async def provide_trial(local,user_id):
             conn.execute("UPDATE managed_trials SET status='completed' WHERE user_id=?",(user_id,))
         with root._get_conn() as conn:
             conn.execute("UPDATE custom_configs SET source='test' WHERE order_id=(SELECT root_order_id FROM managed_purchases WHERE request_key=?)",(f"{bot_id}:{claim['order_id']}",))
+        await asyncio.to_thread(chain_complete,root,user_id,local.db_path)
         return product,results
     finally:root.close()

@@ -1506,7 +1506,7 @@ async def api_test_config_claim(payload: TestConfigClaim, auth=Depends(require_j
         # کانفیگ تست می‌ساخت (و در بات‌های نمایندگی، هرکدام از اعتبار حجمی
         # نماینده کم می‌کرد). سهمیه حالا با یک UPDATE اتمیک *قبل* از تماس با
         # پنل رزرو می‌شود؛ اگر ساخت کانفیگ شکست بخورد، سهمیه برمی‌گردد.
-        if not db.try_reserve_test_slot(tg_id, MAX_TEST_PER_USER):
+        if not await asyncio.to_thread(db.try_reserve_test_slot,tg_id,MAX_TEST_PER_USER):
             raise HTTPException(status_code=400, detail=tr("شما قبلاً کانفیگ تست خود را دریافت کرده‌اید."))
 
         use_credit = (not is_full_access) or (await asyncio.to_thread(is_volume_credit_bot, db, not bool(tenant.tenant_id)))
@@ -1514,14 +1514,15 @@ async def api_test_config_claim(payload: TestConfigClaim, auth=Depends(require_j
             try:
                 result = await provision_test_plan(db, plan, user_id=tg_id)
             except TestPlanProvisionError as e:
-                db.release_test_slot(tg_id)
+                await asyncio.to_thread(db.release_test_slot,tg_id)
                 raise HTTPException(status_code=409, detail=str(e))
         else:
             try:
                 result = await provision_test_config(db, plan, user_id=tg_id)
             except ProvisionError as e:
-                db.release_test_slot(tg_id)
+                await asyncio.to_thread(db.release_test_slot,tg_id)
                 raise HTTPException(status_code=409, detail=str(e))
+        await asyncio.to_thread(db.complete_test_slot,tg_id)
         _schedule_test_claim_report(
             tenant, db, tg_id,
             f"📦 {html_lib.escape(plan['name'])} - {html_lib.escape(format_plan_amount(plan))}\n"
@@ -1536,12 +1537,13 @@ async def api_test_config_claim(payload: TestConfigClaim, auth=Depends(require_j
     # take_unused_test_config قبل از mark_test_used صدا زده می‌شد، پس چند‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
     # ریکوئست همزمان می‌توانستند چند لینک از بانک بردارند. حالا سهمیه اول رزرو
     # می‌شود؛ اگر لینکی برای برداشتن نبود، سهمیه بلافاصله برمی‌گردد.
-    if not db.try_reserve_test_slot(tg_id, MAX_TEST_PER_USER):
+    if not await asyncio.to_thread(db.try_reserve_test_slot,tg_id,MAX_TEST_PER_USER):
         raise HTTPException(status_code=400, detail=tr("شما قبلاً کانفیگ تست خود را دریافت کرده‌اید."))
     result = db.take_unused_test_config(tg_id)
     if not result:
-        db.release_test_slot(tg_id)
+        await asyncio.to_thread(db.release_test_slot,tg_id)
         raise HTTPException(status_code=400, detail=tr("متاسفانه موجودی کانفیگ تست تمام شده است."))
+    await asyncio.to_thread(db.complete_test_slot,tg_id)
     _schedule_test_claim_report(tenant, db, tg_id, "📦 از بانک لینک دستی")
     return {"link": result["link"]}
 

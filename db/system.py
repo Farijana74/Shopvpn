@@ -341,6 +341,12 @@ class SystemMixin:
         یک درخواست هم‌زمان دیگر مصرف شده (باید رد شود). اگر بعد از رزرو موفق،
         ساخت کانفیگ روی پنل شکست بخورد، صدازننده باید release_test_slot را صدا
         بزند تا این سهمیه به کاربر برگردد."""
+        if not self.get_setting('managed_reseller_bot_id',''):
+            from trial_chain import reserve_standard
+            from managed_resellers import AgencyError
+            if max_allowed<1 or not self.get_user(tg_id):return False
+            try:return reserve_standard(self,tg_id)
+            except AgencyError:return False
         with self._get_conn() as conn:
             cur = conn.execute(
                 "UPDATE users SET test_used=test_used+1 WHERE telegram_id=? AND test_used<?",
@@ -349,12 +355,24 @@ class SystemMixin:
             return cur.rowcount > 0
 
 
+    def complete_test_slot(self, tg_id: int):
+        from trial_chain import complete_standard
+        complete_standard(self,tg_id)
+
+
     def release_test_slot(self, tg_id: int):
         """جفتِ try_reserve_test_slot: وقتی رزرو شد ولی ساخت کانفیگ روی پنل بعداً
         شکست خورد (مثلاً اعتبار هم‌زمان توسط خرید دیگری مصرف شد یا خودِ پنل خطا
         داد)، سهمیه‌ی رزروشده باید برگردد تا کاربر واقعاً بتواند دوباره تلاش کند.
         WHERE test_used>0 جلوی منفی‌شدن را در حالت‌های لبه‌ای (مثل ریست دستی
         همزمانِ ادمین) می‌گیرد."""
+        if not self.get_setting('managed_reseller_bot_id',''):
+            from trial_chain import release_standard
+            if release_standard(self,tg_id):return
+            # A representative's shared reservation must never be released here.
+            with self._get_conn() as conn:
+                table=conn.execute("SELECT 1 FROM sqlite_master WHERE name='chain_trial_claims' AND type='table'").fetchone()
+                if table and conn.execute('SELECT 1 FROM chain_trial_claims WHERE user_id=?',(tg_id,)).fetchone():return
         with self._get_conn() as conn:
             conn.execute(
                 "UPDATE users SET test_used=test_used-1 WHERE telegram_id=? AND test_used>0", (tg_id,)

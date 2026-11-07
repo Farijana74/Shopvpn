@@ -3401,6 +3401,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await message.answer(db.get_text('handlers_user.auto_5511df87', 'متاسفانه موجودی کانفیگ تست تمام شده است. لطفاً بعداً مراجعه کنید.'))
             return
 
+        await asyncio.to_thread(db.complete_test_slot,message.from_user.id)
         await _send_test_config_link(message, result['link'], "🧪 کانفیگ تست شما:")
         await _send_test_success_message(message, username=result.get("username", ""))
         await report_router.notify_test_config(
@@ -3439,6 +3440,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 await message.answer(f"⛔️ {e}")
                 return
 
+        await asyncio.to_thread(db.complete_test_slot,message.from_user.id)
         await _send_test_config_link(
             message, result['subscription_url'],
             f"🧪 کانفیگ تست شما ({plan['name']} - {format_plan_amount(plan)}):",
