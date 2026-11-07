@@ -168,6 +168,8 @@ def sync_bot(root, bot_id):
         for offer in offers:
             if root.get_setting(f"volume_template:{offer['product_id']}",'')=='1':continue
             product = root.get_product(offer['product_id'])
+            from product_emoji import key as emoji_key
+            source_emoji = root.get_setting(emoji_key(offer['product_id']), '')
             try:
                 purchase_price = rate(root, bot_id, offer['product_id'],require_selected=False)
                 active = bool(offer['selected'])
@@ -210,16 +212,19 @@ def sync_bot(root, bot_id):
                 minimum=(purchase_price*100+99-discount)//(100-discount)
                 values['price'] = max(int(old['price']) if old else int(source['price']), minimum)
                 values['description'] = old['description'] if old else source['description']
-                if old and conn.execute("SELECT 1 FROM settings WHERE key=? AND value='1'",(f"managed_product_name_override:{old['id']}",)).fetchone():
+                has_name_override = bool(old and conn.execute("SELECT 1 FROM settings WHERE key=? AND value='1'",(f"managed_product_name_override:{old['id']}",)).fetchone())
+                if has_name_override:
                     values['name']=old['name']
                 if old:
                     conn.execute('UPDATE products SET '+','.join(f'{k}=?' for k in values)+' WHERE id=?', [*values.values(),old['id']])
                 else:
-                    conn.execute('INSERT INTO products('+','.join(values)+') VALUES('+','.join('?' for _ in values)+')', list(values.values()))
+                    inserted = conn.execute('INSERT INTO products('+','.join(values)+') VALUES('+','.join('?' for _ in values)+')', list(values.values())).lastrowid
                 if active and old and old['managed_buy_price'] != purchase_price:
                     with root._get_conn() as central:
                         central.execute('INSERT INTO managed_notices(bot_id,product_id,old_price,new_price) VALUES(?,?,?,?)', (bot_id,source['id'],old['managed_buy_price'],purchase_price))
                 changed += 1
+            if not has_name_override:
+                local.set_setting(emoji_key(old['id'] if old else inserted), source_emoji)
         from managed_trials import trial_policy as read_trial_policy
         policy=read_trial_policy(root)
         local.set_setting('test_enabled','1' if policy.get('enabled') else '0')

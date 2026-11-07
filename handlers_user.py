@@ -378,7 +378,9 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         متد answer async دارد (Message یا call.message)."""
         inline_kb = (await asyncio.to_thread(kb.inline_menu_for_user, db, user_tg_id, is_main_bot))
         if inline_kb is not None:
-            await target.answer(db.get_text('handlers_user.auto_f368dac9', '📋 منو:'), reply_markup=inline_kb)
+            from menu_restore import menu_text
+            text, options = menu_text(db)
+            await target.answer(text, reply_markup=inline_kb, **options)
 
     async def _schedule_card_msg_autodelete(chat_id: int, message_id: int):
         """اگر ادمین از تنظیمات، حذف خودکار پیام‌های شماره کارت را فعال کرده باشد،
@@ -1307,7 +1309,9 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     async def cb_back_main(call: CallbackQuery, state: FSMContext):
         await state.clear()
         markup = await asyncio.to_thread(kb.inline_menu_for_user, db, call.from_user.id, is_main_bot)
-        await _safe_edit(call.message, db.get_text('handlers_user.auto_f368dac9', '📋 منو:'), reply_markup=markup)
+        from menu_restore import menu_text
+        text, options = menu_text(db)
+        await _safe_edit(call.message, text, reply_markup=markup, **options)
         await call.answer()
 
     @router.callback_query(F.data == "back_categories")
@@ -1360,10 +1364,12 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             ) if product["is_auto_provision"] else
             db.get_text("handlers_user.product.stock_line_count", "📊 موجودی: {stock} عدد\n").format(stock=stock)
         )
+        from product_emoji import get as product_emoji
+        product_name = product_emoji(db, product).get('html', product['name'])
         text = db.get_text(
             "handlers_user.product.confirm_header",
             "📦 {name}\n💰 قیمت واحد: {price} تومان\n📝 توضیحات: {description}\n",
-        ).format(name=product["name"], price=price_label_plain(product, unit_price, suffix=""), description=product["description"] or "---")
+        ).format(name=product_name, price=price_label_plain(product, unit_price, suffix=""), description=product["description"] or "---")
         text += stock_line
         if product["is_auto_provision"] and (product["auto_provision_volume_gb"] or product["duration_days"]):
             volume_gb = product["auto_provision_volume_gb"]
@@ -3987,7 +3993,9 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     async def cb_account_back_to_main(call: CallbackQuery):
         await call.answer()
         markup = await asyncio.to_thread(kb.inline_menu_for_user, db, call.from_user.id, is_main_bot)
-        await _safe_edit(call.message, db.get_text('handlers_user.auto_f368dac9', '📋 منو:'), reply_markup=markup)
+        from menu_restore import menu_text
+        text, options = menu_text(db)
+        await _safe_edit(call.message, text, reply_markup=markup, **options)
 
     # -----------------------------------------------------------------------
     # سفارش‌های من (منوی کانفیگ‌ها + امکان حذف کامل هر کانفیگ)

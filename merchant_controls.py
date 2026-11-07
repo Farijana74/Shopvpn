@@ -157,7 +157,8 @@ def register(router,db):
                 db.set_setting('shop_display_prefix','' if text=='حذف' else text)
             elif action=='menu':
                 if not text or len(text)>2000:raise ValueError('متن باید بین ۱ تا ۲۰۰۰ کاراکتر باشد.')
-                db.set_text('handlers_user.auto_f368dac9',text)
+                from menu_restore import save_menu_text
+                save_menu_text(db, message, text)
             await state.clear();await message.answer('✅ ذخیره شد.',reply_markup=markup())
         except ValueError as exc:await message.answer(str(exc))
 

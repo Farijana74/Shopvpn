@@ -185,7 +185,8 @@ def create_agency_router(local, is_main_bot):
                     with local._get_conn() as conn:
                         products=conn.execute('SELECT id,name,price,is_active FROM products WHERE upstream_product_id IS NOT NULL').fetchall()
                     products=[p for p in products if local.get_setting(f"volume_template:{p['id']}",'')!='1']
-                    rows += [[Button(text=f"ویرایش محصول: {p['name']} | {p['price']:,} تومان | {'فعال' if p['is_active'] else 'غیرفعال'}",callback_data=f"agency:edit:{p['id']}")] for p in products]
+                    from product_emoji import get as product_emoji
+                    rows += [[Button(text=f"ویرایش محصول: {product_emoji(local,p).get('label',p['name'])} | {p['price']:,} تومان | {'فعال' if p['is_active'] else 'غیرفعال'}",callback_data=f"agency:edit:{p['id']}", icon_custom_emoji_id=product_emoji(local,p).get('icon'))] for p in products]
                 prefix=f'agency:offers:{bot_id}' if action=='offers' else 'agency:products'
                 requested=int(parts[3]) if action=='offers' and len(parts)>3 else (int(parts[2]) if action=='products' and len(parts)>2 else 0)
                 total=len(rows)
@@ -237,7 +238,9 @@ def create_agency_router(local, is_main_bot):
                       [Button(text='توضیحات',callback_data=f"agency:description:{product['id']}")],
                       [Button(text='غیرفعال کن' if product['managed_local_enabled'] else 'فعال کن',callback_data=f"agency:toggle:{product['id']}")],
                       [Button(text='⬅️ محصولات',callback_data='agency:products')]]
-                await display(call,notice+f"ویرایش محصول: {html.escape(product['name'])}\nوضعیت فعلی: {status}\nنرخ تأمین: {product['managed_buy_price']} تومان\nقیمت فروش: {product['price']} تومان",rows)
+                from product_emoji import get as product_emoji
+                product_name=product_emoji(local,product).get('html',html.escape(product['name']))
+                await display(call,notice+f"ویرایش محصول: {product_name}\nوضعیت فعلی: {status}\nنرخ تأمین: {product['managed_buy_price']} تومان\nقیمت فروش: {product['price']} تومان",rows)
             elif action in ('price','description','name'):
                 await state.set_state({'price':AgencyFlow.price,'description':AgencyFlow.description,'name':AgencyFlow.name}[action])
                 await state.update_data(agency_product=int(parts[2]))
@@ -327,6 +330,8 @@ def create_agency_router(local, is_main_bot):
         try:
             product_id=(await state.get_data())['agency_product']
             await asyncio.to_thread(local.edit_product,product_id,name=name)
+            from product_emoji import save as save_product_emoji
+            await asyncio.to_thread(save_product_emoji,local,product_id,message,name)
             await state.clear()
             await message.answer('✅ نام محصول تغییر کرد.',reply_markup=Markup(inline_keyboard=home_rows()))
         except ValueError as exc:await message.answer(str(exc))

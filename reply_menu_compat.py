@@ -64,7 +64,9 @@ class ReplyMenuCompatibilityMiddleware(BaseMiddleware):
         recognized=text in labels or stale
         revision=hashlib.sha256((reply.model_dump_json(exclude_none=True)+(inline.model_dump_json(exclude_none=True) if inline is not None else '')).encode()).hexdigest()
         async def refresh():
-            await event.answer(self.db.get_text('handlers_user.auto_f368dac9','📋 منو:'),reply_markup=reply)
+            from menu_restore import menu_text
+            text, options = menu_text(self.db)
+            await event.answer(text,reply_markup=reply,**options)
             if inline is not None:
                 await event.answer('از منوی به‌روز انتخاب کنید:',reply_markup=inline)
             self._revisions[user.id]=revision

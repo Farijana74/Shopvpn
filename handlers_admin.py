@@ -326,7 +326,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         try:
             inline_kb = (await asyncio.to_thread(kb.inline_menu_for_user, db, user_tg_id, is_main_bot))
             if inline_kb is not None:
-                await bot.send_message(user_tg_id, db.get_text("handlers_user.auto_f368dac9", "📋 منو:"), reply_markup=inline_kb)
+                from menu_restore import menu_text
+                text, options = menu_text(db)
+                await bot.send_message(user_tg_id, text, reply_markup=inline_kb, **options)
         except Exception:
             pass
 
@@ -1286,6 +1288,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await state.clear()
             return await message.answer(tr("این محصول دیگر وجود ندارد."), reply_markup=kb.admin_back_kb("adm_products"))
         await asyncio.to_thread(db.edit_product, product["id"], name=name)
+        from product_emoji import save as save_product_emoji
+        await asyncio.to_thread(save_product_emoji, db, product["id"], message, name)
         await asyncio.to_thread(db.log_admin_action, message.from_user.id, "product_rename", f"product_id={product['id']}")
         await state.clear()
         products = await asyncio.to_thread(db.get_products, product["category_id"], active_only=False)

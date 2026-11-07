@@ -182,11 +182,15 @@ class SystemMixin:
 
 
     def set_text(self, key: str, value: str):
+        if key == "handlers_user.auto_f368dac9":
+            self.set_setting("menu_text_custom_emoji", "")
         self.set_setting(f"{self._TEXT_KEY_PREFIX}{key}", value)
 
 
     def reset_text(self, key: str):
         """حذف override یک متن؛ بعد از این دوباره مقدار پیش‌فرض کد برمی‌گردد."""
+        if key == "handlers_user.auto_f368dac9":
+            self.set_setting("menu_text_custom_emoji", "")
         settings_key = f"{self._TEXT_KEY_PREFIX}{key}"
         with self._get_conn() as conn:
             conn.execute("DELETE FROM settings WHERE key=?", (settings_key,))

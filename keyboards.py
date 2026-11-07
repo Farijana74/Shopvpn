@@ -365,20 +365,20 @@ def categories_kb(db, categories, is_main_bot: bool = True) -> InlineKeyboardMar
 
 
 def products_kb(db, products, category_id) -> InlineKeyboardMarkup:
+    from product_emoji import get as product_emoji
     rows = []
     for p in products:
         if not p["is_active"]:continue
         stock = db.count_available_configs(p["id"])
         stock_tag = "" if stock > 0 else "⛔️ "
         inactive_tag = tr(" (غیرفعال)") if not p["is_active"] else ""
+        emoji = product_emoji(db, p)
+        button = _styled_inline(db, f"{stock_tag}{emoji.get('label', p['name'])} - {price_label_button(p, name=p['name'])}{inactive_tag}", f"prod:{p['id']}", "btn_product_select_style")
+        if emoji:
+            button.icon_custom_emoji_id = emoji['icon']
         rows.append(
             [
-                _styled_inline(
-                    db,
-                    f"{stock_tag}{p['name']} - {price_label_button(p, name=p['name'])}{inactive_tag}",
-                    f"prod:{p['id']}",
-                    "btn_product_select_style",
-                )
+                button
             ]
         )
     back_text = db.get_setting("btn_buy_back_text", "⬅️ بازگشت به دسته‌بندی‌ها")
@@ -2881,9 +2881,11 @@ def admin_products_categories_kb(categories, prefix="adm_prod_cat") -> InlineKey
 
 
 def admin_products_list_kb(db, products) -> InlineKeyboardMarkup:
+    from product_emoji import get as product_emoji
     rows = []
     vip_bot = _is_volume_credit_owner(db)
     for p in products:
+        emoji = product_emoji(db, p)
         stock = "∞" if p["is_auto_provision"] else db.count_available_configs(p["id"])
         state_icon = "🟢" if p["is_active"] else "🔴"
         dur = p["duration_days"]
@@ -2891,8 +2893,9 @@ def admin_products_list_kb(db, products) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=tr(f"{state_icon} {p['name']} | {p['price']:,}ت | 📦{stock} | ⏳{dur_label}"),
+                    text=tr(f"{state_icon} {emoji.get('label', p['name'])} | {p['price']:,}ت | 📦{stock} | ⏳{dur_label}"),
                     callback_data="noop",
+                    icon_custom_emoji_id=emoji.get('icon'),
                 )
             ]
         )
