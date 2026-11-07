@@ -3350,10 +3350,10 @@ BUTTON_LABELS = {
     "btn_wallet": "دکمه کیف پول",
     "btn_wheel": "دکمه گردونه شانس",
     "btn_admin_panel": "دکمه پنل مدیریت",
-    "btn_reseller_panel": "دکمه پنل نمایندگی",
+    "btn_reseller_panel": "پنل نمایندگی (برای نمایندگان)",
     "btn_reseller_request": "دکمه درخواست نمایندگی سطح ۲",
     "btn_commission_reseller_request": "دکمه درخواست نمایندگی کمیسیونی",
-    "btn_reseller_tiers": "دکمه انتخاب سطح نمایندگی",
+    "btn_reseller_tiers": "درخواست همکاری / نمایندگی",
     "btn_tutorial": "دکمه آموزش",
 }
 
@@ -3376,7 +3376,11 @@ def admin_edit_buttons_kb(db) -> InlineKeyboardMarkup:
         if toggle_key:
             enabled = db.get_setting(toggle_key, "1") == "1"
             status_suffix = " (فعال)" if enabled else " (غیرفعال)"
-        rows.append([InlineKeyboardButton(text=f"{icon} {label}{status_suffix}", callback_data="noop")])
+        current_text = db.get_setting(key, MENU_BUTTON_META.get(key, {}).get('default_text') or '')
+        title = f"{icon} {label}{status_suffix}"
+        if key in ('btn_reseller_panel', 'btn_reseller_tiers') and current_text:
+            title += f" | {current_text}"
+        rows.append([InlineKeyboardButton(text=title, callback_data="noop")])
         action_row = [
             InlineKeyboardButton(text=tr("✏️ ویرایش متن"), callback_data=f"adm_btn_edit:{key}"),
             InlineKeyboardButton(text=tr("🎨 تغییر رنگ"), callback_data=f"adm_btn_color_menu:{key}"),

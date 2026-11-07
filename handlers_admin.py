@@ -10451,12 +10451,16 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
 
     @router.callback_query(F.data.startswith("adm_btn_edit:"))
     async def cb_admin_btn_edit(call: CallbackQuery, state: FSMContext):
+        if not full_admin_only(call.from_user.id):
+            return await deny_support(call)
         key = call.data.split(":")[1]
+        if key not in kb.BUTTON_LABELS:
+            return await call.answer('دکمه نامعتبر است.', show_alert=True)
         await state.update_data(setting_key=key)
         await state.set_state(AdminEditButton.waiting_text)
-        current = (await asyncio.to_thread(db.get_setting, key))
+        current = (await asyncio.to_thread(db.get_setting, key, MENU_BUTTON_META.get(key, {}).get('default_text') or ''))
         await safe_edit(call, 
-            f"متن فعلی: {current}\n\nمتن همراه ایموجی پرمیوم را بفرستید؛ ارسال فقط ایموجی یا شناسه، نام فعلی را حفظ می‌کند:",
+            f"متن فعلی: {escape_html(current)}\n\nمتن همراه ایموجی پرمیوم را بفرستید؛ ارسال فقط ایموجی یا شناسه، نام فعلی را حفظ می‌کند:",
             reply_markup=kb.admin_back_kb("adm_edit_buttons"),
         )
         await call.answer()
@@ -10468,7 +10472,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         from button_emoji import message_button_label, send_icon_preview
         data = await state.get_data()
         key = data["setting_key"]
-        current = await asyncio.to_thread(db.get_setting, key, "")
+        current = await asyncio.to_thread(db.get_setting, key, MENU_BUTTON_META.get(key, {}).get('default_text') or '')
         label, custom_icon = message_button_label(message, current)
         if not label:
             return await message.answer("متن دکمه را همراه ایموجی دلخواه بفرستید.")
