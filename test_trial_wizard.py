@@ -64,9 +64,9 @@ class TrialWizardTests(unittest.TestCase):
         async def run():
             with patch('direct_panel_provision.provision_direct',new=AsyncMock(side_effect=create)) as remote:
                 _,first=await provide_trial(self.local,303)
-                _,second=await provide_trial(self.local,303)
+                from managed_resellers import AgencyError
+                with self.assertRaises(AgencyError):await provide_trial(self.local,303)
                 self.assertEqual(remote.await_count,1)
-                self.assertEqual(first[0]['custom_config_id'],second[0]['custom_config_id'])
             proxy=self.local.get_panel_server(first[0]['panel_server_id'])
             self.assertEqual(proxy['managed_source_server_id'],self.panel)
         asyncio.run(run())

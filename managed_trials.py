@@ -9,7 +9,10 @@ POLICY_KEY = 'managed_trial_policy'
 def trial_policy(root):
     try:
         value=json.loads(root.get_setting(POLICY_KEY,'{}'))
-        return value if isinstance(value,dict) else {}
+        if isinstance(value,dict):
+            # Main-bot trials deliver a normal subscription, independent of paid products.
+            return {**value,'delivery_mode':'normal'}
+        return {}
     except (ValueError,TypeError):return {}
 
 
@@ -49,9 +52,7 @@ def configure_panel_trials(root, panel_id, volume_mb, hours, cost):
     if not server or not server['is_active'] or dict(server).get('managed_source_server_id'):
         raise AgencyError('پنل انتخاب‌شده فعال یا معتبر نیست.')
     product_id=_billing_product(root)
-    with root._get_conn() as conn:
-        source=conn.execute('SELECT delivery_mode FROM products WHERE provision_server_id=? AND is_active=1 AND is_auto_provision=1 ORDER BY id LIMIT 1',(panel_id,)).fetchone()
-    mode=source[0] if source and server['panel_type']=='3xui' else 'normal'
+    mode='normal'
     policy=dict(enabled=True,product_id=product_id,panel_id=panel_id,volume_mb=volume_mb,hours=hours,cost=cost,delivery_mode=mode)
     root.set_setting(POLICY_KEY,json.dumps(policy))
     return policy
@@ -61,7 +62,7 @@ def _claim(local,user_id,policy):
     billing_id=_billing_product(local) if policy.get('panel_id') else None
     with local._get_conn() as conn:
         old=conn.execute('SELECT * FROM managed_trials WHERE user_id=?',(user_id,)).fetchone()
-        if old and old['status']=='completed':return dict(old)
+        if old and old['status']=='completed':raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر در کل زنجیره فقط یک بار می‌تواند تست بگیرد.')
         if old and old['status']=='processing':
             raise AgencyError('درخواست تست شما در حال پردازش است؛ دوباره درخواست ندهید. اگر متوقف مانده، پشتیبانی باید بررسی کند.')
         product=conn.execute('SELECT id FROM products WHERE id=?',(billing_id,)).fetchone() if billing_id else conn.execute('SELECT id FROM products WHERE upstream_product_id=?',(policy['product_id'],)).fetchone()
@@ -88,24 +89,17 @@ async def provide_trial(local,user_id):
             with root._get_conn() as conn:
                 recorded=conn.execute('SELECT status FROM chain_trial_claims WHERE user_id=?',(user_id,)).fetchone()
             if recorded and recorded['status']=='completed':
-                with local._get_conn() as conn:
-                    saved_claim=conn.execute("SELECT 1 FROM managed_trials WHERE user_id=? AND status='completed'",(user_id,)).fetchone()
-                if not saved_claim:raise AgencyError('تست شما قبلاً در این زنجیره ثبت شده است؛ ساخت تست جدید مجاز نیست.')
+                raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر در کل زنجیره فقط یک بار می‌تواند تست بگیرد.')
         try:claim=await asyncio.to_thread(_claim,local,user_id,policy)
         except Exception:
             if acquired:await asyncio.to_thread(chain_release,root,user_id,local.db_path)
             raise
-        policy=json.loads(claim['policy'])
+        policy={**json.loads(claim['policy']),'delivery_mode':'normal'}
         with local._get_conn() as conn:
             product=conn.execute('SELECT p.* FROM products p JOIN orders o ON o.product_id=p.id WHERE o.id=?',(claim['order_id'],)).fetchone()
             saved=conn.execute('SELECT * FROM custom_configs WHERE order_id=?',(claim['order_id'],)).fetchall()
         if policy.get('panel_id'):
             product={**dict(product),'upstream_product_id':policy['product_id'],'is_auto_provision':1,'delivery_mode':policy.get('delivery_mode','normal')}
-        if claim['status']=='completed':
-            if not saved:raise AgencyError('سرویس تست قبلی حذف شده است؛ پشتیبانی باید بررسی کند.')
-            results=[dict(username=c['username'],subscription_url=c['subscription_url'],panel_server_id=c['panel_server_id'],custom_config_id=c['id'],volume_gb=c['volume_gb'],duration_days=c['duration_days'],_managed_delivery_mode=c['delivery_mode']) for c in saved]
-            await asyncio.to_thread(chain_complete,root,user_id,local.db_path)
-            return product,results
         try:
             results=await provision(local,product,1,user_id,claim['order_id'],trial_policy=policy)
         except Exception as exc:

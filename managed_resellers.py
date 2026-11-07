@@ -355,9 +355,9 @@ async def provision(local_db, product, quantity, user_id, order_id, *, trial_pol
         if trial_policy:
             original={**dict(original),'auto_provision_volume_gb':trial_policy['volume_mb']/1024,
                       'duration_days':trial_policy['hours']/24,'base_users':1,'max_users':1,'extra_user_price':0,
-                      'provision_ssh_node_id':None}
+                      'provision_ssh_node_id':None,'delivery_mode':'normal'}
             if trial_policy.get('panel_id'):
-                original.update(provision_server_id=trial_policy['panel_id'],is_auto_provision=1,delivery_mode=trial_policy.get('delivery_mode','normal'))
+                original.update(provision_server_id=trial_policy['panel_id'],is_auto_provision=1,delivery_mode='normal')
         with root._get_conn() as conn:
             funded=conn.execute("SELECT 1 FROM managed_purchases WHERE request_key=? AND status!='refunded'",(f'{bot_id}:{order_id}',)).fetchone()
         if volume_quote and not funded and (not rules.get('enabled') or rules.get('product_id')!=original['id']):raise AgencyError('حجم دلخواه این نماینده غیرفعال شده است.')

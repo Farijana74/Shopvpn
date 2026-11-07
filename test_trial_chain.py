@@ -116,3 +116,16 @@ class ChainTrialTests(unittest.TestCase):
         self.assertIsNone(self.root.get_user(303))
         self.root.add_or_update_user(303,'customer','Customer')
         self.assertFalse(self.root.try_reserve_test_slot(303,1))
+
+    def test_old_same_shop_history_is_adopted_and_stays_blocked(self):
+        async def run():
+            with patch('direct_panel_provision.provision_direct',new=AsyncMock(side_effect=self.create)) as provider:
+                await provide_trial(self.local,303)
+                with self.root._get_conn() as conn:conn.execute('DELETE FROM chain_trial_claims WHERE user_id=303')
+                with self.assertRaises(AgencyError):await provide_trial(self.local,303)
+                with self.local._get_conn() as conn:
+                    conn.execute('DELETE FROM managed_trials WHERE user_id=303')
+                    conn.execute('UPDATE users SET test_used=0 WHERE telegram_id=303')
+                with self.assertRaises(AgencyError):await provide_trial(self.local,303)
+                self.assertEqual(provider.await_count,1)
+        asyncio.run(run())

@@ -33,13 +33,13 @@ def claim(root,user_id,owner,allow_retry=False):
             if allow_retry and old['owner']==owner:return False
             raise AgencyError('شما قبلاً در این زنجیره تست گرفته‌اید یا درخواست تست در حال پردازش دارید؛ هر کاربر فقط یک تست دارد.')
         root_user=conn.execute('SELECT test_used FROM users WHERE telegram_id=?',(user_id,)).fetchone()
-        if (root_user and root_user[0]) or history-{owner}:
-            previous=os.path.abspath(root.db_path) if root_user and root_user[0] else sorted(history-{owner})[0]
+        if (root_user and root_user[0]) or history-{owner} or (history and not allow_retry):
+            previous=os.path.abspath(root.db_path) if root_user and root_user[0] else sorted(history)[0]
             conn.execute("INSERT INTO chain_trial_claims(user_id,owner,status) VALUES(?,?,'completed')",(user_id,previous))
             conn.commit()
             raise AgencyError('شما قبلاً در ربات اصلی یا یکی از نماینده‌های این زنجیره تست گرفته‌اید.')
         conn.execute('UPDATE users SET test_used=test_used+1 WHERE telegram_id=?',(user_id,))
-        conn.execute("INSERT INTO chain_trial_claims(user_id,owner,status) VALUES(?,?,'processing')",(user_id,owner))
+        conn.execute("INSERT INTO chain_trial_claims(user_id,owner,status) VALUES(?,?,?)",(user_id,owner,'completed' if history else 'processing'))
     return not bool(history)
 
 

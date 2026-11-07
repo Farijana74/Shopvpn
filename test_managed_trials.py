@@ -24,12 +24,11 @@ class ManagedTrialTests(unittest.TestCase):
         cid=db.add_custom_config(user_id,source['provision_server_id'],name,source['auto_provision_volume_gb'],source['duration_days'],'https://example.invalid/sub',order_id=order_id,source='direct_product')
         return [dict(username=name,subscription_url='https://example.invalid/sub',volume_gb=source['auto_provision_volume_gb'],duration_days=source['duration_days'],panel_server_id=source['provision_server_id'],custom_config_id=cid)]
 
-    def test_cost_once_and_retry_returns_same_service(self):
+    def test_cost_once_and_second_request_is_denied(self):
         async def run():
             with patch('direct_panel_provision.provision_direct',new=AsyncMock(side_effect=self.create)) as remote:
                 _,first=await provide_trial(self.local,303)
-                _,second=await provide_trial(self.local,303)
-                self.assertEqual(first[0]['custom_config_id'],second[0]['custom_config_id'])
+                with self.assertRaises(AgencyError):await provide_trial(self.local,303)
                 self.assertEqual(remote.await_count,1)
         asyncio.run(run())
         self.assertEqual(self.root.get_wallet_credit(101),9993)
@@ -93,7 +92,7 @@ class ManagedTrialTests(unittest.TestCase):
         asyncio.run(run())
         self.assertEqual(self.root.get_wallet_credit(101),9993)
 
-    def test_happ_trial_keeps_central_delivery_mode(self):
+    def test_trial_matches_main_normal_delivery_even_if_paid_product_is_happ(self):
         from happ_delivery import get_product_delivery_links
         with self.root._get_conn() as conn:conn.execute("UPDATE products SET delivery_mode='happ' WHERE id=?",(self.f.pid,))
         async def run():
@@ -102,8 +101,9 @@ class ManagedTrialTests(unittest.TestCase):
             provider=types.SimpleNamespace(get_happ_link=AsyncMock(return_value='happ://crypt5/test-trial'))
             with patch('happ_delivery.get_provider',return_value=provider):
                 links=await get_product_delivery_links(self.local,product,items)
-            self.assertEqual(links,['happ://crypt5/test-trial'])
-            self.assertEqual(self.local.get_custom_config_by_id(items[0]['custom_config_id'])['delivery_mode'],'happ')
+            self.assertEqual(links,['https://example.invalid/sub'])
+            provider.get_happ_link.assert_not_awaited()
+            self.assertEqual(self.local.get_custom_config_by_id(items[0]['custom_config_id'])['delivery_mode'],'normal')
         asyncio.run(run())
 
     def test_referral_label_and_root_trial_toggle_sync(self):
@@ -118,3 +118,20 @@ class ManagedTrialTests(unittest.TestCase):
         self.local.close()
         self.assertEqual(self.local.get_setting('test_enabled'),'0')
         self.assertEqual(self.local.get_setting('btn_referral'),'دعوت به فروشگاه من')
+
+    def test_panel_trial_does_not_inherit_happ_from_paid_product(self):
+        from managed_trials import configure_panel_trials
+        from happ_delivery import get_product_delivery_links
+        with self.root._get_conn() as conn:conn.execute("UPDATE products SET delivery_mode='happ' WHERE id=?",(self.f.pid,))
+        panel=self.root.get_product(self.f.pid)['provision_server_id']
+        policy=configure_panel_trials(self.root,panel,256,6,7)
+        self.assertEqual(policy['delivery_mode'],'normal')
+        async def run():
+            with patch('direct_panel_provision.provision_direct',new=AsyncMock(side_effect=self.create)):
+                product,items=await provide_trial(self.local,303)
+            provider=types.SimpleNamespace(get_happ_link=AsyncMock())
+            with patch('happ_delivery.get_provider',return_value=provider):
+                links=await get_product_delivery_links(self.local,product,items)
+            self.assertEqual(links,['https://example.invalid/sub'])
+            provider.get_happ_link.assert_not_awaited()
+        asyncio.run(run())
