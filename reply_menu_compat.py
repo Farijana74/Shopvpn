@@ -6,7 +6,7 @@ from collections import OrderedDict
 import unicodedata
 from aiogram import BaseMiddleware
 from aiogram.dispatcher.event.bases import UNHANDLED
-from aiogram.types import ReplyKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 
 def label_key(text):
@@ -66,8 +66,13 @@ class ReplyMenuCompatibilityMiddleware(BaseMiddleware):
         async def refresh():
             from menu_restore import menu_text
             text, options = menu_text(self.db)
-            await event.answer(text,reply_markup=reply,**options)
-            if inline is not None:
+            if inline is not None and not isinstance(reply, ReplyKeyboardMarkup):
+                if isinstance(reply, ReplyKeyboardRemove):
+                    await event.answer('منو به‌روزرسانی شد.',reply_markup=reply)
+                await event.answer(text,reply_markup=inline,**options)
+            else:
+                await event.answer(text,reply_markup=reply,**options)
+            if inline is not None and isinstance(reply, ReplyKeyboardMarkup):
                 await event.answer('از منوی به‌روز انتخاب کنید:',reply_markup=inline)
             self._revisions[user.id]=revision
             self._revisions.move_to_end(user.id)
@@ -85,7 +90,7 @@ class ReplyMenuCompatibilityMiddleware(BaseMiddleware):
                 event=event.model_copy(update={'text':next(iter(targets)),'entities':None})
             return await handler(event,data)
         result=await handler(event,data)
-        if result is UNHANDLED and not active and len(text)<=128:
+        if result is UNHANDLED and not active:
             await refresh()
             return None
         return result

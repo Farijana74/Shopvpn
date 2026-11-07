@@ -52,6 +52,16 @@ class ReplyMenuTests(unittest.IsolatedAsyncioTestCase):
         handler,send,state,result=await self.run_case('دکمه قدیمی نامشخص',['🚀 خرید کانفیگ'],result=UNHANDLED)
         handler.assert_awaited_once();send.assert_awaited_once()
 
+    async def test_long_unknown_text_also_restores_menu(self):
+        handler,send,state,result=await self.run_case('متن ناشناخته ' * 30,['🚀 خرید کانفیگ'],result=UNHANDLED)
+        handler.assert_awaited_once();send.assert_awaited_once()
+        self.assertEqual(send.call_args.args[0], '📋 منو:')
+        state.clear.assert_not_awaited()
+
+    async def test_unhandled_text_in_active_flow_does_not_restore_menu(self):
+        handler,send,state,result=await self.run_case('متن ناشناخته',['🚀 خرید کانفیگ'],active='BuyFlow:waiting_name',result=UNHANDLED)
+        handler.assert_awaited_once();send.assert_not_awaited();state.clear.assert_not_awaited()
+
     async def test_admin_label_edit_is_not_mistaken_for_navigation(self):
         handler,send,state,result=await self.run_case('🛒 خرید کانفیگ',['🚀 خرید کانفیگ'],active='AdminEditButtons:waiting_text')
         self.assertEqual(handler.call_args.args[0].text,'🛒 خرید کانفیگ')
