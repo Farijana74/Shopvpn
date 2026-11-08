@@ -163,7 +163,11 @@ async def create_invoice_for(db, tenant_id: str, tg_id: int, gateway: str, kind:
 
     existing = await asyncio.to_thread(db.get_pending_extra_invoice_for_ref, gateway, kind, ref_id)
     if existing:
-        return _result(existing)
+        result = _result(existing)
+        if gateway == 'zarinpal' and existing['remote_id']:
+            base = payment_base(API_BASE_URL, ADMIN_PANEL_URL, db.get_setting('zarinpal_callback_base_url', ''))
+            result['payment_url'] = start_url(base, existing['remote_id'], tenant_id)
+        return result
 
     order_number = _order_number(kind, ref_id)
     amount_toman = int(amount_toman)
@@ -205,9 +209,9 @@ async def create_invoice_for(db, tenant_id: str, tg_id: int, gateway: str, kind:
     except clients.GatewayError as e:
         raise ExtraGatewayError(str(e))
 
-    if gateway == "zarinpal":
-        base = payment_base(API_BASE_URL, ADMIN_PANEL_URL, db.get_setting("zarinpal_callback_base_url", ""))
-        created["payment_url"] = start_url(base, created["remote_id"], tenant_id)
+    if gateway == 'zarinpal':
+        base = payment_base(API_BASE_URL, ADMIN_PANEL_URL, db.get_setting('zarinpal_callback_base_url', ''))
+        created['payment_url'] = start_url(base, created['remote_id'], tenant_id)
     invoice_id = await asyncio.to_thread(
         db.create_extra_invoice, gateway, kind, ref_id, tg_id, amount_toman, payable,
         created["remote_id"], order_number, created["payment_url"], created["meta"],

@@ -71,7 +71,7 @@ async def zarinpal_create(merchant_id: str, amount_toman: int, callback_url: str
 async def zarinpal_verify(merchant_id: str, amount_toman: int, authority: str) -> str:
     status, data = await _request("POST", f"{ZARINPAL_BASE}/verify.json", json_body={
         "merchant_id": merchant_id,
-        "amount": int(amount_toman) * 10,
+        "amount": int(amount_toman),
         "authority": authority,
     })
     body = data.get("data")
@@ -79,6 +79,8 @@ async def zarinpal_verify(merchant_id: str, amount_toman: int, authority: str) -
         return PAID
     err = data.get("errors")
     code = err.get("code") if isinstance(err, dict) else None
+    if str(code) == '-50':
+        raise GatewayError('مبلغ تأیید با مبلغ تراکنش مطابقت ندارد. اگر پرداخت کرده‌اید، دوباره پرداخت نکنید و با پشتیبانی تماس بگیرید (کد -50).')
     if code == -51:
         return PENDING
     if code in (-54, -53):

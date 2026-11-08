@@ -133,10 +133,15 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
-    async def test_zarinpal_verify_converts_toman_to_rial(self):
+    async def test_zarinpal_verify_uses_same_toman_amount_as_request(self):
         with patch('extra_gateway_clients._request', new=AsyncMock(return_value=(200, {'data': {'code': 100}}))) as request:
             self.assertEqual(await clients.zarinpal_verify('merchant', 25000, 'authority'), clients.PAID)
-        self.assertEqual(request.call_args.kwargs['json_body']['amount'], 250000)
+        self.assertEqual(request.call_args.kwargs['json_body']['amount'], 25000)
+
+    async def test_zarinpal_amount_mismatch_is_not_treated_as_unpaid(self):
+        with patch('extra_gateway_clients._request', new=AsyncMock(return_value=(401, {'errors': {'code': -50}}))):
+            with self.assertRaisesRegex(clients.GatewayError, 'دوباره پرداخت نکنید'):
+                await clients.zarinpal_verify('merchant', 25000, 'authority')
 
     async def test_domain_error_shows_actual_callback_domain(self):
         with patch('extra_gateway_clients._request', new=AsyncMock(return_value=(400, {'errors': {'code': -14}}))):
@@ -183,6 +188,10 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             response=await client.get('/api/pay-start/zarinpal/'+authority)
             self.assertEqual(response.status_code,200)
             self.assertIn('https://payment.zarinpal.com/pg/StartPay/'+authority,response.text)
+            self.assertIn('id="countdown" class="countdown-number">۷</strong>', response.text)
+            self.assertIn('window.location.assign', response.text)
+            from public_payment_routes import _SCRIPT_HASH
+            self.assertIn("'sha256-" + _SCRIPT_HASH + "'", response.headers['content-security-policy'])
             self.assertEqual(response.headers['referrer-policy'],'origin')
             self.assertEqual((await client.get('/api/pay-start/zarinpal/not-valid')).status_code,400)
             with patch('blupal_payment.try_verify_and_finalize', new=AsyncMock(return_value='not_paid_yet')) as verify, patch('blupal_payment.finalize_paid_order', new=AsyncMock()) as finalize:
@@ -228,11 +237,23 @@ class PublicWebhookDeliveryTests(unittest.IsolatedAsyncioTestCase):
         db.get_pending_extra_invoice_for_ref.return_value = None
         db.create_extra_invoice.return_value = 12
         authority = 'A'+'0'*35
-        db.get_extra_invoice.return_value = {'id':12,'meta':'{}','payment_url':'https://pay.example.com/api/pay-start/zarinpal/'+authority+'?b=', 'payable_amount':20000,'gateway':'zarinpal'}
+        db.get_extra_invoice.return_value = {'id':12,'meta':'{}','remote_id':authority,'payment_url':'https://pay.example.com/api/pay-start/zarinpal/'+authority+'?b=', 'payable_amount':20000,'gateway':'zarinpal'}
         with patch.object(gateway, 'API_BASE_URL', ''), patch.object(gateway, 'ADMIN_PANEL_URL', 'https://panel.example.com'), patch('extra_gateway_clients.zarinpal_create', new=AsyncMock(return_value={'remote_id':authority,'payment_url':'https://payment.zarinpal.com/pg/StartPay/'+authority,'meta':{}})) as create:
             result = await gateway.create_invoice_for(db, '', 1, 'zarinpal', 'order', 3, 20000, 'order')
         self.assertEqual(create.call_args.args[2], 'https://pay.example.com/api/pay-return/zarinpal?b=')
-        self.assertIn('https://pay.example.com/api/pay-start/zarinpal/', result['payment_url'])
+        self.assertEqual(result['payment_url'], 'https://pay.example.com/api/pay-start/zarinpal/'+authority+'?b=')
+        db.create_extra_invoice.assert_called_once()
+        self.assertEqual(db.create_extra_invoice.call_args.args[8], result['payment_url'])
+
+    async def test_pending_zarinpal_invoice_uses_registered_domain(self):
+        import extra_gateway_payment as gateway
+        authority = 'A' + '0' * 35
+        row = {'id': 12, 'meta': '{}', 'remote_id': authority, 'payment_url': 'https://payment.zarinpal.com/pg/StartPay/'+authority, 'payable_amount': 20000, 'gateway': 'zarinpal'}
+        db=MagicMock()
+        db.get_pending_extra_invoice_for_ref.return_value=row
+        db.get_setting.side_effect=lambda key,default='': {'zarinpal_payment_enabled':'1','zarinpal_merchant_id':'merchant','zarinpal_callback_base_url':'https://pay.example.com'}.get(key,default)
+        result=await gateway.create_invoice_for(db,'',1,'zarinpal','order',3,20000,'order')
+        self.assertEqual(result['payment_url'], 'https://pay.example.com/api/pay-start/zarinpal/'+authority+'?b=')
 
 
 if __name__ == '__main__':
