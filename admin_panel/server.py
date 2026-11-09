@@ -3060,7 +3060,7 @@ async def api_reject_order(order_id: int, admin=Depends(require_permission("orde
     if not order or order["status"] != "pending":
         raise HTTPException(400, tr("سفارش یافت نشد یا قبلاً بررسی شده."))
     if not (await asyncio.to_thread(db.reject_order, order_id, "admin")):
-        raise HTTPException(400, tr("سفارش یافت نشد یا قبلاً بررسی شده."))
+        raise HTTPException(400, tr("رد و بازپرداخت انجام نشد؛ سفارش ممکن است در حال پردازش یا دارای تأمین/سرویس باشد. وضعیت تأمین و تحویل را بررسی کنید."))
     (await asyncio.to_thread(db.log_admin_action, admin["id"], "order_reject", f"سفارش #{order_id} رد شد (پنل وب - {admin['username']})", "order", order_id))
     await notify_user(order["user_id"], "⛔️ سفارش شما رد شد. در صورت کسر از کیف پول، مبلغ برگشت داده شد.")
     return {"ok": True}

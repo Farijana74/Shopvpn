@@ -483,10 +483,36 @@ class OrdersMixin:
             }
 
 
+    def _managed_order_has_supply(self, conn, order_id: int) -> bool:
+        """Called under the local write lock; unknown supply blocks refunds."""
+        bot = conn.execute("SELECT value FROM settings WHERE key='managed_reseller_bot_id'").fetchone()
+        if not bot or not bot[0]:
+            return False
+        if conn.execute('SELECT 1 FROM settings WHERE key=? AND CAST(value AS INTEGER)>0',
+                        (f'managed_supply_guard:{order_id}',)).fetchone():
+            return True
+        if conn.execute('SELECT 1 FROM custom_configs WHERE order_id=? LIMIT 1', (order_id,)).fetchone():
+            return True
+        path = conn.execute("SELECT value FROM settings WHERE key='managed_root_db_path'").fetchone()
+        if not path or not path[0]:
+            return True
+        from pathlib import Path
+        from contextlib import closing
+        try:
+            with closing(sqlite3.connect(Path(path[0]).resolve().as_uri() + '?mode=ro', uri=True, timeout=4)) as root:
+                return root.execute("SELECT 1 FROM managed_purchases WHERE request_key=? AND status!='refunded'",
+                                    (f'{int(bot[0])}:{order_id}',)).fetchone() is not None
+        except (sqlite3.Error, ValueError, OSError):
+            return True
+
+
     def reject_order(self, order_id: int, reason: str = "") -> bool:
         """فقط سفارش pending را رد می‌کند (نه processing/approved)، تا با یک تایید
         هم‌زمان (claim_order) تداخل نکند. در صورت رد شدن، مبلغ کیف پول را برمی‌گرداند."""
         with self._get_conn() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if self._managed_order_has_supply(conn, order_id):
+                return False
             cur = conn.execute(
                 "UPDATE orders SET status='rejected', close_reason=?, updated_at=? WHERE id=? AND status='pending'",
                 (reason or "", datetime.utcnow().isoformat(), order_id),
@@ -519,6 +545,7 @@ class OrdersMixin:
         expired‌شده را برمی‌گرداند (برای اطلاع‌رسانی به کاربر توسط صدازننده)."""
         cutoff = (datetime.utcnow() - timedelta(minutes=max(timeout_minutes, 1))).isoformat()
         with self._get_conn() as conn:
+            conn.execute('BEGIN IMMEDIATE')
             rows = conn.execute(
                 "SELECT o.id FROM orders o "
                 "WHERE o.status='pending' AND o.discount_code_id IS NOT NULL "
@@ -532,7 +559,7 @@ class OrdersMixin:
                 "AND NOT EXISTS (SELECT 1 FROM card_to_card_invoices gi WHERE gi.kind='order' AND gi.ref_id=o.id AND gi.status='pending')",
                 (cutoff,),
             ).fetchall()
-            order_ids = [r["id"] for r in rows]
+            order_ids = [r["id"] for r in rows if not self._managed_order_has_supply(conn, r['id'])]
             if order_ids:
                 now = datetime.utcnow().isoformat()
                 conn.executemany(

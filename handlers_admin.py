@@ -3702,7 +3702,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             return
 
         if not (await asyncio.to_thread(db.reject_order, order_id, "admin")):
-            await call.answer(db.get_text('handlers_admin.auto_30ff7b82', 'این سفارش قبلاً بررسی شده است.'), show_alert=True)
+            await call.answer('رد و بازپرداخت انجام نشد؛ سفارش ممکن است در حال پردازش یا دارای تأمین/سرویس باشد. وضعیت تأمین و تحویل را بررسی کنید.', show_alert=True)
             return
         (await asyncio.to_thread(db.log_admin_action, 
             call.from_user.id, "order_reject",

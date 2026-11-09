@@ -1123,11 +1123,13 @@ async def api_custom_config_renew_full(custom_config_id: int, body: RenewFullBod
         raise
     except Exception:
         logging.getLogger("miniapp").exception(
-            "خطای غیرمنتظره در تمدید کامل سرویس (سفارش #%s) برای کاربر %s؛ سفارش رد و مبلغ کیف پول (در صورت وجود) بازگردانده شد.",
+            "خطای غیرمنتظره در تمدید کامل سرویس (سفارش #%s) برای کاربر %s؛ بررسی امکان بازپرداخت.",
             order_id, tg_id,
         )
-        db.reject_order(order_id)
-        raise HTTPException(status_code=500, detail=tr("خطای غیرمنتظره‌ای رخ داد. مبلغ کسرشده (در صورت وجود) به کیف پول شما بازگردانده شد."))
+        refunded = db.reject_order(order_id)
+        detail = ("خطای غیرمنتظره‌ای رخ داد. مبلغ کسرشده (در صورت وجود) به کیف پول شما بازگردانده شد."
+                  if refunded else "نتیجه تأمین تمدید نیازمند بررسی است؛ بازپرداخت انجام نشد. با پشتیبانی تماس بگیرید.")
+        raise HTTPException(status_code=500, detail=tr(detail))
 
 
 # ---------------------------------------------------------------------------
@@ -2386,11 +2388,13 @@ async def api_create_order(body: OrderCreate, request: Request, auth=Depends(req
         # همیشه گیر بیفته؛ reject_order فقط روی سفارش‌های هنوز pending اثر
         # می‌کند، پس فراخوانی آن این‌جا امن است.
         logging.getLogger("miniapp").exception(
-            "خطای غیرمنتظره در ثبت سفارش #%s برای کاربر %s؛ سفارش رد و مبلغ کیف پول (در صورت وجود) بازگردانده شد.",
+            "خطای غیرمنتظره در ثبت سفارش #%s برای کاربر %s؛ بررسی امکان بازپرداخت.",
             order_id, tg_id,
         )
-        db.reject_order(order_id)
-        raise HTTPException(status_code=500, detail=tr("خطای غیرمنتظره‌ای رخ داد. مبلغ کسرشده (در صورت وجود) به کیف پول شما بازگردانده شد."))
+        refunded = db.reject_order(order_id)
+        detail = ("خطای غیرمنتظره‌ای رخ داد. مبلغ کسرشده (در صورت وجود) به کیف پول شما بازگردانده شد."
+                  if refunded else "سفارش رد نشد و بازپرداخت انجام نشد. برای بررسی وضعیت سفارش و تکمیل تحویل با پشتیبانی تماس بگیرید.")
+        raise HTTPException(status_code=500, detail=tr(detail))
 
 
 

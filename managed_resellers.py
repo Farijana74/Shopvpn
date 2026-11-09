@@ -336,6 +336,33 @@ def reserve(root, bot_id, local_order_id, product_id, quantity, cost_factor=Frac
 
 
 async def provision(local_db, product, quantity, user_id, order_id, *, trial_policy=None):
+    """Block refunds before any supply work, including threaded reservations."""
+    if order_id is None or user_id is None:
+        raise AgencyError('سفارش معتبر برای تأمین نمایندگی لازم است.')
+    guard = f'managed_supply_guard:{order_id}'
+    with local_db._get_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        order = conn.execute('SELECT user_id,status FROM orders WHERE id=?', (order_id,)).fetchone()
+        if not order or order['user_id'] != user_id or order['status'] not in ('pending','processing','approved'):
+            raise AgencyError('این سفارش لغو شده یا برای تأمین معتبر نیست.')
+        conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1', (guard,'1'))
+    cancelled = False
+    try:
+        return await _provision(local_db, product, quantity, user_id, order_id, trial_policy=trial_policy)
+    except asyncio.CancelledError:
+        # A to_thread reservation may still commit after task cancellation.
+        cancelled = True
+        raise
+    finally:
+        if not cancelled:
+            # Remaining attempts keep their guards; the ledger and local
+            # services protect completed supply after this attempt finishes.
+            with local_db._get_conn() as conn:
+                conn.execute('UPDATE settings SET value=MAX(0,CAST(value AS INTEGER)-1) WHERE key=?', (guard,))
+                conn.execute("DELETE FROM settings WHERE key=? AND value='0'", (guard,))
+
+
+async def _provision(local_db, product, quantity, user_id, order_id, *, trial_policy=None):
     from direct_panel_provision import provision_direct
     if order_id is None or user_id is None:
         raise AgencyError('سفارش معتبر برای تأمین نمایندگی لازم است.')

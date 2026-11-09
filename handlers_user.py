@@ -312,7 +312,9 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if order_id:
             order = await asyncio.to_thread(db.get_order, order_id)
             if order and order["user_id"] == message.from_user.id and order["status"] == "pending":
-                await asyncio.to_thread(db.reject_order, order_id, "user_cancel")
+                if not await asyncio.to_thread(db.reject_order, order_id, "user_cancel"):
+                    await message.answer('⚠️ سفارش در حال تأمین است یا سرویس آن ساخته شده؛ لغو و بازپرداخت انجام نشد. برای تکمیل تحویل با پشتیبانی تماس بگیرید.')
+                    return
         await state.clear()
         from menu_restore import main_menu_markup
         markup = await asyncio.to_thread(main_menu_markup, db, message.from_user.id)
@@ -2235,11 +2237,11 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                         else:
                             prov_results = await provision_auto_config(db, product, quantity, user_id=call.from_user.id, order_id=order_id)
                     except (ProvisionError, DirectProvisionError, HappDeliveryError) as e:
-                        (await asyncio.to_thread(db.reject_order, order_id))
+                        refunded = await asyncio.to_thread(db.reject_order, order_id)
                         await _notify_admins_of_order(bot, order_id)
                         await _safe_edit(
                             call.message,
-                            f"⛔️ {customer_error(e)}\nمبلغ کسرشده از کیف پول شما به‌طور کامل بازگردانده شد."
+                            f"⛔️ {customer_error(e)}\n" + ('مبلغ کسرشده از کیف پول شما به‌طور کامل بازگردانده شد.' if refunded else 'سفارش برای بررسی تأمین و تکمیل تحویل حفظ شد؛ بازپرداخت انجام نشد. با پشتیبانی تماس بگیرید.')
                         )
                         await call.answer()
                         return
@@ -2355,14 +2357,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer()
         except Exception:
             logging.getLogger("handlers_user").exception(
-                "خطای غیرمنتظره در فرآیند خرید سفارش #%s برای کاربر %s؛ سفارش رد و مبلغ کیف پول (در صورت وجود) بازگردانده شد.",
+                "خطای غیرمنتظره در فرآیند خرید سفارش #%s برای کاربر %s؛ بررسی امکان بازپرداخت.",
                 order_id, call.from_user.id,
             )
-            (await asyncio.to_thread(db.reject_order, order_id))
+            refunded = await asyncio.to_thread(db.reject_order, order_id)
             await state.clear()
             await _safe_edit(
                 call.message,
-                db.get_text('handlers_user.auto_7c0e859b', '⛔️ خطای غیرمنتظره\u200cای در پردازش سفارش رخ داد.\nاگر مبلغی از کیف پول شما کسر شده بود، به\u200cطور کامل بازگردانده شد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.')
+                (db.get_text('handlers_user.auto_7c0e859b', '⛔️ خطای غیرمنتظره\u200cای در پردازش سفارش رخ داد.\nاگر مبلغی از کیف پول شما کسر شده بود، به\u200cطور کامل بازگردانده شد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.') if refunded else '⚠️ سفارش رد نشد و بازپرداخت انجام نشد. برای بررسی وضعیت سفارش و تکمیل تحویل با پشتیبانی تماس بگیرید.')
             )
             try:
                 await call.answer()
@@ -2460,7 +2462,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if order_id:
             order = (await asyncio.to_thread(db.get_order, order_id))
             if order and order["status"] == "pending":
-                (await asyncio.to_thread(db.reject_order, order_id, "user_cancel"))
+                if not await asyncio.to_thread(db.reject_order, order_id, "user_cancel"):
+                    return await call.answer('سفارش در حال تأمین است یا سرویس آن ساخته شده؛ لغو و بازپرداخت انجام نشد. با پشتیبانی تماس بگیرید.', show_alert=True)
         await state.clear()
         from menu_restore import main_menu_markup
         await _safe_edit(call.message, db.get_text('handlers_user.auto_570dedda', 'عملیات لغو شد.'), reply_markup=await asyncio.to_thread(main_menu_markup, db, call.from_user.id))
@@ -5185,8 +5188,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 try:
                     result_text = await execute_renewal(db, order)
                 except RenewalError as e:
-                    (await asyncio.to_thread(db.reject_order, order_id))
-                    await edit_fn(f"⛔️ تمدید ناموفق بود: {customer_error(e)}\nمبلغ کسرشده از کیف پول شما بازگردانده شد.")
+                    refunded = await asyncio.to_thread(db.reject_order, order_id)
+                    await edit_fn(f"⛔️ تمدید ناموفق بود: {customer_error(e)}\n" + ('مبلغ کسرشده از کیف پول شما بازگردانده شد.' if refunded else 'نتیجه تأمین تمدید نیازمند بررسی است؛ بازپرداخت انجام نشد. با پشتیبانی تماس بگیرید.'))
                     return
                 (await asyncio.to_thread(db.approve_renewal_order, order_id))
                 renewal_reward_info = (await asyncio.to_thread(
@@ -5246,14 +5249,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             )
         except Exception:
             logging.getLogger("handlers_user").exception(
-                "خطای غیرمنتظره در فرآیند تمدید سرویس (سفارش #%s) برای کاربر %s؛ سفارش رد و مبلغ کیف پول (در صورت وجود) بازگردانده شد.",
+                "خطای غیرمنتظره در فرآیند تمدید سرویس (سفارش #%s) برای کاربر %s؛ بررسی امکان بازپرداخت.",
                 order_id, user_tg_id,
             )
-            (await asyncio.to_thread(db.reject_order, order_id))
+            refunded = await asyncio.to_thread(db.reject_order, order_id)
             await state.clear()
             await edit_fn(
                 "⛔️ خطای غیرمنتظره‌ای در پردازش تمدید رخ داد.\n"
-                "اگر مبلغی از کیف پول شما کسر شده بود، به‌طور کامل بازگردانده شد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."
+                + ('اگر مبلغی از کیف پول شما کسر شده بود، به‌طور کامل بازگردانده شد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.' if refunded else 'سفارش حفظ شد و بازپرداخت انجام نشد. برای بررسی نتیجه تمدید با پشتیبانی تماس بگیرید.')
             )
 
     @router.callback_query(F.data.startswith("svc_renew:"))
@@ -8252,12 +8255,12 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await deliver_config_to_user(bot, user_id, product["name"], links, final_price=0, order_id=order_id, db=db)
         except Exception:
             logging.getLogger("handlers_user").exception(
-                "خطای غیرمنتظره در خرید خودکارِ دستیار هوشمند برای سفارش #%s کاربر %s؛ سفارش رد و کیف پول بازگردانده شد.",
+                "خطای غیرمنتظره در خرید خودکارِ دستیار هوشمند برای سفارش #%s کاربر %s؛ بررسی امکان بازپرداخت.",
                 order_id, user_id,
             )
-            await asyncio.to_thread(db.reject_order, order_id)
+            refunded = await asyncio.to_thread(db.reject_order, order_id)
             await message.answer(
-                db.get_text('handlers_user.auto_1389b2c2', '⛔️ یه خطای غیرمنتظره پیش اومد؛ مبلغ کسرشده به کیف پولت به\u200cطور کامل برگشت. لطفاً دوباره امتحان کن یا با پشتیبانی تماس بگیر.')
+                (db.get_text('handlers_user.auto_1389b2c2', '⛔️ یه خطای غیرمنتظره پیش اومد؛ مبلغ کسرشده به کیف پولت به\u200cطور کامل برگشت. لطفاً دوباره امتحان کن یا با پشتیبانی تماس بگیر.') if refunded else '⚠️ سفارش رد نشد و بازپرداخت انجام نشد. برای بررسی وضعیت سفارش و تکمیل تحویل با پشتیبانی تماس بگیرید.')
             )
 
     async def _ai_finalize_wallet_renewal(
