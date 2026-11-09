@@ -13421,25 +13421,58 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
 
     def _fmt_user_full_stats_report(stats: dict) -> str:
         u = stats["user"]
-        name = u["first_name"] or (f"@{u['username']}" if u["username"] else str(u["telegram_id"]))
+        name = html.escape(u["first_name"] or (f"@{u['username']}" if u["username"] else str(u["telegram_id"])))
         status_labels = {"blocked": "🚫 مسدود", "active": "🟢 دارای سرویس فعال", "expired": "🟡 سرویس‌های منقضی", "none": "⚪️ بدون سابقه‌ی سرویس"}
         lines = [
             f"🔍 آمار کامل کاربر {name}\n",
             f"🆔 آیدی عددی: {u['telegram_id']}",
-            f"یوزرنیم: @{u['username']}" if u["username"] else "یوزرنیم: ندارد",
+            f"یوزرنیم: @{html.escape(u['username'])}" if u["username"] else "یوزرنیم: ندارد",
             f"تاریخ عضویت: {to_jalali_str(u['joined_at'])}",
             f"وضعیت: {status_labels.get(stats['status'], stats['status'])}",
             f"\n💰 موجودی کیف‌پول: {u['referral_credit']:,} تومان",
-            f"🛒 سفارش‌های تاییدشده: {stats['approved_orders']:,} به مبلغ {stats['total_spent']:,} تومان",
-            f"⏳ سفارش‌های در انتظار: {stats['pending_orders']:,}",
-            f"❌ سفارش‌های ردشده: {stats['rejected_orders']:,}",
+            f"🛒 مجموع خرید شخصی تأییدشده: {stats['total_spent']:,} تومان",
             f"💳 مجموع شارژ تاییدشده‌ی حساب: {stats['total_topup']:,} تومان",
             f"📡 تعداد کانفیگ فعال: {stats['active_configs']:,}",
             f"\n👥 تعداد زیرمجموعه (رفرال): {stats['referral_count']:,}",
         ]
         if stats["is_reseller"]:
-            lines.append(f"🤝 نماینده است (سطح: {stats['agent_tier'] or '—'})")
+            lines.append(f"🤝 نماینده است (سطح: {html.escape(str(stats['agent_tier'] or '—'))})")
+        from user_financials import order_cards
+        lines.append('\n' + order_cards(stats))
         return "\n".join(lines)
+
+    @router.callback_query(F.data.startswith('adm_user_tx:'))
+    async def cb_admin_user_transactions(call: CallbackQuery):
+        if not senior_admin_only(call.from_user.id):
+            return await deny_mid(call)
+        try:
+            _, raw_user, kind, raw_page = call.data.split(':')
+            user_id, page = int(raw_user), int(raw_page)
+            if page < 0 or kind not in ('all','order','topup','wallet'):
+                raise ValueError
+        except (ValueError, TypeError):
+            return await call.answer('درخواست نامعتبر است.', show_alert=True)
+        if not await asyncio.to_thread(db.get_user, user_id):
+            return await call.answer('کاربر یافت نشد.', show_alert=True)
+        data = await asyncio.to_thread(db.get_user_financial_history, user_id, page, kind)
+        from user_financials import history_text
+        rows = [[InlineKeyboardButton(text=label, callback_data=f'adm_user_tx:{user_id}:{key}:0')
+                 for key,label in [('all','همه'),('order','سفارش‌ها'),('topup','شارژها'),('wallet','کیف پول')]]]
+        nav = []
+        if data['page'] > 0:
+            nav.append(InlineKeyboardButton(text='قبلی',callback_data=f'adm_user_tx:{user_id}:{kind}:{data["page"]-1}'))
+        if data['page']+1 < data['pages']:
+            nav.append(InlineKeyboardButton(text='بعدی',callback_data=f'adm_user_tx:{user_id}:{kind}:{data["page"]+1}'))
+        if nav:
+            rows.append(nav)
+        rows.append([InlineKeyboardButton(text='👤 پروفایل کاربر',callback_data=f'qa_profile:{user_id}')])
+        text, markup = history_text(user_id, data), InlineKeyboardMarkup(inline_keyboard=rows)
+        # Report cards may be photos; do not overwrite their captions.
+        if call.message.text:
+            await replace_admin_view(call,text,reply_markup=markup,parse_mode='HTML')
+        else:
+            await call.message.answer(text,reply_markup=markup,parse_mode='HTML')
+        await call.answer()
 
     @router.callback_query(F.data.in_({"adm_stats_user", "adm_users"}))
     async def cb_admin_stats_user(call: CallbackQuery, state: FSMContext):
@@ -13455,6 +13488,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
 
     @router.message(AdminUserFullStats.waiting_identifier)
     async def process_admin_stats_user(message: Message, state: FSMContext):
+        if not senior_admin_only(message.from_user.id):
+            return
         identifier = (message.text or "").strip()
         user = await asyncio.to_thread(db.find_user_by_identifier, identifier)
         if not user:

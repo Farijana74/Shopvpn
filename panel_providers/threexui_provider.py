@@ -166,6 +166,7 @@ class ThreeXUIProvider(BasePanelProvider):
             "expiryTime": expiry_ms,
             "totalGB": data_limit_bytes,
             "limitIp": int(user_limit or 0),
+            "limitHwid": int(user_limit or 0),
             "subId": sub_id,
             "tgId": 0,
         }
@@ -480,6 +481,7 @@ class ThreeXUIProvider(BasePanelProvider):
                 updated_client["enable"] = True
                 if user_limit is not None:
                     updated_client["limitIp"] = int(user_limit)
+                    updated_client["limitHwid"] = int(user_limit)
 
                 await self._post_client_update(
                     session, username, inbound_id, updated_client, "بروزرسانی کاربر",

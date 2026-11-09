@@ -2946,6 +2946,28 @@ function renderUsersBrutalist(res, pages) {
   $$('[data-detail]', content()).forEach(b => b.addEventListener('click', () => showUserDetail(Number(b.dataset.detail))));
 }
 
+async function showUserFinancialHistory(tgId, kind = 'all', page = 0) {
+  const d = await apiGet(`/users/${tgId}/transactions?kind=${encodeURIComponent(kind)}&page=${page}`);
+  const statuses = { approved: 'تأییدشده', pending: 'در انتظار', processing: 'در حال پردازش', rejected: 'ردشده', expired: 'منقضی', recorded: 'ثبت‌شده' };
+  const kinds = { order: 'سفارش', topup: 'شارژ', wallet: 'کیف پول' };
+  openModal(`ریز تراکنش‌های کاربر ${tgId}`, `
+    <div class="form-row">${[['all','همه'],['order','سفارش‌ها'],['topup','شارژها'],['wallet','کیف پول']].map(([k,label]) => `<button class="btn ${d.kind === k ? 'btn-primary' : ''}" data-history-kind="${k}">${label}</button>`).join('')}</div>
+    <p>سفارش، درخواست شارژ و تغییر کیف پول رکوردهای جدا هستند؛ مبالغ آن‌ها با هم جمع نمی‌شوند.</p>
+    <div class="table-wrap"><table><thead><tr><th>نوع / شماره</th><th>شرح</th><th>مبلغ (تومان)</th><th>جزئیات</th><th>وضعیت</th><th>تاریخ</th></tr></thead><tbody>
+    ${(d.items || []).map(t => `<tr><td>${esc(kinds[t.event_kind])} #${t.id}</td><td>${esc(t.title)}${t.note ? '<br>' + esc(t.note) : ''}</td><td class="mono" dir="ltr">${t.event_kind === 'wallet' && t.amount > 0 ? '+' : ''}${fmt(t.amount)}</td><td>${t.event_kind === 'wallet' ? `موجودی قبل: ${fmt(t.balance_before)} / بعد: ${fmt(t.balance_after)}` : t.event_kind === 'order' ? `تعداد: ${fmt(t.quantity)} / کیف پول: ${fmt(t.wallet_used)} / تخفیف: ${fmt(t.discount_amount)}` : 'درخواست شارژ'}</td><td>${esc(statuses[t.status] || t.status)}</td><td class="mono">${fmtDate(t.created_at)}</td></tr>`).join('') || '<tr><td colspan="6">تراکنشی ثبت نشده است.</td></tr>'}
+    </tbody></table></div>
+    <div class="form-row"><span>صفحه ${fmt(d.page + 1)} از ${fmt(d.pages)} — ${fmt(d.total)} رکورد</span>
+    ${d.page > 0 ? `<button class="btn" data-history-page="${d.page - 1}">قبلی</button>` : ''}
+    ${d.page + 1 < d.pages ? `<button class="btn" data-history-page="${d.page + 1}">بعدی</button>` : ''}
+    <button class="btn" id="history-user-back">بازگشت به پروفایل</button></div>
+  `, (body, close) => {
+    const navigate = (nextKind, nextPage) => { close(); showUserFinancialHistory(tgId, nextKind, nextPage).catch(handleErr); };
+    $$('[data-history-kind]', body).forEach(b => b.addEventListener('click', () => navigate(b.dataset.historyKind, 0)));
+    $$('[data-history-page]', body).forEach(b => b.addEventListener('click', () => navigate(d.kind, Number(b.dataset.historyPage))));
+    $('#history-user-back', body).addEventListener('click', () => { close(); showUserDetail(tgId).catch(handleErr); });
+  });
+}
+
 async function showUserDetail(tgId) {
   const d = await apiGet(`/users/${tgId}`);
   const services = await apiGet(`/users/${tgId}/custom-configs`).catch(() => []);
@@ -2962,6 +2984,12 @@ async function showUserDetail(tgId) {
     { label: 'تاریخ عضویت', val: fmtDate(u.joined_at) },
     { label: 'تست دریافتی', val: u.test_used ? 'بله' : 'خیر' },
   ];
+  const personalOrders = d.order_counts || {};
+  const shopOrders = d.shop_order_summary || { shops: [] };
+  statCards.unshift({ label: '👤 سفارش‌های شخصی در این فروشگاه', val: `${fmt(personalOrders.total || 0)} سفارش — ${fmt(personalOrders.approved || 0)} تأییدشده` });
+  if ((shopOrders.shops || []).length || d.is_reseller || d.agent_tier) {
+    statCards.splice(1, 0, { label: '🤖 سفارش‌های بات نمایندگی', val: `${fmt(shopOrders.total || 0)} سفارش — ${fmt(shopOrders.approved || 0)} تأییدشده${shopOrders.unavailable ? ' (آمار ناقص)' : ''}` });
+  }
   if (d.is_reseller) statCards.push({ label: 'اعتبار نمایندگی', val: `${fmt(d.reseller_credit)} گیگ` });
   const ws = d.wallet_status || {};
   if (ws.limit > 0 || ws.debt > 0) {
@@ -3012,6 +3040,8 @@ async function showUserDetail(tgId) {
     <div id="ud-bank-configs">${renderUserBankConfigs(bankConfigs, isSenior)}</div>
     ` : ''}
 
+    ${isSenior ? '<button class="btn btn-primary" id="ud-transactions">📜 ریز همه تراکنش‌ها</button>' : ''}
+
     <h4 class="ud-section-title">سفارش‌های اخیر</h4>
     <div class="table-wrap"><table><thead><tr><th>#</th><th>محصول</th><th>مبلغ</th><th>وضعیت</th><th>تاریخ</th></tr></thead>
     <tbody>${d.orders.slice(0, 10).map(o => `<tr><td class="mono">#${o.id}</td><td>${esc(o.product_name || '-')}</td><td class="mono">${fmt(o.final_price)}${tierDiscountNote(o)}</td><td>${esc(o.status)}</td><td class="mono">${fmtDate(o.created_at)}</td></tr>`).join('') || `<tr><td colspan="5" class="empty-state"><div class="icon">${svg('empty')}</div>سفارشی نیست</td></tr>`}</tbody></table></div>
@@ -3030,6 +3060,8 @@ async function showUserDetail(tgId) {
     <div class="table-wrap"><table><thead><tr><th>نوع</th><th>تغییر</th><th>قبل</th><th>بعد</th><th>توضیح</th><th>تاریخ</th></tr></thead>
     <tbody>${(d.wallet_transactions || []).map(t => `<tr><td>${esc(t.label)}</td><td class="mono" dir="ltr">${t.delta > 0 ? '+' : ''}${fmt(t.delta)}</td><td class="mono">${fmt(t.balance_before)}</td><td class="mono">${fmt(t.balance_after)}</td><td>${esc(t.note || '-')}</td><td class="mono">${fmtDate(t.created_at)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty-state"><div class="icon">${svg('empty')}</div>تراکنشی ثبت نشده</td></tr>`}</tbody></table></div>
   `, (body, close) => {
+    const transactionsBtn = $('#ud-transactions', body);
+    if (transactionsBtn) transactionsBtn.addEventListener('click', () => { close(); showUserFinancialHistory(tgId).catch(handleErr); });
     const submitBtn = $('#wallet-submit', body);
     if (submitBtn) submitBtn.addEventListener('click', async () => {
       const delta = Number($('#wallet-delta', body).value);

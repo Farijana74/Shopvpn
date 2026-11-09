@@ -2599,6 +2599,7 @@ def admin_lang_scope_kb() -> InlineKeyboardMarkup:
 
 def user_full_stats_kb(tg_id: int, is_blocked: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=tr("📜 ریز تراکنش‌ها"), callback_data=f"adm_user_tx:{tg_id}:all:0")],
         [InlineKeyboardButton(text=tr("📦 لیست کامل کانفیگ‌های این کاربر"), callback_data=f"adm_user_configs:{tg_id}")],
         [InlineKeyboardButton(text=tr("🛠 مدیریت تک‌تک کانفیگ‌ها"), callback_data=f"adm_user_cfglist:{tg_id}")],
         [InlineKeyboardButton(text=tr("👥 زیرمجموعه‌های این کاربر"), callback_data=f"adm_user_refs:{tg_id}")],
@@ -2617,6 +2618,7 @@ def user_full_stats_kb(tg_id: int, is_blocked: bool = False) -> InlineKeyboardMa
 def user_group_stats_kb(tg_id: int, is_blocked: bool = False) -> InlineKeyboardMarkup:
     """نسخه‌ی سبک کارت پروفایل برای گروه گزارش: فقط دکمه‌هایی که بدون تایپ/FSM در گروه کار می‌کنند."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=tr("📜 ریز تراکنش‌ها"), callback_data=f"adm_user_tx:{tg_id}:all:0")],
         [InlineKeyboardButton(text=tr("📦 لیست کامل کانفیگ‌های این کاربر"), callback_data=f"adm_user_configs:{tg_id}")],
         [InlineKeyboardButton(text=tr("👥 زیرمجموعه‌ها"), callback_data=f"adm_user_refs:{tg_id}")],
         [

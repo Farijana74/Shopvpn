@@ -135,15 +135,8 @@ class OrdersMixin:
             user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tg_id,)).fetchone()
             if not user:
                 return None
-            orders = conn.execute(
-                "SELECT o.status, COALESCE(o.final_price, p.price) AS price "
-                "FROM orders o JOIN products p ON o.product_id=p.id WHERE o.user_id=?",
-                (tg_id,),
-            ).fetchall()
-            approved = [o for o in orders if o["status"] == "approved"]
-            pending_c = sum(1 for o in orders if o["status"] == "pending")
-            rejected_c = sum(1 for o in orders if o["status"] == "rejected")
-            total_spent = sum(o["price"] or 0 for o in approved)
+            from user_financials import count_orders
+            counts = count_orders(conn, tg_id)
             total_topup = conn.execute(
                 "SELECT COALESCE(SUM(amount),0) s FROM wallet_topups WHERE user_id=? AND status='approved'",
                 (tg_id,),
@@ -159,10 +152,12 @@ class OrdersMixin:
         return {
             "user": user,
             "status": self.get_user_status(tg_id),
-            "approved_orders": len(approved),
-            "pending_orders": pending_c,
-            "rejected_orders": rejected_c,
-            "total_spent": total_spent,
+            "approved_orders": counts['approved'],
+            "pending_orders": counts['pending'],
+            "rejected_orders": counts['rejected'],
+            "total_spent": counts['spent'],
+            "order_counts": counts,
+            "shop_order_summary": self.get_owned_shop_order_summary(tg_id),
             "total_topup": total_topup,
             "active_services": active_services,
             "active_configs": active_services,
@@ -170,6 +165,16 @@ class OrdersMixin:
             "is_reseller": self.is_reseller(tg_id),
             "agent_tier": self.get_agent_tier(tg_id),
         }
+
+
+    def get_owned_shop_order_summary(self, user_tg_id: int) -> dict:
+        from user_financials import owned_shop_orders
+        return owned_shop_orders(self, user_tg_id)
+
+
+    def get_user_financial_history(self, user_tg_id: int, page=0, kind='all', limit=6) -> dict:
+        from user_financials import financial_history
+        return financial_history(self, user_tg_id, page, kind, limit)
 
 
     def create_order(
@@ -1336,6 +1341,7 @@ class OrdersMixin:
         "topup": "شارژ کیف پول", "transfer_out": "انتقال به کاربر دیگر", "transfer_in": "دریافت انتقال",
         "gift_code": "گیفت‌کد", "cashback": "کش‌بک", "referral_reward": "پاداش زیرمجموعه",
         "referral_invite": "پاداش دعوت", "reseller_commission": "کارمزد نمایندگی", "membership_fee": "هزینه‌ی عضویت نمایندگی",
+        "reseller_supply": "تأمین نمایندگی",
         "lottery": "قرعه‌کشی", "location_fee": "تغییر لوکیشن", "location_refund": "بازگشت هزینه‌ی تغییر لوکیشن",
         "coin_convert": "تبدیل سکه", "coin_expire": "انقضای موجودی حاصل از سکه", "admin_adjust": "تنظیم دستی ادمین", "admin_bulk_deduct": "کاهش گروهی توسط ادمین",
         "gift_card_out": "ساخت کارت هدیه", "gift_card_in": "دریافت کارت هدیه", "gift_card_refund": "بازگشت کارت هدیه",

@@ -3186,17 +3186,29 @@ def api_user_detail(tg_id: int, admin=Depends(get_current_admin)):
     # همان تبدیل is_blocked به bool واقعی که در /api/users انجام می‌شود، اینجا
     # هم لازم است تا صفحه‌ی جزئیات کاربر (وب و اندروید) وضعیت را درست بخواند.
     user_dict["is_blocked"] = bool(user_dict.get("is_blocked"))
+    stats = db.get_user_full_stats(tg_id)
     return {
         "user": user_dict,
         "orders": rows_to_list(history["orders"]),
         "topups": rows_to_list(history["topups"]),
         "wallet_transactions": db.get_wallet_transaction_entries(tg_id, 50),
+        "order_counts": stats['order_counts'],
+        "shop_order_summary": stats['shop_order_summary'],
         "referral": db.get_referral_stats(tg_id),
         "is_reseller": db.is_reseller(tg_id),
         "agent_tier": db.get_agent_tier(tg_id),
         "reseller_credit": db.get_reseller_credit(tg_id),
         "wallet_status": db.get_wallet_status(tg_id),
     }
+
+
+@app.get('/api/users/{tg_id}/transactions')
+def api_user_transactions(tg_id: int, page: int = Query(0, ge=0), kind: str = 'all', admin=Depends(require_permission('users'))):
+    if not db.get_user(tg_id):
+        raise HTTPException(404, 'کاربر یافت نشد.')
+    if kind not in ('all','order','topup','wallet'):
+        raise HTTPException(400, 'نوع تراکنش معتبر نیست.')
+    return db.get_user_financial_history(tg_id, page, kind, 10)
 
 
 async def _notify_block_change_from_web(tg_id: int, blocked: bool, actor_label: str) -> None:
