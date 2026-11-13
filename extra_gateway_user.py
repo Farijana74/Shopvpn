@@ -10,7 +10,7 @@ from aiogram import F, Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message, PreCheckoutQuery,
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message, PreCheckoutQuery, WebAppInfo,
 )
 
 import extra_gateway_payment as egp
@@ -55,7 +55,14 @@ async def present_invoice(target: Message, bot: Bot, gateway: str, result: dict,
     lines.append(
         f"{_DONE_TEXT.get(kind, _DONE_TEXT['order'])}؛ اگر چند دقیقه طول کشید، دکمه‌ی «بررسی وضعیت پرداخت» را بزن."
     )
-    rows = [[InlineKeyboardButton(text=tr("🔗 رفتن به صفحه‌ی پرداخت"), url=result["payment_url"])]]
+    payment_url = result['payment_url']
+    # Telegram accepts Web App buttons only in private chats and over HTTPS.
+    # Preserve a usable invoice for other gateways and unsupported contexts.
+    if gateway == 'zarinpal' and getattr(getattr(target,'chat',None),'type',None) == 'private' and payment_url.lower().startswith('https://') and not getattr(target, 'business_connection_id', None):
+        payment_button = InlineKeyboardButton(text=tr('💳 پرداخت زرین‌پال'), web_app=WebAppInfo(url=payment_url))
+    else:
+        payment_button = InlineKeyboardButton(text=tr('🔗 رفتن به صفحه‌ی پرداخت'), url=payment_url)
+    rows = [[payment_button]]
     bot_url = result["meta"].get("bot_url")
     if gateway == "tetra98" and bot_url:
         rows.append([InlineKeyboardButton(text=tr("🤖 پرداخت از داخل ربات تترا۹۸"), url=bot_url)])

@@ -59,6 +59,12 @@ MINIAPP_BTN_TEXT = "✨ مینی‌اپ فروشگاه"
 LANGUAGE_BTN_TEXT = "🌐 زبان / Language"
 
 def language_kb(db=None, back_callback: str = "", callback_prefix: str = "language") -> InlineKeyboardMarkup:
+    from i18n import language_selection_enabled
+    if db is not None and not language_selection_enabled(db):
+        rows = [[InlineKeyboardButton(text='🇮🇷 فارسی', callback_data=f'{callback_prefix}:fa')]]
+        if back_callback:
+            rows.append([InlineKeyboardButton(text=tr('⬅️ بازگشت'),callback_data=back_callback)])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
     if db is not None and hasattr(db, "list_languages"):
         languages = [dict(r) for r in db.list_languages(enabled_only=True)]
         rows = []
@@ -2379,7 +2385,11 @@ def delivery_settings_kb(db) -> InlineKeyboardMarkup:
     test_text_set = bool((db.get_setting("test_post_delivery_text", "") or "").strip())
     test_text_label = "🧪 متن دلخواه بعد از کانفیگ تست: تنظیم‌شده" if test_text_set else "🧪 متن دلخواه بعد از کانفیگ تست: تنظیم‌نشده"
     sub_link_text = "✅ ارسال لینک اشتراک: فعال" if sub_link_on else "❌ ارسال لینک اشتراک: غیرفعال"
-    individual_text = "✅ ارسال کانفیگ‌های تکی: فعال" if individual_on else "❌ ارسال کانفیگ‌های تکی: غیرفعال"
+    individual_text = "✅ کانفیگ تکی خریداری‌شده: فعال" if individual_on else "❌ کانفیگ تکی خریداری‌شده: غیرفعال"
+    test_flag = db.get_setting('deliver_test_individual_configs_enabled','')
+    test_individual_text = ('✅ کانفیگ تکی تست: فعال' if test_flag == '1' else
+                            '❌ کانفیگ تکی تست: غیرفعال' if test_flag == '0' else
+                            '🧪 کانفیگ تکی تست: رفتار قبلی')
     post_text_label = "📝 متن دلخواه بعد از ارسال کانفیگ: تنظیم‌شده" if post_text_set else "📝 متن دلخواه بعد از ارسال کانفیگ: تنظیم‌نشده"
     import config_delivery as _cd
     if not _cd.has_qr_background():
@@ -2391,6 +2401,7 @@ def delivery_settings_kb(db) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=sub_link_text, callback_data="adm_deliver_sublink_toggle")],
         [InlineKeyboardButton(text=individual_text, callback_data="adm_deliver_individual_toggle")],
+        [InlineKeyboardButton(text=test_individual_text, callback_data='adm_deliver_test_individual_toggle')],
         [InlineKeyboardButton(text=post_text_label, callback_data="adm_edit_post_delivery_text")],
         [InlineKeyboardButton(text=test_text_label, callback_data="adm_edit_test_delivery_text")],
         [InlineKeyboardButton(text=qr_bg_label, callback_data="adm_qr_background_menu")],
@@ -2588,9 +2599,12 @@ def admin_back_kb(callback_data="adm_back_panel") -> InlineKeyboardMarkup:
     )
 
 
-def admin_lang_scope_kb() -> InlineKeyboardMarkup:
+def admin_lang_scope_kb(db=None) -> InlineKeyboardMarkup:
     """انتخاب اینکه زبان فقط برای همین ادمین عوض بشه یا برای همه‌ی کاربران ربات."""
+    from i18n import language_selection_enabled
+    enabled = language_selection_enabled(db)
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='✅ پرسش زبان در استارت: فعال' if enabled else '❌ پرسش زبان: خاموش (فقط فارسی)', callback_data='adm_language_selection_toggle')],
         [InlineKeyboardButton(text=tr("👤 فقط برای من (این ادمین)"), callback_data="adm_lang_self")],
         [InlineKeyboardButton(text=tr("🌍 برای همه‌ی کاربران ربات"), callback_data="adm_lang_all")],
         [InlineKeyboardButton(text=tr("⬅️ بازگشت به پنل مدیریت"), callback_data="adm_back_panel")],

@@ -6461,8 +6461,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await replace_admin_view(
             call,
             tr("📤 تنظیمات ارسال کانفیگ\n\n"
-            "این دو مورد مستقل از هم قابل فعال/غیرفعال کردن هستند و روی همه‌ی مسیرهای "
-            "تحویل کانفیگ اثر می‌گذارند (بانک کانفیگ، محصول متصل به پنل، ساخت کانفیگ شخصی، کانفیگ تست):"),
+            "ارسال کانفیگ تکی خرید و تست دو تنظیم جدا هستند. برای ارسال تکی فقط در تست، "
+            "«کانفیگ تکی تست» را فعال و «کانفیگ تکی خریداری‌شده» را غیرفعال کنید. "
+            "ارسال لینک اشتراک تنظیم مشترک است. گزینهٔ «رفتار قبلی» تست تا اولین انتخاب، تحویل قبلی را حفظ می‌کند."),
             reply_markup=kb.delivery_settings_kb(db),
         )
         await call.answer()
@@ -6473,6 +6474,11 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             return await deny_mid(call)
         current = (await asyncio.to_thread(db.get_setting, "deliver_sub_link_enabled", "1"))
         new_value = "0" if current != "0" else "1"
+        if new_value == '0':
+            paid = await asyncio.to_thread(db.get_setting,'deliver_individual_configs_enabled','1')
+            trial = await asyncio.to_thread(db.get_setting,'deliver_test_individual_configs_enabled','')
+            if paid == '0' or trial == '0':
+                return await call.answer('حداقل لینک اشتراک یا کانفیگ تکی باید برای خرید و تست فعال بماند.',show_alert=True)
         (await asyncio.to_thread(db.set_setting, "deliver_sub_link_enabled", new_value))
         (await asyncio.to_thread(db.log_admin_action, call.from_user.id, "deliver_sublink_toggle", f"وضعیت جدید: {new_value}"))
         await safe_edit(call, db.get_text('handlers_admin.auto_8ec9e02c', '📤 تنظیمات ارسال کانفیگ:'), reply_markup=kb.delivery_settings_kb(db))
@@ -6484,10 +6490,25 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             return await deny_mid(call)
         current = (await asyncio.to_thread(db.get_setting, "deliver_individual_configs_enabled", "1"))
         new_value = "0" if current != "0" else "1"
+        if new_value == '0' and await asyncio.to_thread(db.get_setting,'deliver_sub_link_enabled','1') == '0':
+            return await call.answer('برای خرید حداقل لینک اشتراک یا کانفیگ تکی باید فعال بماند.',show_alert=True)
         (await asyncio.to_thread(db.set_setting, "deliver_individual_configs_enabled", new_value))
         (await asyncio.to_thread(db.log_admin_action, call.from_user.id, "deliver_individual_toggle", f"وضعیت جدید: {new_value}"))
         await safe_edit(call, db.get_text('handlers_admin.auto_8ec9e02c', '📤 تنظیمات ارسال کانفیگ:'), reply_markup=kb.delivery_settings_kb(db))
         await call.answer(db.get_text('handlers_admin.auto_d5ebb39c', 'وضعیت تغییر کرد.'))
+
+    @router.callback_query(F.data == 'adm_deliver_test_individual_toggle')
+    async def cb_admin_deliver_test_individual_toggle(call: CallbackQuery):
+        if not senior_admin_only(call.from_user.id):
+            return await deny_mid(call)
+        current = await asyncio.to_thread(db.get_setting,'deliver_test_individual_configs_enabled','')
+        value = '0' if current == '1' else '1'
+        if value == '0' and await asyncio.to_thread(db.get_setting,'deliver_sub_link_enabled','1') == '0':
+            return await call.answer('برای تست حداقل لینک اشتراک یا کانفیگ تکی باید فعال بماند.',show_alert=True)
+        await asyncio.to_thread(db.set_setting,'deliver_test_individual_configs_enabled',value)
+        await asyncio.to_thread(db.log_admin_action,call.from_user.id,'deliver_test_individual_toggle',value)
+        await safe_edit(call,'📤 تنظیمات ارسال کانفیگ:',reply_markup=kb.delivery_settings_kb(db))
+        await call.answer('ذخیره شد.')
 
     @router.callback_query(F.data == "adm_edit_post_delivery_text")
     async def cb_admin_edit_post_delivery_text(call: CallbackQuery, state: FSMContext):
@@ -12936,9 +12957,20 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             call,
             tr("🌐 زبان ادمین/کاربران") + "\n\n" +
             tr("زبان نمایش این ربات رو می‌خوای فقط برای خودت عوض کنی یا برای همه‌ی کاربرانی که با ربات کار می‌کنن؟"),
-            reply_markup=kb.admin_lang_scope_kb(),
+            reply_markup=kb.admin_lang_scope_kb(db),
         )
         await call.answer()
+
+    @router.callback_query(F.data == 'adm_language_selection_toggle')
+    async def cb_admin_language_selection_toggle(call: CallbackQuery):
+        if not full_admin_only(call.from_user.id):
+            return await deny_support(call)
+        from i18n import language_selection_enabled
+        enabled = await asyncio.to_thread(language_selection_enabled, db)
+        await asyncio.to_thread(db.set_setting,'language_selection_enabled','0' if enabled else '1')
+        await asyncio.to_thread(db.log_admin_action,call.from_user.id,'language_selection_toggle','0' if enabled else '1')
+        await replace_admin_view(call,'🌐 تنظیم زبان\nوقتی پرسش زبان خاموش باشد، زبان بات فارسی است و در استارت پرسیده نمی‌شود.', reply_markup=kb.admin_lang_scope_kb(db))
+        await call.answer('ذخیره شد.')
 
     @router.callback_query(F.data == "adm_lang_self")
     async def cb_admin_lang_self(call: CallbackQuery):

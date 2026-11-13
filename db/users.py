@@ -5,6 +5,9 @@ from .constants import _wallet_tag
 
 class UsersMixin:
     def get_user_language(self, tg_id: int) -> str:
+        from i18n import language_selection_enabled
+        if not language_selection_enabled(self):
+            return 'fa'
         with self._get_conn() as conn:
             row = conn.execute("SELECT language_code FROM users WHERE telegram_id=?", (tg_id,)).fetchone()
         code = (row["language_code"] if row and row["language_code"] else "fa")

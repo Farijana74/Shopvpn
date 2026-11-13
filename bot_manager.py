@@ -122,6 +122,9 @@ class LanguageMiddleware:
                     row = None
                 language = (row["language_code"] if row and "language_code" in row.keys() else None)
                 language = normalize_language(language or getattr(user, "language_code", None))
+                from i18n import language_selection_enabled
+                if not await asyncio.to_thread(language_selection_enabled, self.db):
+                    language = 'fa'
                 if language not in {"fa", "en"}:
                     # زبان تلگرامِ کاربر (مثلاً ar) فقط وقتی استفاده شود که ادمین
                     # آن را فعال کرده باشد؛ وگرنه به فارسی برمی‌گردیم.

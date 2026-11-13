@@ -242,13 +242,17 @@ async def _send_individual_configs(bot: Bot, user_tg_id: int, links: list, db=No
                 pass
 
 
-def _delivery_flags(db) -> tuple:
+def _delivery_flags(db, is_test: bool = False) -> tuple:
     """خروجی: (ارسال لینک اشتراک فعال است؟, ارسال کانفیگ‌های تکی فعال است؟).
     اگر db داده نشود (فراخوانی قدیمی بدون این پارامتر)، هر دو پیش‌فرض فعال‌اند."""
     if db is None:
         return True, True
     sub_link_on = db.get_setting("deliver_sub_link_enabled", "1") != "0"
     individual_on = db.get_setting("deliver_individual_configs_enabled", "1") != "0"
+    if is_test:
+        test_flag = db.get_setting('deliver_test_individual_configs_enabled','')
+        if test_flag in ('0','1'):
+            individual_on = test_flag == '1'
     return sub_link_on, individual_on
 
 
@@ -420,9 +424,9 @@ def build_delivery_message(svc: dict, idx: int, total: int, sub_link_on: bool,
 
 
 async def prepare_delivery(link: str, product_name: str, idx: int, total: int,
-                           db=None, user_tg_id: int = None, header_text=None):
+                           db=None, user_tg_id: int = None, header_text=None, is_test: bool = False):
     """مرحله‌ی مشترک بین بات (aiogram) و پنل وب: جمع‌آوری مشخصات و ساخت کپشن/پیام‌های اضافه."""
-    sub_link_on, individual_on = _delivery_flags(db)
+    sub_link_on, individual_on = _delivery_flags(db, is_test=is_test)
     if db is not None and user_tg_id is not None:
         L = lambda t: localized(t, db, user_tg_id)
     else:
@@ -501,7 +505,7 @@ async def deliver_config_to_user(
     total = len(links)
 
     for idx, link in enumerate(links, start=1):
-        caption, extras = await prepare_delivery(link, product_name, idx, total, db=db, user_tg_id=user_tg_id, header_text=header_text)
+        caption, extras = await prepare_delivery(link, product_name, idx, total, db=db, user_tg_id=user_tg_id, header_text=header_text, is_test=is_test)
 
         try:
             qr_link = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link) if db is not None else link

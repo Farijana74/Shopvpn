@@ -87,6 +87,7 @@ async def deliver_config_to_user_web(
     order_id: int = None,
     db=None,
     bot_token: str = None,
+    is_test: bool = False,
 ) -> None:
     """نسخه‌ی پنل وب مستقل از تحویل کانفیگ؛ دقیقاً همان قالب پیام بات (عکس QR + کپشن HTML با
     «اطلاعات سرویس» و «لینک های اتصال») از طریق ماژول مشترک config_delivery.prepare_delivery.
@@ -109,7 +110,7 @@ async def deliver_config_to_user_web(
             await tg_send(bot_token, user_tg_id, strip_html(text))
 
     for idx, link in enumerate(links, start=1):
-        caption, extras = await prepare_delivery(link, product_name, idx, total, db=db, user_tg_id=user_tg_id)
+        caption, extras = await prepare_delivery(link, product_name, idx, total, db=db, user_tg_id=user_tg_id, is_test=is_test)
 
         sent = False
         try:
@@ -124,7 +125,7 @@ async def deliver_config_to_user_web(
         for extra in extras:
             await _send_html(extra)
 
-    post_text = get_post_delivery_text(db)
+    post_text = get_post_delivery_text(db, is_test=is_test)
     summary = build_summary_text(final_price, total) if final_price is not None else ''
     guide = '\n\n'.join(part for part in (summary, post_text) if part) or '✅ کانفیگ شما آماده استفاده است.'
     markup = {'inline_keyboard': [[{'text': '🏠 بازگشت به منو', 'callback_data': 'trial:main_menu'}]]}

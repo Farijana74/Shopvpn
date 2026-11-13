@@ -6,7 +6,7 @@ import logging
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 import dedicated_sub
-from config_delivery import build_qr_bytes, collect_service_info, strip_html
+from config_delivery import build_qr_bytes, collect_service_info, strip_html, _delivery_flags
 from merchant_controls import prefix_uri
 
 
@@ -22,12 +22,21 @@ async def send_trial(bot, db, user_id, links, *, plan_name='', amount='', userna
         raise ValueError('لینک کانفیگ تست موجود نیست.')
     prefix = db.get_setting('shop_display_prefix', '')
     visible_links = []
+    sub_on, individual_on = _delivery_flags(db, is_test=True)
+    explicit_test = db.get_setting('deliver_test_individual_configs_enabled','') in ('0','1')
     for link in links:
         if link.startswith(('http://', 'https://')):
-            if db.get_setting('deliver_sub_link_enabled', '1') == '0' and db.get_setting('deliver_individual_configs_enabled', '1') != '0':
-                svc = await collect_service_info(link)
+            extracted = []
+            if individual_on and (explicit_test or not sub_on):
+                try:
+                    svc = await collect_service_info(link)
+                except Exception:
+                    logging.getLogger(__name__).warning('Could not extract test configurations for user %s',user_id)
+                    svc = {'configs': []}
                 if svc['configs']:
-                    visible_links.extend(prefix_uri(c, prefix) for c in svc['configs'])
+                    extracted = [prefix_uri(c, prefix) for c in svc['configs']]
+                    visible_links.extend(extracted)
+                if extracted and not sub_on:
                     continue
             link = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link)
         visible_links.append(prefix_uri(link, prefix))

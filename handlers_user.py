@@ -247,6 +247,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
     @router.message(Command("language"))
     async def language_command(message: Message):
+        from i18n import language_selection_enabled
+        if not await asyncio.to_thread(language_selection_enabled, db):
+            await message.answer('زبان این فروشگاه روی فارسی ثابت است.')
+            return
         await message.answer(
             db.get_text("handlers_user.language.choose", "لطفاً زبان موردنظر را انتخاب کنید:"),
             reply_markup=kb.language_kb(db),
@@ -255,6 +259,9 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     @router.callback_query(F.data.startswith("language:"))
     async def cb_language(call: CallbackQuery, state: FSMContext, bot: Bot):
         lang = normalize_language(call.data.split(":", 1)[1])
+        from i18n import language_selection_enabled
+        if not await asyncio.to_thread(language_selection_enabled, db):
+            lang = 'fa'
         if not await asyncio.to_thread(is_language_enabled, db, lang):
             await call.answer(tr("زبان در حال حاضر فعال نیست."), show_alert=True)
             return
@@ -1058,7 +1065,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         # پرچم ذخیره‌شده‌ی language_selected باشد، نه وجود ردیف کاربر؛ چون
         # BlockedUserMiddleware ردیف را قبل از رسیدن به این هندلر می‌سازد.
         # دیپ‌لینک‌ها در state می‌مانند و بعد از انتخاب زبان (در cb_language) اجرا می‌شوند.
-        if not await asyncio.to_thread(db.is_user_language_selected, message.from_user.id):
+        from i18n import language_selection_enabled
+        if await asyncio.to_thread(language_selection_enabled, db) and not await asyncio.to_thread(db.is_user_language_selected, message.from_user.id):
             if not existing_user:
                 await _notify_new_signup(message, bot)
             await state.update_data(
@@ -1073,18 +1081,18 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             )
             return
 
+        if not existing_user:
+            await _notify_new_signup(message, bot)
+
         # قوانین باید بعد از عضویت (یا معافیت عضویت) و قبل از استفاده از بات تأیید شوند.
         # دیپ‌لینک‌ها تا اینجا پردازش و برای ادامه در state نگه داشته می‌شوند.
         if (await asyncio.to_thread(db.get_setting, "terms_enabled", "0")) == "1" and not await asyncio.to_thread(db.is_terms_accepted, message.from_user.id):
-            if not existing_user:
-                await state.update_data(pending_post_start_actions=post_start_actions)
-            else:
-                await state.update_data(pending_post_start_actions=post_start_actions, pending_terms=True)
-                await message.answer(
-                    await asyncio.to_thread(db.get_setting, "terms_text"),
-                    reply_markup=terms_keyboard(),
-                )
-                return
+            await state.update_data(pending_post_start_actions=post_start_actions, pending_terms=True)
+            await message.answer(
+                await asyncio.to_thread(db.get_setting, "terms_text"),
+                reply_markup=terms_keyboard(),
+            )
+            return
 
         welcome = (await asyncio.to_thread(db.get_setting, "welcome_text"))
         reply_enabled = (await asyncio.to_thread(db.get_setting, "main_menu_reply_enabled", "1")) == "1"

@@ -59,6 +59,11 @@ def _sel(key, label, options, default="", hint=""):
 
 EXTRA_SETTINGS_GROUPS: List[Dict[str, Any]] = [
     {
+        'id': 'bot_language', 'title': '🌐 زبان بات', 'web': True, 'mini': True,
+        'fields': [_b('language_selection_enabled','پرسش و انتخاب زبان کاربر','1',
+                      'خاموش = بدون پرسش در استارت، نمایش ثابت فارسی؛ زبان‌های ذخیره‌شده حذف نمی‌شوند.')],
+    },
+    {
         "id": "terms", "title": "📜 قوانین و شرایط استفاده", "web": True, "mini": True,
         "fields": [
             _b("terms_enabled", "نمایش قوانین به کاربر جدید (و کاربرانی که هنوز نپذیرفته‌اند)", "0",
@@ -125,7 +130,10 @@ EXTRA_SETTINGS_GROUPS: List[Dict[str, Any]] = [
         "id": "delivery", "title": "📦 نحوه‌ی تحویل کانفیگ", "web": True, "mini": True,
         "fields": [
             _b("deliver_sub_link_enabled", "ارسال لینک اشتراک (Subscription)", "1"),
-            _b("deliver_individual_configs_enabled", "ارسال کانفیگ‌های تکی", "1"),
+            _b("deliver_individual_configs_enabled", "ارسال کانفیگ‌های تکی خریداری‌شده", "1"),
+            _sel('deliver_test_individual_configs_enabled','ارسال کانفیگ‌های تکی تست',
+                 [['','رفتار قبلی (بدون تغییر)'],['1','فعال'],['0','غیرفعال']], '',
+                 'مستقل از خرید: فعال = کانفیگ‌های تکی تست نیز همراه اشتراک ارسال می‌شوند.'),
             _ta("post_delivery_custom_text", "متن سفارشی بعد از تحویل سرویس (خالی = ندارد)", ""),
             _ta("test_post_delivery_text", "متن سفارشی بعد از تحویل کانفیگ تست (خالی = همان متن عمومی)", ""),
             _t("custom_config_prefix", "پیشوند نام کانفیگ‌های سفارشی", ""),
@@ -359,6 +367,9 @@ def _cross_check(values: Dict[str, str], db) -> None:
     if "deliver_sub_link_enabled" in values or "deliver_individual_configs_enabled" in values:
         if cur("deliver_sub_link_enabled") == "0" and cur("deliver_individual_configs_enabled") == "0":
             raise SettingsValidationError("حداقل یکی از «لینک اشتراک» یا «کانفیگ تکی» باید فعال بماند.")
+    if 'deliver_sub_link_enabled' in values or 'deliver_test_individual_configs_enabled' in values:
+        if cur('deliver_sub_link_enabled') == '0' and cur('deliver_test_individual_configs_enabled') == '0':
+            raise SettingsValidationError('برای کانفیگ تست حداقل لینک اشتراک یا کانفیگ تکی باید فعال بماند.')
     if "backup_sftp_enabled" in values or "backup_sftp_host" in values:
         if cur("backup_sftp_enabled") == "1" and not cur("backup_sftp_host").strip():
             raise SettingsValidationError("برای فعال‌سازی SFTP، هاست الزامی است.")

@@ -582,6 +582,11 @@ def normalize_language(language: Optional[str]) -> str:
         return code
     return DEFAULT_LANGUAGE
 
+def language_selection_enabled(db) -> bool:
+    """Turning off the selector locks this shop's bot UI to Persian."""
+    return db is None or db.get_setting('language_selection_enabled', '1') != '0'
+
+
 def is_language_enabled(db, language: str) -> bool:
     code = normalize_language(language)
     try:
