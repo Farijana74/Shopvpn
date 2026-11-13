@@ -3452,8 +3452,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         )
 
     @router.callback_query(F.data == "trial:main_menu")
-    async def cb_trial_main_menu(call: CallbackQuery):
+    async def cb_trial_main_menu(call: CallbackQuery, state: FSMContext = None):
         from menu_restore import restore_main_menu
+        if state is not None:
+            await state.clear()
         await call.answer()
         await restore_main_menu(call.bot, db, call.from_user.id)
 
@@ -3824,7 +3826,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
     async def tutorial_menu_entry(message: Message):
         tutorials = await asyncio.to_thread(db.get_tutorials_for_target, tutorial_hub.GENERAL)
         if not tutorials:
-            await message.answer(db.get_text('handlers_user.auto_tut_none', 'فعلاً آموزشی ثبت نشده.'))
+            from menu_restore import back_to_main_menu_markup
+            await message.answer(db.get_text('handlers_user.auto_tut_none', 'فعلاً آموزشی ثبت نشده.'),reply_markup=back_to_main_menu_markup())
             return
         await message.answer(
             tr("📚 یک آموزش را انتخاب کنید:"),
@@ -4428,7 +4431,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         await call.answer()
         sent = await tutorial.send_device_steps(call.bot, call.from_user.id, db, device_id)
         if not sent:
-            await call.message.answer(db.get_text('handlers_user.auto_tut_empty', 'برای این آموزش هنوز مرحله‌ای ثبت نشده.'))
+            from menu_restore import back_to_main_menu_markup
+            await call.message.answer(db.get_text('handlers_user.auto_tut_empty', 'برای این آموزش هنوز مرحله‌ای ثبت نشده.'),reply_markup=back_to_main_menu_markup())
 
     @router.callback_query(F.data.startswith("mo_links:"))
     async def cb_my_orders_links(call: CallbackQuery):
@@ -6180,14 +6184,21 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
     @router.message(F.text.func(lambda t: t in (db.get_setting("btn_wheel"), tr(db.get_setting("btn_wheel")))))
     async def wheel_of_fortune(message: Message, bot: Bot):
+        from inline_navigation import separate_messages
+        with separate_messages():
+            await _spin_wheel(message, bot)
+
+    async def _spin_wheel(message: Message, bot: Bot):
+        from menu_restore import back_to_main_menu_markup
+        back = back_to_main_menu_markup()
         if (await asyncio.to_thread(db.get_setting, "wheel_enabled", "1")) != "1":
-            await message.answer(db.get_text('handlers_user.auto_ea150277', 'در حال حاضر گردونه شانس غیرفعال است.'))
+            await message.answer(db.get_text('handlers_user.auto_ea150277', 'در حال حاضر گردونه شانس غیرفعال است.'), reply_markup=back)
             return
 
         can_spin, remaining_hours = (await asyncio.to_thread(db.can_spin_wheel, message.from_user.id))
         if not can_spin:
             hours = int(remaining_hours) + 1
-            await message.answer(tr(f"⏳ فردا دوباره امتحان کن! حدود {hours} ساعت دیگر می‌توانی دوباره گردونه را بچرخانی."))
+            await message.answer(tr(f"⏳ فردا دوباره امتحان کن! حدود {hours} ساعت دیگر می‌توانی دوباره گردونه را بچرخانی."), reply_markup=back)
             return
 
         # افکت چرخش: انیمیشن اسلات‌ماشین بومی تلگرام
@@ -6213,14 +6224,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 result = await provision_test_plan(db, plan, user_id=user.id, source="wheel", track_product=False)
             except TestPlanProvisionError as e:
                 (await asyncio.to_thread(db.release_wheel_spin, user.id))
-                await message.answer(tr("⚠️ ساخت جایزه‌ی کانفیگ با مشکل روبه‌رو شد. چرخش شما حساب نشد؛ کمی بعد دوباره امتحان کنید."))
+                await message.answer(tr("⚠️ ساخت جایزه‌ی کانفیگ با مشکل روبه‌رو شد. چرخش شما حساب نشد؛ کمی بعد دوباره امتحان کنید."), reply_markup=back)
                 await report_router.report(
                     bot, db, "error",
                     f"🚨 ساخت جایزه‌ی کانفیگ گردونه برای کاربر {user.id} ناموفق بود ({escape_html(str(e))}).",
                 )
                 return
             amount = format_plan_amount(plan)
-            await message.answer(tr(f"🎉 تبریک! برنده شدی!\n\n🎁 جایزه‌ی شما: {prize['title']} ({amount})"))
+            await message.answer(tr(f"🎉 تبریک! برنده شدی!\n\n🎁 جایزه‌ی شما: {prize['title']} ({amount})"), reply_markup=back)
             await _send_test_config_link(message, result["subscription_url"], tr("🎁 کانفیگ جایزه‌ی شما:"))
             await report_router.notify_prize(
                 bot, db, "برنده‌ی گردونه شانس (کانفیگ)", user.id, user.full_name, user.username,
@@ -6236,13 +6247,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 f"⏳ اعتبار: تا {settings['expiry_hours']} ساعت آینده\n"
                 f"این کد یکبارمصرف است و در خرید بعدی‌ات قابل استفاده است."),
                 parse_mode="Markdown",
+                reply_markup=back,
             )
             await report_router.notify_prize(
                 bot, db, "برنده‌ی گردونه شانس (کد تخفیف)", user.id, user.full_name, user.username,
                 f"🎟 کد تخفیف {percent}٪ - <code>{escape_html(code)}</code>",
             )
         else:
-            await message.answer(db.get_text('handlers_user.auto_93ef7080', '😔 امروز شانس با تو نبود! فردا دوباره امتحان کن.'))
+            await message.answer(db.get_text('handlers_user.auto_93ef7080', '😔 امروز شانس با تو نبود! فردا دوباره امتحان کن.'), reply_markup=back)
 
     @router.callback_query(F.data == "wallet_history")
     async def cb_wallet_history(call: CallbackQuery):

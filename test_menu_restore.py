@@ -17,7 +17,7 @@ class MenuRestoreTests(unittest.IsolatedAsyncioTestCase):
         await InlineNavigationMiddleware()(handler,event,{})
         self.assertIsInstance(send.call_args.args[0],SendMessage)
 
-    async def test_completed_purchase_can_restore_inline_menu(self):
+    async def test_explicit_return_can_restore_inline_menu(self):
         bot=MagicMock(send_message=AsyncMock())
         db=types.SimpleNamespace(db_path='/tmp/representative.db',get_text=lambda key,default:'منوی دلخواه')
         markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='خرید',callback_data='mm:btn_buy')]])
@@ -26,7 +26,7 @@ class MenuRestoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.send_message.call_args.kwargs['reply_markup'],markup)
         self.assertEqual(bot.send_message.call_args.args[1],'منوی دلخواه')
 
-    async def test_navigation_error_keeps_inline_menu(self):
+    async def test_navigation_error_offers_back_without_showing_all_menu_buttons(self):
         from aiogram.methods import EditMessageText
         markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='خرید',callback_data='mm:btn_buy')]])
         db=types.SimpleNamespace()
@@ -34,11 +34,13 @@ class MenuRestoreTests(unittest.IsolatedAsyncioTestCase):
         send=AsyncMock(return_value=True)
         async def handler(event,data):
             await send_navigation(SendMessage(chat_id=1,text='موجود نیست'),send)
-        with patch('menu_restore.main_menu_markup',return_value=markup):
+        with patch('menu_restore.main_menu_markup',return_value=markup) as full_menu:
             await InlineNavigationMiddleware(db)(handler,event,{})
+        full_menu.assert_not_called()
         method=send.call_args.args[0]
         self.assertIsInstance(method,EditMessageText)
-        self.assertEqual(method.reply_markup,markup)
+        buttons=[b.callback_data for row in method.reply_markup.inline_keyboard for b in row]
+        self.assertEqual(buttons,['trial:main_menu'])
 
     async def test_reply_menu_is_preserved_when_inline_menu_is_disabled(self):
         db=types.SimpleNamespace(db_path='/tmp/representative.db')

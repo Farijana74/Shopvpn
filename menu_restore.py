@@ -35,6 +35,15 @@ def main_menu_markup(db, user_id):
     return markup or keyboards.menu_for_user(db, user_id, main)
 
 
+def back_to_main_menu_markup():
+    """Keep navigation available without opening the full menu automatically."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from i18n import tr
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=tr('🏠 بازگشت به منو'),callback_data='trial:main_menu')
+    ]])
+
+
 async def restore_main_menu(bot, db, user_id):
     markup = await asyncio.to_thread(main_menu_markup, db, user_id)
     text, options = menu_text(db)

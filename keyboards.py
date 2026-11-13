@@ -1287,6 +1287,8 @@ def tutorial_bind_group_kb(tutorial_id: int, group_idx: int, selected: set) -> I
 def tutorial_devices_user_kb(devices) -> InlineKeyboardMarkup:
     """کیبورد انتخاب آموزش برای کاربر (هر دکمه یک آموزش با عنوان خودش)."""
     rows = [[InlineKeyboardButton(text=f"{d['emoji']} {d['name']}", callback_data=f"tut_pick:{d['id']}")] for d in devices]
+    from menu_restore import back_to_main_menu_markup
+    rows.extend(back_to_main_menu_markup().inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

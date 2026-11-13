@@ -97,8 +97,9 @@ async def deliver_config_to_user_web(
     gift_order = db.gift_get_order(order_id) if db is not None and order_id is not None else None
     if gift_order and gift_order["card_id"]:
         if db.gift_mark_order_delivered(order_id):
-            await tg_send(bot_token, user_tg_id, "✅ خرید انجام شد و کانفیگ داخل کارت هدیه قرار گرفت. کارت را از «کیف پول ← 🎁 کارت هدیه ← کارت‌های من» ببینید و برای گیرنده بفرستید.")
-        await _restore_menu_web(bot_token, user_tg_id, db)
+            from menu_restore import back_to_main_menu_markup
+            await tg_send(bot_token, user_tg_id, "✅ خرید انجام شد و کانفیگ داخل کارت هدیه قرار گرفت. کارت را از «کیف پول ← 🎁 کارت هدیه ← کارت‌های من» ببینید و برای گیرنده بفرستید.",
+                          reply_markup=back_to_main_menu_markup().model_dump(mode='json',exclude_none=True))
         return
     if isinstance(links, str):
         links = [links]

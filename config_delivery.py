@@ -381,46 +381,64 @@ def build_delivery_message(svc: dict, idx: int, total: int, sub_link_on: bool,
     info_lines = [f"{emoji} {L(label)}: {_h(value)}" for emoji, label, value in rows if value]
     info_block = f"<blockquote><b>{L('اطلاعات سرویس')}</b>\n" + "\n".join(info_lines) + "</blockquote>"
 
-    link_lines = []
+    blocks = []
+    configs = []
     if svc["is_sub"]:
         if individual_on:
-            link_lines += [f"💝 config : <code>{_h(c)}</code>" for c in svc["configs"]]
-        if sub_link_on:
-            link_lines.append(f"🌐 subscription : <code>{_h(svc['sub_url'])}</code>")
-            link_lines += [f"🔁 subscription : <code>{_h(u)}</code>" for u in alternates]
+            configs = svc["configs"]
+    elif not svc.get("is_happ") and (sub_link_on or individual_on):
+        configs = svc["configs"]
+
+    # One code entity per group: copying it includes every config in that group,
+    # without subscription URLs, labels, or other display text.
+    config_groups, group, size = [], [], 0
+    for config in configs:
+        config = str(config)
+        length = len(config) + 2
+        if group and size + length > CHUNK_LIMIT - 150:
+            config_groups.append(group)
+            group, size = [], 0
+        group.append(config)
+        size += length
+    if group:
+        config_groups.append(group)
+    for group in config_groups:
+        content = _h("\n\n".join(group))
+        blocks.append(
+            f"<b>{L('کانفیگ‌های تکی')}</b>\n"
+            f"<pre><code>{content}</code></pre>\n"
+            + L('از گزینهٔ کپی کادر بالا استفاده کنید؛ همهٔ کانفیگ‌های داخل آن یکجا کپی می‌شوند')
+        )
+
+    subscription_lines = []
+    if svc["is_sub"] and sub_link_on:
+        subscription_lines.append(f"🌐 subscription : <code>{_h(svc['sub_url'])}</code>")
+        subscription_lines += [f"🔁 subscription : <code>{_h(u)}</code>" for u in alternates]
     elif svc.get("is_happ"):
-        # Happ is a user-selected delivery format, so generic config/subscription
-        # visibility switches must not silently remove the requested link.
-        for c in svc["configs"]:
-            link_lines.append(f"📲 Happ : <code>{_h(c)}</code>")
-    elif sub_link_on or individual_on:
-        for c in svc["configs"]:
-            link_lines.append(f"💝 config : <code>{_h(c)}</code>")
+        # Preserve the explicitly selected Happ format regardless of visibility flags.
+        subscription_lines = [f"📲 Happ : <code>{_h(c)}</code>" for c in svc["configs"]]
+    for line in subscription_lines:
+        blocks.append(f"<blockquote>{line}</blockquote>")
 
-    title = f"<b>{L('لینک های اتصال')}</b>"
-    hint = L("با لمس کردن هر یک از لینک ها، خودکار کپی میشود")
-
-    if not link_lines:
-        return f"{header}\n\n{info_block}", []
-
-    full = f"{header}\n\n{info_block}\n\n<blockquote>{title}\n\n" + "\n\n".join(link_lines) + f"</blockquote>\n\n{hint}"
+    base = f"{header}\n\n{info_block}"
+    if not blocks:
+        return base, []
+    full = base + "\n\n" + "\n\n".join(blocks)
     if _visible_len(full) <= CAPTION_LIMIT:
         return full, []
 
-    # جا نشد: کپشنِ عکس فقط اطلاعات سرویس، و لینک‌ها در پیام(های) بعدی
-    chunks, cur, cur_len = [], [], 0
-    for line in link_lines:
-        ln = _visible_len(line) + 2
-        if cur and cur_len + ln > CHUNK_LIMIT:
-            chunks.append(cur)
-            cur, cur_len = [], 0
-        cur.append(line)
-        cur_len += ln
-    if cur:
-        chunks.append(cur)
-    extras = [f"<blockquote>{title}\n\n" + "\n\n".join(c) + "</blockquote>" for c in chunks]
-    extras[-1] += f"\n\n{hint}"
-    return f"{header}\n\n{info_block}", extras
+    # Keep complete HTML/code entities while packing into Telegram-sized messages.
+    extras, current = [], ""
+    for block in blocks:
+        candidate = current + "\n\n" + block if current else block
+        if current and _visible_len(candidate) > CHUNK_LIMIT:
+            extras.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        extras.append(current)
+    return base, extras
 
 
 async def prepare_delivery(link: str, product_name: str, idx: int, total: int,
@@ -494,11 +512,6 @@ async def deliver_config_to_user(
     if db is not None and order_id is not None:
         from gift_card_handlers import deliver_gift_order
         if await deliver_gift_order(bot, db, order_id):
-            from menu_restore import restore_main_menu
-            try:
-                await restore_main_menu(bot, db, user_tg_id)
-            except Exception:
-                logging.getLogger(__name__).warning("Restoring gift menu failed for user %s", user_tg_id)
             return
     if isinstance(links, str):
         links = [links]

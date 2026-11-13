@@ -2,6 +2,7 @@
 import asyncio
 import contextvars
 from dataclasses import dataclass
+from contextlib import contextmanager
 
 from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramBadRequest
@@ -19,6 +20,18 @@ class Navigation:
 
 
 _navigation = contextvars.ContextVar('inline_navigation', default=None)
+
+
+@contextmanager
+def separate_messages():
+    """Send operation results as new messages, preserving the originating menu."""
+    token = _navigation.set(None)
+    try:
+        yield
+    finally:
+        _navigation.reset(token)
+
+
 # Transactions, deliveries, broadcasts and user-authored messages keep their own messages.
 _PREFIXES = ('mm:', 'acct:', 'cat:', 'prod:', 'mo_v:', 'mo_back', 'mo_refresh:',
              'tut', 'contact_', 'wallet_menu', 'wallet_back', 'tickets_mine',
@@ -44,8 +57,9 @@ class InlineNavigationMiddleware(BaseMiddleware):
             return await handler(event, data)
         fallback=None
         if self.db is not None:
-            from menu_restore import main_menu_markup
-            candidate=await asyncio.to_thread(main_menu_markup,self.db,event.from_user.id)
+            from menu_restore import main_menu_markup, back_to_main_menu_markup
+            candidate=(await asyncio.to_thread(main_menu_markup,self.db,event.from_user.id)
+                       if callback.startswith('adm_') else back_to_main_menu_markup())
             if isinstance(candidate,InlineKeyboardMarkup):fallback=candidate
         token = _navigation.set(Navigation(message.chat.id, message.message_id, task=asyncio.current_task(),fallback_markup=fallback))
         try:

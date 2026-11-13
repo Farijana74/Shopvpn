@@ -30,9 +30,11 @@ async def send_device_steps(bot, chat_id: int, db, device_id: int) -> bool:
     header = ""
     if device:
         header = f"{html.escape(device['emoji'] or '📚')} <b>{html.escape(device['name'] or '')}</b>"
+    from menu_restore import back_to_main_menu_markup
     for index, s in enumerate(steps):
         body = s["text"] or ""
         lead = header if index == 0 else ""
+        markup = back_to_main_menu_markup() if index == len(steps)-1 else None
         try:
             if s["video_file_id"] or s["photo_file_id"]:
                 caption = f"{lead}\n\n{body}".strip() if lead else body
@@ -42,15 +44,15 @@ async def send_device_steps(bot, chat_id: int, db, device_id: int) -> bool:
                     lead = ""
                 caption = caption or None
                 if s["video_file_id"]:
-                    await bot.send_video(chat_id, s["video_file_id"], caption=caption)
+                    await bot.send_video(chat_id, s["video_file_id"], caption=caption, reply_markup=markup)
                 else:
-                    await bot.send_photo(chat_id, s["photo_file_id"], caption=caption)
+                    await bot.send_photo(chat_id, s["photo_file_id"], caption=caption, reply_markup=markup)
             elif body or lead:
                 text = f"{lead}\n\n{body}".strip() if lead else body
                 if lead and len(text) > _TEXT_LIMIT:
                     await bot.send_message(chat_id, lead)
                     text = body
-                await bot.send_message(chat_id, text)
+                await bot.send_message(chat_id, text, reply_markup=markup)
         except Exception:
             _log.exception("ارسال مرحله #%s آموزش #%s ناموفق بود.", s["id"], device_id)
     return True

@@ -151,10 +151,13 @@ async def _deliver_config(db, message: Message, card):
     await message.answer(tr(text))
 
 
-async def _send_card(bot: Bot, chat_id: int, card, code: str, image: bytes | None):
+async def _send_card(bot: Bot, chat_id: int, card, code: str, image: bytes | None, back_to_menu: bool = False):
     link = gc.deep_link(await _bot_username(bot), code)
     caption = tr(f"🎁 کارت هدیه آماده است!\nکد: {code}\nلینک دریافت: {link}")
     markup = _share_markup(link, card["id"])
+    if back_to_menu:
+        from menu_restore import back_to_main_menu_markup
+        markup = InlineKeyboardMarkup(inline_keyboard=[*markup.inline_keyboard,*back_to_main_menu_markup().inline_keyboard])
     if image:
         await bot.send_photo(chat_id, BufferedInputFile(image, filename="gift_card.png"), caption=caption, reply_markup=markup)
     else:
@@ -177,7 +180,7 @@ async def deliver_gift_order(bot: Bot, db, order_id: int) -> bool:
     except Exception:
         _log.exception("gift order card render failed for card %s", card["id"])
     await bot.send_message(order["user_id"], tr("✅ خرید انجام شد و کانفیگ داخل کارت هدیه قرار گرفت. کارت را برای گیرنده بفرستید 👇"))
-    await _send_card(bot, order["user_id"], card, code, image)
+    await _send_card(bot, order["user_id"], card, code, image, back_to_menu=True)
     return True
 
 

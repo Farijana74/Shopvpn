@@ -3514,7 +3514,6 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                     bot, order["user_id"], "کانفیگ شخصی",
                     [result.subscription_url], final_price=order["final_price"], order_id=order_id, db=db,
                 )
-                await _notify_user_inline_menu(bot, order["user_id"])
             except Exception:
                 pass
             try:
@@ -3572,7 +3571,6 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                     delivery_links,
                     final_price=order["final_price"], order_id=order_id, db=db,
                 )
-                await _notify_user_inline_menu(bot, order["user_id"])
             except Exception:
                 pass
             try:
@@ -3620,7 +3618,6 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                 order_id=order_id,
                 db=db,
             )
-            await _notify_user_inline_menu(bot, order["user_id"])
         except Exception:
             pass
 
