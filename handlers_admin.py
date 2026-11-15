@@ -3911,7 +3911,10 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         result = await abangateway_payment.try_verify_and_finalize(db, invoice)
         if result == "verified_now":
             if invoice["kind"] == "wallet_topup":
-                text = await abangateway_payment.finalize_paid_topup(db, invoice["ref_id"])
+                text = await abangateway_payment.finalize_paid_topup(db, invoice["ref_id"], bot=bot, payment_method="abangateway")
+            elif invoice["kind"] == "reseller_request":
+                from extra_gateway_payment import _finalize_reseller
+                text = await _finalize_reseller(db, bot, invoice) or '✅ پرداخت نمایندگی ثبت شد.'
             else:
                 text = await abangateway_payment.finalize_paid_order(db, bot, invoice["ref_id"])
             await call.message.answer(text)
@@ -4087,7 +4090,10 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         result = await blupal_payment.try_verify_and_finalize(db, invoice)
         if result == "verified_now":
             if invoice["kind"] == "wallet_topup":
-                text = await blupal_payment.finalize_paid_topup(db, invoice["ref_id"])
+                text = await blupal_payment.finalize_paid_topup(db, invoice["ref_id"], bot=bot, payment_method="blupal")
+            elif invoice["kind"] == "reseller_request":
+                from extra_gateway_payment import _finalize_reseller
+                text = await _finalize_reseller(db, bot, invoice) or '✅ پرداخت نمایندگی ثبت شد.'
             else:
                 text = await blupal_payment.finalize_paid_order(db, bot, invoice["ref_id"])
             await call.message.answer(text)
@@ -4279,7 +4285,10 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         result = await noapay_payment.try_verify_and_finalize(db, invoice)
         if result == "verified_now":
             if invoice["kind"] == "wallet_topup":
-                text = await noapay_payment.finalize_paid_topup(db, invoice["ref_id"])
+                text = await noapay_payment.finalize_paid_topup(db, invoice["ref_id"], bot=bot, payment_method="noapay")
+            elif invoice["kind"] == "reseller_request":
+                from extra_gateway_payment import _finalize_reseller
+                text = await _finalize_reseller(db, bot, invoice) or '✅ پرداخت نمایندگی ثبت شد.'
             else:
                 text = await noapay_payment.finalize_paid_order(db, bot, invoice["ref_id"])
             await call.message.answer(text)

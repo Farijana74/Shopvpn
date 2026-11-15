@@ -25,7 +25,21 @@ import leak_index
 logger = logging.getLogger("payment_delivery")
 
 
-async def finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None) -> str:
+async def finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None, report_payment_failures=True) -> str:
+    try:
+        text = await _finalize_paid_order(db, bot, order_id, notify_admins_fn)
+    except Exception:
+        if report_payment_failures:
+            from online_payment_reports import order_payment_problem
+            await order_payment_problem(db, bot, order_id)
+        raise
+    if report_payment_failures and text.startswith(('⚠️', '⛔️')):
+        from online_payment_reports import order_payment_problem
+        await order_payment_problem(db, bot, order_id)
+    return text
+
+
+async def _finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None) -> str:
     order = db.get_order(order_id)
     if not order:
         return tr("⚠️ سفارش یافت نشد.")
@@ -33,6 +47,16 @@ async def finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None) -> 
         return tr("✅ این سفارش قبلاً بررسی و تحویل داده شده است.")
     if not db.claim_order(order_id):
         return tr("✅ این سفارش قبلاً بررسی و تحویل داده شده است.")
+    original_notifier = notify_admins_fn
+    async def notify_admins_fn(bot_instance, paid_order_id):
+        if original_notifier is not None:
+            try:
+                await original_notifier(bot_instance, paid_order_id)
+                return
+            except Exception:
+                logger.warning('Order notifier failed for order %s; trying standard report', paid_order_id)
+        from online_payment_reports import order_completed
+        await order_completed(db, bot_instance, paid_order_id)
 
     if order["lootbox_type_id"]:
         # خرید «صندوق شانس» مثل یک محصول: بعد از پرداخت (هر روشی)، صندوق‌ها همان لحظه به کاربر تحویل می‌شوند.
@@ -169,12 +193,15 @@ async def finalize_paid_order(db, bot, order_id: int, notify_admins_fn=None) -> 
     return tr("✅ پرداخت تایید شد و کانفیگ تحویل داده شد.")
 
 
-async def finalize_paid_topup(db, topup_id: int) -> str:
+async def finalize_paid_topup(db, topup_id: int, bot=None, payment_method=None) -> str:
     topup = db.get_topup(topup_id)
     if not topup:
         return tr("⚠️ درخواست شارژ یافت نشد.")
     if not db.approve_topup(topup_id):
         return tr("✅ این درخواست شارژ قبلاً بررسی شده است.")
+    if bot is not None:
+        from online_payment_reports import topup_completed
+        await topup_completed(db, bot, topup_id, topup, payment_method)
     return tr(f"✅ پرداخت تایید شد و {topup['amount']:,} تومان به کیف پول کاربر اضافه شد.")
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 # 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

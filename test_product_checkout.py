@@ -230,3 +230,23 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
         self.assertFalse(self.orders())
         self.assertEqual(await self.state.get_state(),WalletTopup.waiting_receipt.state)
+
+    async def test_checkout_displays_current_wallet_and_predicted_deduction(self):
+        self.db.add_wallet_credit(101,30000)
+        await self.invoke('cb_product',f'prod:{self.pid}')
+        text=self.message.edit_text.await_args.args[0]
+        self.assertIn('موجودی کیف پول: 30,000 تومان',text)
+        self.assertIn('استفاده از کیف پول: 30,000 تومان',text)
+        self.assertIn('مبلغ نهایی قابل پرداخت: 170,000 تومان',text)
+        self.assertEqual(self.db.get_wallet_credit(101),30000)
+        self.assertFalse(self.orders())
+
+    async def test_mixed_card_details_show_deduction_and_remaining_balance(self):
+        self.db.add_wallet_credit(101,30000)
+        draft=await self.enter()
+        await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
+        text=self.message.answer.await_args.args[0]
+        self.assertIn('کسرشده از کیف پول: 30,000 تومان',text)
+        self.assertIn('موجودی فعلی کیف پول: 0 تومان',text)
+        self.assertIn('مبلغ (ریال): `1700000`',text)
+        self.assertEqual(self.orders()[0]['final_price'],170000)

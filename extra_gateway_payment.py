@@ -295,6 +295,8 @@ async def _finalize_reseller(db, bot, invoice) -> str:
     req = await asyncio.to_thread(db.get_reseller_request, request_id)
     if not req:
         return "⚠️ درخواست نمایندگی یافت نشد."
+    from online_payment_reports import reseller_completed
+    await reseller_completed(db, bot, request_id, invoice)
     tier = await asyncio.to_thread(db.get_reseller_tier, req["tier_code"]) if req["tier_code"] else None
     label = f"{tier['icon']} {tier['title']}" if tier else "نمایندگی"
     if req["status"] == "completed":
@@ -324,7 +326,7 @@ async def deliver(db, bot, invoice, notify_admins_fn=None) -> str:
     ref_id = int(invoice["ref_id"])
     title = registry.GATEWAYS[invoice["gateway"]]["title"]
     if kind == "wallet_topup":
-        return await abangateway_payment.finalize_paid_topup(db, ref_id)
+        return await abangateway_payment.finalize_paid_topup(db, ref_id, bot=bot, payment_method=title)
     if kind == "reseller_request":
         return await _finalize_reseller(db, bot, invoice)
     order = await asyncio.to_thread(db.get_order, ref_id)
@@ -339,7 +341,7 @@ async def deliver(db, bot, invoice, notify_admins_fn=None) -> str:
         )
         return "⚠️ پرداخت شما دریافت شد ولی این سفارش دیگر فعال نیست. با پشتیبانی تماس بگیرید."
     notifier = notify_admins_fn or _order_notifiers.get(id(db))
-    text = await abangateway_payment.finalize_paid_order(db, bot, ref_id, notify_admins_fn=notifier)
+    text = await abangateway_payment.finalize_paid_order(db, bot, ref_id, notify_admins_fn=notifier, report_payment_failures=False)
     if text.startswith(("⛔️", "⚠️")):
         await _notify_admins(
             db, bot,
@@ -358,6 +360,10 @@ async def process_invoice(db, bot, invoice, notify_admins_fn=None):
     except Exception:
         logger.exception("خطای غیرمنتظره در تحویل فاکتور %s", invoice["id"])
         await asyncio.to_thread(db.release_extra_invoice, invoice["id"])
+        try:
+            await _notify_admins(db, bot, f"⚠️ پرداخت فاکتور #{invoice['id']} تأیید شد اما تکمیل آن ناموفق بود؛ لطفاً بررسی کنید.")
+        except Exception:
+            logger.warning('Could not report failed payment fulfillment for invoice %s', invoice['id'])
         return "error:خطای غیرمنتظره در تحویل؛ دوباره بررسی می‌شود.", ""
     return result, text
 

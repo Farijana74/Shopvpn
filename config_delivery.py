@@ -211,6 +211,44 @@ def build_summary_text(final_price: int, total: int) -> str:
     return summary
 
 
+async def order_payment_summary(db, user_tg_id, order_id, final_price, total):
+    """Format persisted payment components and the current wallet balance without changing money."""
+    if final_price is None:
+        return ''
+    order = None
+    if db is not None and order_id is not None:
+        try:
+            order = await asyncio.to_thread(db.get_order, order_id)
+            if order and order['user_id'] != user_tg_id:
+                order = None
+        except Exception:
+            logging.getLogger(__name__).warning('Could not read payment summary for order %s', order_id)
+    if order is None:
+        if order_id is not None:
+            return '💳 جزئیات پرداخت سفارش در دسترس نیست.'
+        return build_summary_text(final_price, total)
+    keys = order.keys()
+    wallet_used = int(order['wallet_used'] or 0) if 'wallet_used' in keys else 0
+    external = int(order['final_price'] or 0)
+    discount = int(order['discount_amount'] or 0) if 'discount_amount' in keys else 0
+    rows = [f"💰 مبلغ پرداخت‌شده: {wallet_used + external:,} تومان"]
+    if total > 1:
+        rows[0] += f" ({total} عدد کانفیگ)"
+    if discount:
+        rows.append(f"🎟 تخفیف: {discount:,} تومان")
+    if wallet_used:
+        rows.append(f"👛 کسرشده از کیف پول: {wallet_used:,} تومان")
+    if external:
+        rows.append(f"💳 پرداخت از روش دیگر: {external:,} تومان")
+    if wallet_used and db is not None:
+        try:
+            balance = await asyncio.to_thread(db.get_wallet_credit, user_tg_id)
+            rows.append(f"👛 موجودی فعلی کیف پول: {int(balance):,} تومان")
+        except Exception:
+            logging.getLogger(__name__).warning('Could not read wallet balance for payment summary')
+    return '\n'.join(rows)
+
+
 async def send_individual_configs(bot: Bot, user_tg_id: int, links: list, db=None) -> None:
     """نسخه‌ی عمومی، برای استفاده از خارج این ماژول (مثلاً فلوی کانفیگ تست در handlers_user.py)."""
     await _send_individual_configs(bot, user_tg_id, links, db=db)
@@ -520,7 +558,7 @@ async def deliver_config_to_user(
 ) -> None:
     """
     تحویل هر سرویس در یک پیام با بخش جداگانهٔ کانفیگ‌ها و ساب و دکمه‌های کپی.
-    متن کوتاه روی QR، متن تا ۴۰۹۶ کاراکتر در پیام متنی و متن بزرگ‌تر در فایل می‌آید.
+    برای متن بلند، QR و اطلاعات اتصال در دو پیام ارسال می‌شوند؛ متن بسیار بلند در فایل می‌آید.
     links می‌تواند یک لینک تکی (str) یا لیستی از لینک‌ها باشد (خرید با تعداد بیشتر از ۱)؛
     در حالت لیست، برای هر کانفیگ یک پیام جدا (با شماره‌ی خودش) ارسال می‌شود.
 
@@ -544,21 +582,23 @@ async def deliver_config_to_user(
         from delivery_copy import delivery_copy_markup
         body = '\n\n'.join([caption] + extras)
         buttons = None if is_test else delivery_copy_markup(body)
+        long_body = _visible_len(body) > CAPTION_LIMIT
+        try:
+            qr_link = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link) if db is not None else link
+            qr_photo = _build_qr_photo(qr_link, db=db)
+            await bot.send_photo(user_tg_id, qr_photo, caption=localized('📱 کد QR لینک اتصال', db, user_tg_id) if long_body else body,
+                                 parse_mode='HTML', reply_markup=None if long_body else buttons)
+        except Exception:
+            if not long_body:
+                await _send_html(bot, user_tg_id, body, reply_markup=buttons)
         if _visible_len(body) > 4096:
             document = BufferedInputFile(strip_html(body).encode('utf-8'), filename='configs.txt')
             await bot.send_document(user_tg_id, document, caption=localized('📎 همهٔ لینک‌های اتصال در فایل پیوست قرار دارند.', db, user_tg_id), reply_markup=buttons)
-        elif _visible_len(body) > CAPTION_LIMIT:
+        elif long_body:
             await _send_html(bot, user_tg_id, body, reply_markup=buttons)
-        else:
-            try:
-                qr_link = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link) if db is not None else link
-                qr_photo = _build_qr_photo(qr_link, db=db)
-                await bot.send_photo(user_tg_id, qr_photo, caption=body, parse_mode='HTML', reply_markup=buttons)
-            except Exception:
-                await _send_html(bot, user_tg_id, body, reply_markup=buttons)
 
     post_text = get_post_delivery_text(db, is_test=is_test)
-    summary = localized(build_summary_text(final_price, total if summary_count is None else summary_count), db, user_tg_id) if final_price is not None else ''
+    summary = localized(await order_payment_summary(db, user_tg_id, order_id, final_price, total if summary_count is None else summary_count), db, user_tg_id) if final_price is not None else ''
     guide = '\n\n'.join(part for part in (summary, post_text) if part) or '✅ کانفیگ شما آماده استفاده است.'
     markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🏠 بازگشت به منو', callback_data='trial:main_menu')]])
     try:

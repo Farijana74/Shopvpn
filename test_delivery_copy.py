@@ -71,7 +71,7 @@ class DeliveryCopyTests(unittest.IsolatedAsyncioTestCase):
     async def test_medium_purchase_keeps_all_links_in_one_message(self):
         configs=['vless://'+str(i)+'a'*160 for i in range(10)]
         bot=await self.purchase(configs)
-        bot.send_photo.assert_not_awaited()
+        bot.send_photo.assert_awaited_once()
         self.assertEqual(bot.send_message.await_count,2) # one delivery, one existing guide
         body=bot.send_message.await_args_list[0].args[1]
         self.assertLessEqual(_visible_len(body),4096)
@@ -81,7 +81,7 @@ class DeliveryCopyTests(unittest.IsolatedAsyncioTestCase):
     async def test_huge_purchase_is_one_complete_file_not_broken_messages(self):
         configs=['vless://'+str(i)+'a'*200 for i in range(30)]
         bot=await self.purchase(configs)
-        bot.send_photo.assert_not_awaited()
+        bot.send_photo.assert_awaited_once()
         bot.send_document.assert_awaited_once()
         document=bot.send_document.await_args.args[1]
         content=document.data.decode()
@@ -121,7 +121,7 @@ class DeliveryCopyTests(unittest.IsolatedAsyncioTestCase):
              patch('admin_panel.config_delivery_web.tg_send_photo',new=AsyncMock()) as photo, \
              patch('admin_panel.config_delivery_web.tg_send',new=AsyncMock(return_value=True)) as send:
             await deliver_config_to_user_web(1,'سرویس','https://example.invalid/sub',bot_token='test')
-        photo.assert_not_awaited()
+        photo.assert_awaited_once()
         self.assertEqual(send.await_count,2)
         call=send.await_args_list[0]
         self.assertIn('https://example.invalid/sub',call.args[2])
@@ -145,9 +145,13 @@ class DeliveryCopyTests(unittest.IsolatedAsyncioTestCase):
         configs=['vless://'+str(i)+'a'*200 for i in range(30)]
         caption,extras=self.layout(configs)
         with patch('admin_panel.config_delivery_web.prepare_delivery',new=AsyncMock(return_value=(caption,extras))), \
+             patch('admin_panel.config_delivery_web.build_qr_bytes',return_value=b'png') as qr, \
+             patch('admin_panel.config_delivery_web.tg_send_photo',new=AsyncMock(return_value=True)) as photo, \
              patch('admin_panel.config_delivery_web.tg_send_document',new=AsyncMock(return_value=True)) as document, \
              patch('admin_panel.config_delivery_web.tg_send',new=AsyncMock(return_value=True)) as send:
             await deliver_config_to_user_web(1,'سرویس','https://example.invalid/sub',bot_token='test')
+        photo.assert_awaited_once()
+        self.assertEqual(qr.call_args.args[0],'https://example.invalid/sub')
         document.assert_awaited_once()
         content=document.await_args.args[2].decode()
         self.assertTrue(all(c in content for c in configs))
@@ -159,9 +163,11 @@ class DeliveryCopyTests(unittest.IsolatedAsyncioTestCase):
         configs=['vless://'+str(i)+'a'*160 for i in range(10)]
         bot=AsyncMock()
         with patch('trial_delivery.collect_service_info',new=AsyncMock(return_value={'configs':configs})), \
-             patch('trial_delivery.dedicated_sub.dedicated_link_for_upstream',side_effect=lambda db,url:url):
+             patch('trial_delivery.dedicated_sub.dedicated_link_for_upstream',side_effect=lambda db,url:url), \
+             patch('trial_delivery.build_qr_bytes',return_value=b'png') as qr:
             await send_trial(bot,FakeDB({'deliver_test_individual_configs_enabled':'1'}),1,'https://example.invalid/sub')
-        bot.send_photo.assert_not_awaited()
+        self.assertEqual(qr.call_args.args[0],'https://example.invalid/sub')
+        bot.send_photo.assert_awaited_once()
         bot.send_message.assert_awaited_once()
         body=bot.send_message.await_args.args[1]
         self.assertTrue(all(c in body for c in configs))
@@ -209,3 +215,24 @@ class DeliveryCopyTests(unittest.IsolatedAsyncioTestCase):
              patch('admin_panel.config_delivery_web.tg_send',new=AsyncMock(return_value=True)):
             await deliver_config_to_user_web(1,'تست','https://example.invalid/sub',bot_token='test',is_test=True)
         self.assertIsNone(photo.await_args.kwargs['reply_markup'])
+
+    async def test_qr_failure_does_not_lose_long_purchase_or_copy_buttons(self):
+        configs=['vless://'+str(i)+'a'*160 for i in range(10)]
+        bot=await self.purchase(configs,fail_photo=True)
+        bot.send_photo.assert_awaited_once()
+        body=bot.send_message.await_args_list[0]
+        self.assertTrue(all(c in body.args[1] for c in configs))
+        self.assertIsNotNone(body.kwargs['reply_markup'])
+        self.assertEqual(bot.send_message.await_count,2)
+
+    async def test_trial_qr_uses_dedicated_subscription_not_first_individual_config(self):
+        from test_trial_delivery import FakeDB
+        bot=AsyncMock()
+        db=FakeDB({'deliver_test_individual_configs_enabled':'1'})
+        with patch('trial_delivery.collect_service_info',new=AsyncMock(return_value={'configs':['vless://first']})), \
+             patch('trial_delivery.dedicated_sub.dedicated_link_for_upstream',return_value='https://dedicated.invalid/s/token'), \
+             patch('trial_delivery.build_qr_bytes',return_value=b'png') as qr:
+            await send_trial(bot,db,1,'https://upstream.invalid/sub')
+        self.assertEqual(qr.call_args.args[0],'https://dedicated.invalid/s/token')
+        self.assertIn('vless://first',bot.send_photo.await_args.kwargs['caption'])
+        self.assertIn('https://dedicated.invalid/s/token',bot.send_photo.await_args.kwargs['caption'])

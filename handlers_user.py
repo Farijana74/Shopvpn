@@ -1835,7 +1835,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             if ai_rejected_note:
                 caption += "\n\n" + ai_rejected_note
             elif already_approved:
-                caption += "\n\n✅ این سفارش به‌طور خودکار تایید و کانفیگ ساخته شد (پرداخت کامل از کیف پول)."
+                caption += "\n\n✅ این سفارش به‌طور خودکار تایید و کانفیگ ساخته شد." if order["final_price"] else "\n\n✅ این سفارش به‌طور خودکار تایید و کانفیگ ساخته شد (پرداخت کامل از کیف پول)."
             if not receipt_file_id and not already_approved:
                 caption += "\n\n(بدون نیاز به رسید - مبلغ کاملاً از کیف پول پوشش داده شده)"
             elif receipt_file_id and not already_approved:
@@ -1937,7 +1937,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             if ai_rejected_note:
                 caption += "\n\n" + ai_rejected_note
             elif already_approved:
-                caption += "\n\n✅ این سفارش به‌طور خودکار تایید و سرویس تمدید شد (پرداخت کامل از کیف پول)."
+                caption += "\n\n✅ این سفارش به‌طور خودکار تایید و سرویس تمدید شد." if order["final_price"] else "\n\n✅ این سفارش به‌طور خودکار تایید و سرویس تمدید شد (پرداخت کامل از کیف پول)."
             if not receipt_file_id and not already_approved:
                 caption += "\n\n(بدون نیاز به رسید - مبلغ کاملاً از کیف پول پوشش داده شده)"
             elif receipt_file_id and not already_approved:
@@ -1990,7 +1990,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if ai_rejected_note:
             caption += "\n\n" + ai_rejected_note
         elif already_approved:
-            caption += "\n\n✅ این سفارش به‌طور خودکار تایید و کانفیگ برای کاربر ارسال شد (پرداخت کامل از کیف پول/کد تخفیف)."
+            caption += "\n\n✅ این سفارش به‌طور خودکار تایید و کانفیگ برای کاربر ارسال شد." if order["final_price"] else "\n\n✅ این سفارش به‌طور خودکار تایید و کانفیگ برای کاربر ارسال شد (پرداخت کامل از کیف پول/کد تخفیف)."
 
         if not receipt_file_id and not already_approved:
             caption += "\n\n(بدون نیاز به رسید - مبلغ کاملاً از کیف پول/تخفیف پوشش داده شده)"
@@ -2080,7 +2080,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
         # result == "verified_now"
         if invoice_row["kind"] == "wallet_topup":
-            text = await abangateway_payment.finalize_paid_topup(db, invoice_row["ref_id"])
+            text = await abangateway_payment.finalize_paid_topup(db, invoice_row["ref_id"], bot=bot, payment_method="abangateway")
+        elif invoice_row["kind"] == "reseller_request":
+            from extra_gateway_payment import _finalize_reseller
+            text = await _finalize_reseller(db, bot, invoice_row) or '✅ پرداخت نمایندگی ثبت شد.'
         else:
             text = await abangateway_payment.finalize_paid_order(
                 db, bot, invoice_row["ref_id"], notify_admins_fn=_notify_admins_of_order
@@ -2117,7 +2120,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
         # result == "verified_now"
         if invoice_row["kind"] == "wallet_topup":
-            text = await blupal_payment.finalize_paid_topup(db, invoice_row["ref_id"])
+            text = await blupal_payment.finalize_paid_topup(db, invoice_row["ref_id"], bot=bot, payment_method="blupal")
+        elif invoice_row["kind"] == "reseller_request":
+            from extra_gateway_payment import _finalize_reseller
+            text = await _finalize_reseller(db, bot, invoice_row) or '✅ پرداخت نمایندگی ثبت شد.'
         else:
             text = await blupal_payment.finalize_paid_order(
                 db, bot, invoice_row["ref_id"], notify_admins_fn=_notify_admins_of_order
@@ -2154,7 +2160,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
         # result == "verified_now"
         if invoice_row["kind"] == "wallet_topup":
-            text = await noapay_payment.finalize_paid_topup(db, invoice_row["ref_id"])
+            text = await noapay_payment.finalize_paid_topup(db, invoice_row["ref_id"], bot=bot, payment_method="noapay")
+        elif invoice_row["kind"] == "reseller_request":
+            from extra_gateway_payment import _finalize_reseller
+            text = await _finalize_reseller(db, bot, invoice_row) or '✅ پرداخت نمایندگی ثبت شد.'
         else:
             text = await noapay_payment.finalize_paid_order(
                 db, bot, invoice_row["ref_id"], notify_admins_fn=_notify_admins_of_order
@@ -2202,6 +2211,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             # Keep codes usable even when no gateway can accept the undiscounted amount.
             markup = markup.model_copy(update={'inline_keyboard': [[credit_button]] + markup.inline_keyboard})
         text = f"📦 {escape_html(product['name'])}\n💰 قیمت: {tier['total']:,} تومان\n"
+        wallet_balance = await asyncio.to_thread(db.get_wallet_credit, user_id)
+        text += f'👛 موجودی کیف پول: {wallet_balance:,} تومان\n'
         if users:
             text += f'👥 تعداد کاربر همزمان: {users}\n'
         if tier['amount']:
@@ -2724,7 +2735,12 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if order["discount_amount"]:
             intro_lines.append(f"🎟 تخفیف کد: {order['discount_amount']:,} تومان")
         if order["wallet_used"]:
-            intro_lines.append(f"👛 استفاده از کیف پول: {order['wallet_used']:,} تومان")
+            intro_lines.append(f"👛 کسرشده از کیف پول: {order['wallet_used']:,} تومان")
+            try:
+                balance = await asyncio.to_thread(db.get_wallet_credit, call.from_user.id)
+                intro_lines.append(f"👛 موجودی فعلی کیف پول: {balance:,} تومان")
+            except Exception:
+                logging.getLogger('handlers_user').warning('Could not read wallet balance for card details')
         await _send_card2card_details(call.message, intro_lines, order["final_price"])
 
     @router.callback_query(F.data == "pay_card_auto", BuyFlow.waiting_receipt)
@@ -2749,7 +2765,12 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if order["discount_amount"]:
             intro_lines.append(f"🎟 تخفیف کد: {order['discount_amount']:,} تومان")
         if order["wallet_used"]:
-            intro_lines.append(f"👛 استفاده از کیف پول: {order['wallet_used']:,} تومان")
+            intro_lines.append(f"👛 کسرشده از کیف پول: {order['wallet_used']:,} تومان")
+            try:
+                balance = await asyncio.to_thread(db.get_wallet_credit, call.from_user.id)
+                intro_lines.append(f"👛 موجودی فعلی کیف پول: {balance:,} تومان")
+            except Exception:
+                logging.getLogger('handlers_user').warning('Could not read wallet balance for card details')
         await _send_card_auto_details(
             call.message, intro_lines, "order", order_id, call.from_user.id, order["final_price"],
         )

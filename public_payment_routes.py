@@ -123,7 +123,7 @@ def public_payment_router(resolve_tenant, include_callbacks=True):
         try:
             async with Bot(tenant.bot_token) as bot:
                 if invoice['kind'] == 'wallet_topup':
-                    text = await blupal_payment.finalize_paid_topup(db, invoice['ref_id'])
+                    text = await blupal_payment.finalize_paid_topup(db, invoice['ref_id'], bot=bot, payment_method='blupal')
                     await bot.send_message(invoice['user_id'], text)
                 elif invoice['kind'] == 'reseller_request':
                     from extra_gateway_payment import _finalize_reseller

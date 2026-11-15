@@ -2650,6 +2650,8 @@ async def api_abangateway_webhook(request: Request, tenant: Tenant = Depends(get
         return {"status": "ok"}
 
     if order["is_custom_config"]:
+        from online_payment_reports import order_payment_pending_raw
+        await order_payment_pending_raw(db, tenant.bot_token, order_id, order, 'آبان‌گیت‌وی')
         # ساخت کانفیگ شخصی نیازمند panel provider است که در این سرور مستقل هم در
         # دسترس است؛ برای سادگی و یکسان بودن با مسیر «بررسی دستی» در بات، همان
         # منطق مشترک abangateway_payment.finalize_paid_order استفاده می‌شود، اما
@@ -2930,6 +2932,8 @@ async def api_blupal_webhook(request: Request, tenant: Tenant = Depends(get_tena
         return {"status": "ok"}
 
     if order["is_custom_config"]:
+        from online_payment_reports import order_payment_pending_raw
+        await order_payment_pending_raw(db, tenant.bot_token, order_id, order, 'بلوپال')
         # ساخت کانفیگ شخصی نیازمند panel provider است که در این سرور مستقل هم در
         # دسترس است؛ برای سادگی و یکسان بودن با مسیر «بررسی دستی» در بات، همان
         # منطق مشترک blupal_payment.finalize_paid_order استفاده می‌شود، اما
@@ -3766,6 +3770,8 @@ async def _complete_reseller_gateway_payment(db: Database, tenant: "Tenant", inv
     req = await asyncio.to_thread(db.get_reseller_request, request_id)
     if not req:
         return False
+    from online_payment_reports import reseller_completed_raw
+    await reseller_completed_raw(db, tenant.bot_token, request_id, invoice)
     tier = await asyncio.to_thread(db.get_reseller_tier, req["tier_code"]) if req["tier_code"] else None
     label = f"{tier['icon']} {tier['title']}" if tier else "نمایندگی"
     if req["status"] == "completed":
@@ -3852,6 +3858,8 @@ async def _complete_generic_gateway_payment(db: Database, tenant: "Tenant", invo
         return
 
     if order["is_custom_config"]:
+        from online_payment_reports import order_payment_pending_raw
+        await order_payment_pending_raw(db, tenant.bot_token, order_id, order, 'درگاه یا کارت خودکار')
         await _notify(
             order["user_id"],
             "✅ پرداخت شما تایید شد!\nبرای دریافت کانفیگ شخصی، به بات برگرد و روی دکمه‌ی "

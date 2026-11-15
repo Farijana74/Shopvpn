@@ -7,10 +7,12 @@
 (از طریق admin_panel.telegram_notify) کار می‌کند.
 """
 
-from config_delivery import build_qr_bytes, build_summary_text, get_post_delivery_text, prepare_delivery, strip_html
+from config_delivery import build_qr_bytes, order_payment_summary, get_post_delivery_text, prepare_delivery, strip_html
 from admin_panel.telegram_notify import send_message as tg_send, send_photo as tg_send_photo, send_document_bytes as tg_send_document
 from delivery_copy import delivery_copy_markup
 from config_delivery import _visible_len
+import asyncio
+import dedicated_sub
 from config import BOT_TOKEN
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 
@@ -118,24 +120,27 @@ async def deliver_config_to_user_web(
         body = '\n\n'.join([caption] + extras)
         buttons = None if is_test else delivery_copy_markup(body)
         markup = buttons.model_dump(mode='json', exclude_none=True) if buttons else None
+        long_body = _visible_len(body) > 1024
+        sent = False
+        try:
+            qr_link = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link) if db is not None else link
+            qr_bytes = build_qr_bytes(qr_link, db=db)
+            sent = await tg_send_photo(bot_token, user_tg_id, qr_bytes, 'config_qr.png',
+                                       '📱 کد QR لینک اتصال' if long_body else body,
+                                       parse_mode='HTML', reply_markup=None if long_body else markup)
+        except Exception:
+            sent = False
+        if not sent and not long_body:
+            await _send_html(body, reply_markup=markup)
         if _visible_len(body) > 4096:
             if not await tg_send_document(bot_token, user_tg_id, strip_html(body).encode('utf-8'), 'configs.txt',
                                           '📎 همهٔ لینک‌های اتصال در فایل پیوست قرار دارند.', reply_markup=markup):
                 raise RuntimeError('Sending configuration document failed')
-        elif _visible_len(body) > 1024:
+        elif long_body:
             await _send_html(body, reply_markup=markup)
-        else:
-            sent = False
-            try:
-                qr_bytes = build_qr_bytes(link, db=db)
-                sent = await tg_send_photo(bot_token, user_tg_id, qr_bytes, 'config_qr.png', body, parse_mode='HTML', reply_markup=markup)
-            except Exception:
-                sent = False
-            if not sent:
-                await _send_html(body, reply_markup=markup)
 
     post_text = get_post_delivery_text(db, is_test=is_test)
-    summary = build_summary_text(final_price, total) if final_price is not None else ''
+    summary = await order_payment_summary(db, user_tg_id, order_id, final_price, total) if final_price is not None else ''
     guide = '\n\n'.join(part for part in (summary, post_text) if part) or '✅ کانفیگ شما آماده استفاده است.'
     markup = {'inline_keyboard': [[{'text': '🏠 بازگشت به منو', 'callback_data': 'trial:main_menu'}]]}
     if not await tg_send(bot_token, user_tg_id, guide, parse_mode='HTML', reply_markup=markup):

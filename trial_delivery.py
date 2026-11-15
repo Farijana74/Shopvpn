@@ -41,7 +41,6 @@ async def send_trial(bot, db, user_id, links, *, plan_name='', amount='', userna
                     continue
             link = await asyncio.to_thread(dedicated_sub.dedicated_link_for_upstream, db, link)
         visible_links.append(prefix_uri(link, prefix))
-    qr_link = visible_links[0]
     lines = ['🧪 <b>کانفیگ تست شما آماده است</b>']
     if plan_name:
         lines.append(f'📦 پلن: {html.escape(str(plan_name))}')
@@ -53,6 +52,7 @@ async def send_trial(bot, db, user_id, links, *, plan_name='', amount='', userna
     configs = [link for link in visible_links if not link.startswith(('http://', 'https://', 'happ://'))]
     subscriptions = [link for link in visible_links if link.startswith(('http://', 'https://'))]
     happs = [link for link in visible_links if link.startswith('happ://')]
+    qr_link = subscriptions[0] if subscriptions else visible_links[0]
     sections = link_sections(configs, subscriptions, happs, code_links=True)
     if sections:
         caption += '\n\n' + sections
@@ -68,23 +68,26 @@ async def send_trial(bot, db, user_id, links, *, plan_name='', amount='', userna
         [InlineKeyboardButton(text='🏠 بازگشت به منو', callback_data='trial:main_menu')],
     ])
     buttons = back
+    long_body = _length(caption) > 1024
+    try:
+        qr = await asyncio.to_thread(build_qr_bytes, qr_link, db)
+        try:
+            await bot.send_photo(user_id, BufferedInputFile(qr, filename='test-qr.png'),
+                                 caption='🧪 کد QR لینک تست' if long_body else caption,
+                                 parse_mode='HTML', reply_markup=None if long_body else buttons)
+        except Exception:
+            await bot.send_photo(user_id, BufferedInputFile(qr, filename='test-qr.png'),
+                                 caption='🧪 کد QR لینک تست' if long_body else strip_html(caption),
+                                 parse_mode=None, reply_markup=None if long_body else buttons)
+    except Exception:
+        logging.getLogger(__name__).warning('Could not send test QR for user %s; sending text instead', user_id, exc_info=True)
+        if not long_body:
+            await bot.send_message(user_id, strip_html(caption), parse_mode=None, reply_markup=buttons)
     if _length(caption) > 4096:
         await bot.send_document(user_id, BufferedInputFile(strip_html(caption).encode('utf-8'), filename='test-configs.txt'),
                                 caption='🧪 همهٔ لینک‌های کانفیگ تست در فایل پیوست قرار دارند.', reply_markup=buttons)
-    elif _length(caption) > 1024:
+    elif long_body:
         try:
             await bot.send_message(user_id, caption, parse_mode='HTML', reply_markup=buttons)
         except Exception:
-            await bot.send_message(user_id, strip_html(caption), parse_mode=None, reply_markup=buttons)
-    else:
-        try:
-            qr = await asyncio.to_thread(build_qr_bytes, qr_link, db)
-            try:
-                await bot.send_photo(user_id, BufferedInputFile(qr, filename='test-qr.png'), caption=caption,
-                                     parse_mode='HTML', reply_markup=buttons)
-            except Exception:
-                await bot.send_photo(user_id, BufferedInputFile(qr, filename='test-qr.png'), caption=strip_html(caption),
-                                     parse_mode=None, reply_markup=buttons)
-        except Exception:
-            logging.getLogger(__name__).warning('Could not send test QR for user %s; sending text instead', user_id, exc_info=True)
             await bot.send_message(user_id, strip_html(caption), parse_mode=None, reply_markup=buttons)

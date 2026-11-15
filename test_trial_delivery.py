@@ -30,12 +30,12 @@ class TrialDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r[0].callback_data for r in rows if r[0].callback_data in ('trial:help','trial:main_menu')], ['trial:help', 'trial:main_menu'])
         self.assertTrue(all(b.copy_text is None and b.web_app is None for row in rows for b in row))
 
-    async def test_long_link_is_delivered_in_one_text_message(self):
+    async def test_long_link_has_qr_and_one_text_message(self):
         bot = AsyncMock()
         link = 'happ://crypt5/' + 'a' * 1100
         with patch('trial_delivery.build_qr_bytes', return_value=b'png'):
             await send_trial(bot, FakeDB(), 42, link)
-        bot.send_photo.assert_not_awaited()
+        bot.send_photo.assert_awaited_once()
         bot.send_message.assert_awaited_once()
         self.assertIn(link, bot.send_message.await_args.args[1])
         self.assertEqual(bot.send_message.await_args.kwargs['reply_markup'].inline_keyboard[-1][0].callback_data, 'trial:main_menu')
@@ -48,6 +48,17 @@ class TrialDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('vless://individual', bot.send_photo.await_args.kwargs['caption'])
         self.assertNotIn('https://example.invalid/sub', bot.send_photo.await_args.kwargs['caption'])
 
+
+    async def test_long_trial_is_delivered_when_photo_send_fails(self):
+        bot = AsyncMock()
+        bot.send_photo.side_effect = RuntimeError('photo unavailable')
+        link = 'happ://crypt5/' + 'a' * 1100
+        with patch('trial_delivery.build_qr_bytes', return_value=b'png'):
+            await send_trial(bot, FakeDB(), 42, link)
+        self.assertEqual(bot.send_photo.await_count, 2)
+        bot.send_message.assert_awaited_once()
+        self.assertIn(link, bot.send_message.await_args.args[1])
+        self.assertEqual(bot.send_message.await_args.kwargs['reply_markup'].inline_keyboard[-1][0].callback_data, 'trial:main_menu')
 
 class TrialButtonsTests(unittest.TestCase):
     from test_managed_resellers import ManagedAgencyTests as fixture
