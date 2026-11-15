@@ -1398,7 +1398,7 @@ class TestConfigClaim(BaseModel):
 async def api_test_config_status(auth=Depends(get_verified_user)):
     tg_id, db, _ = auth
     user = db.get_user(tg_id)
-    used = bool(user and user["test_used"] >= MAX_TEST_PER_USER)
+    used = not await asyncio.to_thread(db.can_request_test,tg_id)
     link = None
     if db.get_setting('managed_reseller_bot_id',''):
         from managed_trials import trial_policy
@@ -1485,7 +1485,7 @@ async def api_test_config_claim(payload: TestConfigClaim, auth=Depends(require_j
         rendered=[link if link.startswith('happ://') else dedicated_sub.dedicated_link_for_upstream(db,link) for link in links]
         return {'link':rendered[0],'links':rendered}
     user = db.get_user(tg_id)
-    if user and user["test_used"] >= MAX_TEST_PER_USER:
+    if not await asyncio.to_thread(db.can_request_test,tg_id):
         raise HTTPException(status_code=400, detail=tr("شما قبلاً کانفیگ تست خود را دریافت کرده‌اید."))
 
     is_full_access = db.is_full_access_bot(not bool(tenant.tenant_id))

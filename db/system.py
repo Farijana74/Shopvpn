@@ -345,18 +345,37 @@ class SystemMixin:
         یک درخواست هم‌زمان دیگر مصرف شده (باید رد شود). اگر بعد از رزرو موفق،
         ساخت کانفیگ روی پنل شکست بخورد، صدازننده باید release_test_slot را صدا
         بزند تا این سهمیه به کاربر برگردد."""
-        if not self.get_setting('managed_reseller_bot_id',''):
-            from trial_chain import reserve_standard
-            from managed_resellers import AgencyError
-            if max_allowed<1 or not self.get_user(tg_id):return False
-            try:return reserve_standard(self,tg_id)
-            except AgencyError:return False
-        with self._get_conn() as conn:
-            cur = conn.execute(
-                "UPDATE users SET test_used=test_used+1 WHERE telegram_id=? AND test_used<?",
-                (tg_id, max_allowed),
-            )
-            return cur.rowcount > 0
+        from trial_chain import reserve_standard
+        from managed_resellers import AgencyError
+        if max_allowed < 1 or not self.get_user(tg_id):
+            return False
+        try:
+            return reserve_standard(self,tg_id)
+        except AgencyError:
+            return False
+
+
+    def get_test_quota_status(self, tg_id: int):
+        from trial_chain import quota_status
+        return quota_status(self,tg_id)
+
+
+    def can_request_test(self, tg_id: int) -> bool:
+        from managed_resellers import AgencyError
+        try:
+            status = self.get_test_quota_status(tg_id)
+        except AgencyError:
+            return False
+        return status['remaining'] > 0 and not status['processing']
+
+
+    def grant_extra_test_slots(self, tg_id: int, amount: int, request_key=None):
+        from trial_chain import grant_extra, primary_for
+        root = primary_for(self)
+        try:
+            return grant_extra(root,tg_id,amount,request_key=request_key)
+        finally:
+            if root is not self:root.close()
 
 
     def complete_test_slot(self, tg_id: int):
@@ -370,13 +389,12 @@ class SystemMixin:
         داد)، سهمیه‌ی رزروشده باید برگردد تا کاربر واقعاً بتواند دوباره تلاش کند.
         WHERE test_used>0 جلوی منفی‌شدن را در حالت‌های لبه‌ای (مثل ریست دستی
         همزمانِ ادمین) می‌گیرد."""
-        if not self.get_setting('managed_reseller_bot_id',''):
-            from trial_chain import release_standard
-            if release_standard(self,tg_id):return
-            # A representative's shared reservation must never be released here.
-            with self._get_conn() as conn:
-                table=conn.execute("SELECT 1 FROM sqlite_master WHERE name='chain_trial_claims' AND type='table'").fetchone()
-                if table and conn.execute('SELECT 1 FROM chain_trial_claims WHERE user_id=?',(tg_id,)).fetchone():return
+        from trial_chain import release_standard
+        if release_standard(self,tg_id):return
+        # Do not release another shop's active/shared reservation.
+        with self._get_conn() as conn:
+            table=conn.execute("SELECT 1 FROM sqlite_master WHERE name='chain_trial_claims' AND type='table'").fetchone()
+            if table:return
         with self._get_conn() as conn:
             conn.execute(
                 "UPDATE users SET test_used=test_used-1 WHERE telegram_id=? AND test_used>0", (tg_id,)

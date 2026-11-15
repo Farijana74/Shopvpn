@@ -1,4 +1,4 @@
-"""Root-controlled trials with one durable claim per customer and wallet billing."""
+"""Root-controlled trial quotas with one active claim per customer and wallet billing."""
 import asyncio
 import json
 from managed_resellers import AgencyError
@@ -58,17 +58,17 @@ def configure_panel_trials(root, panel_id, volume_mb, hours, cost):
     return policy
 
 
-def _claim(local,user_id,policy):
+def _claim(local,user_id,policy,allow_new=False):
     billing_id=_billing_product(local) if policy.get('panel_id') else None
     with local._get_conn() as conn:
         old=conn.execute('SELECT * FROM managed_trials WHERE user_id=?',(user_id,)).fetchone()
-        if old and old['status']=='completed':raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر فقط یک بار می‌تواند تست بگیرد.')
+        if old and old['status']=='completed' and not allow_new:raise AgencyError('سهمیهٔ تست شما تمام شده است.')
         if old and old['status']=='processing':
             raise AgencyError('درخواست تست شما در حال پردازش است؛ دوباره درخواست ندهید. اگر متوقف مانده، پشتیبانی باید بررسی کند.')
         product=conn.execute('SELECT id FROM products WHERE id=?',(billing_id,)).fetchone() if billing_id else conn.execute('SELECT id FROM products WHERE upstream_product_id=?',(policy['product_id'],)).fetchone()
         if not product:raise AgencyError('محصول پایه تست هنوز برای این نماینده دریافت نشده است.')
-        changed=conn.execute('UPDATE users SET test_used=test_used+1 WHERE telegram_id=? AND test_used<1',(user_id,)).rowcount
-        if not changed:raise AgencyError('هر کاربر فقط یک بار می‌تواند سرویس تست دریافت کند.')
+        changed=conn.execute('UPDATE users SET test_used=test_used+1 WHERE telegram_id=? AND (test_used<1 OR ?)',(user_id,int(allow_new))).rowcount
+        if not changed:raise AgencyError('سهمیهٔ تست شما تمام شده است.')
         order_id=conn.execute("INSERT INTO orders(user_id,product_id,status,base_price,final_price,quantity,user_limit) VALUES(?,?,'processing',0,0,1,1)",(user_id,product['id'])).lastrowid
         encoded=json.dumps(policy)
         conn.execute("INSERT INTO managed_trials(user_id,order_id,policy,status) VALUES(?,?,?,'processing') ON CONFLICT(user_id) DO UPDATE SET order_id=excluded.order_id,policy=excluded.policy,status='processing'",(user_id,order_id,encoded))
@@ -99,10 +99,10 @@ async def provide_trial(local,user_id):
                             conn.execute("UPDATE custom_configs SET source='test' WHERE order_id=?",(purchase['root_order_id'],))
                     if purchase:
                         await asyncio.to_thread(chain_complete,root,user_id,local.db_path)
-                        raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر فقط یک بار می‌تواند تست بگیرد.')
+                        raise AgencyError('سهمیهٔ تست شما تمام شده است.')
             if recorded and recorded['status']=='completed':
-                raise AgencyError('شما قبلاً تست خود را دریافت کرده‌اید؛ هر کاربر فقط یک بار می‌تواند تست بگیرد.')
-        try:claim=await asyncio.to_thread(_claim,local,user_id,policy)
+                raise AgencyError('سهمیهٔ تست شما تمام شده است.')
+        try:claim=await asyncio.to_thread(_claim,local,user_id,policy,acquired)
         except Exception:
             if acquired:await asyncio.to_thread(chain_release,root,user_id,local.db_path)
             raise

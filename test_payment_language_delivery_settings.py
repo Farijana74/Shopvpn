@@ -80,8 +80,12 @@ class DeliverySettingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_delivery_flags(db),(True,True))
         self.assertEqual(_delivery_flags(db,is_test=True),(True,False))
 
-    async def test_legacy_trial_layout_is_preserved_until_explicitly_configured(self):
+    async def test_trial_inherits_enabled_individual_setting_without_skipping_extraction(self):
         text,info=await self.send(SettingsDB())
+        info.assert_awaited_once_with('https://example.invalid/sub', include_info=False)
+        self.assertIn('vless://test',text)
+        self.assertIn('https://example.invalid/sub',text)
+        text,info=await self.send(SettingsDB({'deliver_individual_configs_enabled':'0'}))
         info.assert_not_awaited()
         self.assertNotIn('vless://test',text)
         text,info=await self.send(SettingsDB({'deliver_sub_link_enabled':'0'}))

@@ -26,34 +26,96 @@ def historical_shops(root,user_id):
     return used
 
 
+def _quota_schema(conn):
+    conn.execute('CREATE TABLE IF NOT EXISTS chain_trial_claims(user_id INTEGER PRIMARY KEY,owner TEXT NOT NULL,status TEXT NOT NULL,extra_used INTEGER NOT NULL DEFAULT 0)')
+    if 'extra_used' not in {r[1] for r in conn.execute('PRAGMA table_info(chain_trial_claims)')}:
+        conn.execute('ALTER TABLE chain_trial_claims ADD COLUMN extra_used INTEGER NOT NULL DEFAULT 0')
+    conn.execute('CREATE TABLE IF NOT EXISTS trial_allowances(user_id INTEGER PRIMARY KEY,remaining INTEGER NOT NULL DEFAULT 0 CHECK(remaining>=0))')
+    conn.execute('CREATE TABLE IF NOT EXISTS trial_allowance_grants(request_key TEXT PRIMARY KEY,user_id INTEGER NOT NULL,amount INTEGER NOT NULL)')
+
+
+def grant_extra(root,user_id,amount,request_key=None):
+    if isinstance(amount,bool) or not isinstance(amount,int) or not 1 <= amount <= 1000000:
+        raise ValueError('تعداد تست اضافه باید عددی بین ۱ و ۱۰۰۰۰۰۰ باشد.')
+    if not isinstance(user_id,int) or isinstance(user_id,bool) or user_id <= 0:
+        raise ValueError('آیدی عددی کاربر معتبر نیست.')
+    with root._get_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _quota_schema(conn)
+        old=conn.execute('SELECT user_id,amount FROM trial_allowance_grants WHERE request_key=?',(request_key,)).fetchone() if request_key else None
+        if old and (old['user_id']!=user_id or old['amount']!=amount):
+            raise ValueError('این درخواست قبلاً برای سهمیهٔ دیگری ثبت شده است.')
+        if not old:
+            conn.execute('INSERT INTO trial_allowances(user_id,remaining) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET remaining=remaining+excluded.remaining',(user_id,amount))
+            if request_key:conn.execute('INSERT INTO trial_allowance_grants(request_key,user_id,amount) VALUES(?,?,?)',(request_key,user_id,amount))
+        return conn.execute('SELECT remaining FROM trial_allowances WHERE user_id=?',(user_id,)).fetchone()[0]
+
+
+def quota_status(local,user_id):
+    root=primary_for(local)
+    try:
+        history=historical_shops(root,user_id)
+        with root._get_conn() as conn:
+            tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            old=conn.execute('SELECT status FROM chain_trial_claims WHERE user_id=?',(user_id,)).fetchone() if 'chain_trial_claims' in tables else None
+            extra=conn.execute('SELECT remaining FROM trial_allowances WHERE user_id=?',(user_id,)).fetchone() if 'trial_allowances' in tables else None
+            user=conn.execute('SELECT test_used FROM users WHERE telegram_id=?',(user_id,)).fetchone()
+        local_user=local.get_user(user_id)
+        processing=bool(old and old['status']=='processing')
+        used=bool(old or history or (user and user[0]) or (local_user and local_user['test_used']))
+        bonus=int(extra[0]) if extra else 0
+        return dict(remaining=bonus+int(not used),extra_remaining=bonus,processing=processing)
+    finally:
+        if root is not local:root.close()
+
+
 def claim(root,user_id,owner,allow_retry=False):
     owner=os.path.abspath(owner)
     try:history=historical_shops(root,user_id)
     except sqlite3.Error as exc:raise AgencyError('بررسی سوابق تست ممکن نشد؛ دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.') from exc
     with root._get_conn() as conn:
-        conn.execute('CREATE TABLE IF NOT EXISTS chain_trial_claims(user_id INTEGER PRIMARY KEY,owner TEXT NOT NULL,status TEXT NOT NULL)')
         conn.execute('BEGIN IMMEDIATE')
+        _quota_schema(conn)
         old=conn.execute('SELECT owner,status FROM chain_trial_claims WHERE user_id=?',(user_id,)).fetchone()
-        if old:
-            if allow_retry and old['owner']==owner:return False
-            raise AgencyError('شما قبلاً تست دریافت کرده‌اید یا درخواست تست شما در حال پردازش است.')
+        extra=conn.execute('SELECT remaining FROM trial_allowances WHERE user_id=?',(user_id,)).fetchone()
+        bonus=int(extra[0]) if extra else 0
         root_user=conn.execute('SELECT test_used FROM users WHERE telegram_id=?',(user_id,)).fetchone()
-        if (root_user and root_user[0]) or history-{owner} or (history and not allow_retry):
-            previous=os.path.abspath(root.db_path) if root_user and root_user[0] else sorted(history)[0]
-            conn.execute("INSERT INTO chain_trial_claims(user_id,owner,status) VALUES(?,?,'completed')",(user_id,previous))
+        previous=bool(old or (root_user and root_user[0]) or history)
+        if old and old['status']=='processing':
+            if allow_retry and old['owner']==owner:return False
+            raise AgencyError('درخواست تست شما در حال پردازش است؛ لطفاً منتظر بمانید.')
+        if previous and bonus<=0:
+            if old:
+                if allow_retry and old['owner']==owner:return False
+                raise AgencyError('سهمیهٔ تست شما تمام شده است.')
+            previous_owner=os.path.abspath(root.db_path) if root_user and root_user[0] else sorted(history)[0]
+            conn.execute("INSERT INTO chain_trial_claims(user_id,owner,status) VALUES(?,?,'completed')",(user_id,previous_owner))
             conn.commit()
             raise AgencyError('شما قبلاً تست رایگان دریافت کرده‌اید.')
+        use_extra=int(previous)
+        if use_extra:
+            conn.execute('UPDATE trial_allowances SET remaining=remaining-1 WHERE user_id=? AND remaining>0',(user_id,))
         conn.execute('UPDATE users SET test_used=test_used+1 WHERE telegram_id=?',(user_id,))
-        conn.execute("INSERT INTO chain_trial_claims(user_id,owner,status) VALUES(?,?,?)",(user_id,owner,'completed' if history else 'processing'))
-    return not bool(history)
+        conn.execute("INSERT INTO chain_trial_claims(user_id,owner,status,extra_used) VALUES(?,?,'processing',?) ON CONFLICT(user_id) DO UPDATE SET owner=excluded.owner,status='processing',extra_used=excluded.extra_used",(user_id,owner,use_extra))
+    return True
 
 
 def release(root,user_id,owner):
     with root._get_conn() as conn:
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chain_trial_claims'").fetchone()
         if not exists:return False
-        deleted=conn.execute("DELETE FROM chain_trial_claims WHERE user_id=? AND owner=? AND status='processing'",(user_id,os.path.abspath(owner))).rowcount
-        if deleted:conn.execute('UPDATE users SET test_used=MAX(test_used-1,0) WHERE telegram_id=?',(user_id,))
+        conn.execute('BEGIN IMMEDIATE')
+        _quota_schema(conn)
+        record=conn.execute("SELECT extra_used FROM chain_trial_claims WHERE user_id=? AND owner=? AND status='processing'",(user_id,os.path.abspath(owner))).fetchone()
+        if record and record['extra_used']:
+            # Preserve the earlier successful trial when rolling back an extra one.
+            deleted=conn.execute("UPDATE chain_trial_claims SET status='completed',extra_used=0 WHERE user_id=? AND owner=? AND status='processing'",(user_id,os.path.abspath(owner))).rowcount
+        else:
+            deleted=conn.execute("DELETE FROM chain_trial_claims WHERE user_id=? AND owner=? AND status='processing'",(user_id,os.path.abspath(owner))).rowcount
+        if deleted:
+            conn.execute('UPDATE users SET test_used=MAX(test_used-1,0) WHERE telegram_id=?',(user_id,))
+            if record and record['extra_used']:
+                conn.execute('INSERT INTO trial_allowances(user_id,remaining) VALUES(?,1) ON CONFLICT(user_id) DO UPDATE SET remaining=remaining+1',(user_id,))
         return bool(deleted)
 
 
@@ -83,7 +145,7 @@ def reserve_standard(local,user_id):
         acquired=claim(root,user_id,local.db_path)
         if root is not local:
             with local._get_conn() as conn:
-                changed=conn.execute('UPDATE users SET test_used=test_used+1 WHERE telegram_id=? AND test_used<1',(user_id,)).rowcount
+                changed=conn.execute('UPDATE users SET test_used=test_used+1 WHERE telegram_id=?',(user_id,)).rowcount
             if not changed:
                 if acquired:release(root,user_id,local.db_path)
                 return False

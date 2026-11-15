@@ -64,6 +64,7 @@ inbound (list / get) در هر دو نسخه هنوز کار می‌کنند، �
   inbound ها امن است.
 """
 import json
+import logging
 import secrets
 import time
 import uuid
@@ -200,6 +201,21 @@ class ThreeXUIProvider(BasePanelProvider):
 
         sub_url = f"{sub_base_url.rstrip('/')}/{sub_id}"
         return PanelUserResult(username=username, subscription_url=sub_url, raw=client)
+
+    async def get_client_links(self, username: str) -> list:
+        """Read ready-made links from the panel's authenticated client API."""
+        async with self._session() as session:
+            async with session.get(f"{self._base_url()}/panel/api/clients/links/{quote(str(username), safe='')}") as response:
+                if response.status != 200:
+                    logging.getLogger(__name__).warning('3xui client-links endpoint returned HTTP %s', response.status)
+                    return []
+                data = await response.json()
+        if not isinstance(data, dict) or data.get('success') is not True:
+            return []
+        links = data.get('obj')
+        if isinstance(links, dict):
+            links = links.get('links')
+        return links if isinstance(links, list) else []
 
     async def get_happ_link(self, username: str) -> str:
         """لینک Happ را فقط از API رسمی 3X-UI می‌گیرد؛ هیچ سرویس خارجی فراخوانی نمی‌شود."""

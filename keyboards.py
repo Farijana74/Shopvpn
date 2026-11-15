@@ -17,6 +17,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     WebAppInfo,
+    CopyTextButton,
 )
 
 import extra_gateway_registry
@@ -937,11 +938,29 @@ def reseller_payment_choice_kb(db, methods) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text=tr("❌ انصراف"), callback_data="resreq_cancel_payment")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+def card_payment_copy_kb(card_number, amount_rial, *, invoice_id=None, sheba=None) -> InlineKeyboardMarkup:
+    """Copy raw bank details; amount is already in rial (including invoice suffix)."""
+    import unicodedata
+    card = "".join(str(unicodedata.decimal(c)) for c in str(card_number or "") if c.isdecimal())
+    rows = [[
+        InlineKeyboardButton(text=tr("📋 کپی شماره کارت"), copy_text=CopyTextButton(text=card)),
+        InlineKeyboardButton(text=tr("📋 کپی مبلغ به ریال"), copy_text=CopyTextButton(text=str(int(amount_rial)))),
+    ]]
+    if sheba:
+        rows.append([InlineKeyboardButton(text=tr("📋 کپی شماره شبا"), copy_text=CopyTextButton(text=sheba))])
+    if invoice_id is None:
+        rows.append([InlineKeyboardButton(text=tr("📤 ارسال رسید"), callback_data="card:send_receipt", style="success")])
+    if invoice_id is not None:
+        rows.append([InlineKeyboardButton(text=tr("🔄 بررسی وضعیت پرداخت"), callback_data=f"check_c2c:{invoice_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def card_settings_kb(db) -> InlineKeyboardMarkup:
     """منوی تنظیمات پرداخت کارت‌به‌کارت (دستی): نمایش شماره کارت فعلی، وضعیت
     فعال/غیرفعال و دکمه‌های تغییر."""
     card_number = db.get_setting("card_number") or "-"
     card_holder = db.get_setting("card_holder") or "-"
+    sheba = db.get_setting("card_sheba", "") or "تنظیم نشده"
     enabled = db.get_setting("card_to_card_enabled", "1") == "1"
     ai_check_enabled = db.get_setting("receipt_ai_check_enabled", "1") == "1"
     ai_auto_reject_enabled = db.get_setting("receipt_ai_auto_reject_enabled", "1") == "1"
@@ -967,6 +986,8 @@ def card_settings_kb(db) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=tr(f"👤 به نام: {card_holder}"), callback_data="noop")],
         [InlineKeyboardButton(text=toggle_text, callback_data="adm_card_toggle")],
         [InlineKeyboardButton(text=tr("✏️ تغییر شماره کارت / صاحب حساب"), callback_data="adm_set_card_edit")],
+        [InlineKeyboardButton(text=tr(f"🏦 شماره شبا: {sheba}"), callback_data="noop")],
+        [InlineKeyboardButton(text=tr("✏️ تنظیم / حذف شماره شبا"), callback_data="adm_set_card_sheba")],
         [InlineKeyboardButton(text=tr("🔒 شرط نمایش شماره کارت"), callback_data="adm_cardgate")],
         [InlineKeyboardButton(text=tr(f"🤖 بررسی هوشمند رسید (AI): {'🟢 روشن' if ai_check_enabled else '🔴 خاموش'}"), callback_data="noop")],
         [InlineKeyboardButton(text=tr(ai_toggle_text), callback_data="adm_receipt_ai_toggle")],
@@ -2616,6 +2637,7 @@ def admin_lang_scope_kb(db=None) -> InlineKeyboardMarkup:
 def user_full_stats_kb(tg_id: int, is_blocked: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=tr("📜 ریز تراکنش‌ها"), callback_data=f"adm_user_tx:{tg_id}:all:0")],
+        [InlineKeyboardButton(text=tr("🧪 افزودن سهمیهٔ تست"), callback_data=f"adm_user_trial_quota:{tg_id}")],
         [InlineKeyboardButton(text=tr("📦 لیست کامل کانفیگ‌های این کاربر"), callback_data=f"adm_user_configs:{tg_id}")],
         [InlineKeyboardButton(text=tr("🛠 مدیریت تک‌تک کانفیگ‌ها"), callback_data=f"adm_user_cfglist:{tg_id}")],
         [InlineKeyboardButton(text=tr("👥 زیرمجموعه‌های این کاربر"), callback_data=f"adm_user_refs:{tg_id}")],
@@ -3251,6 +3273,8 @@ def admin_test_menu_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
             text=tr(f"🗄 بانک لینک دستی (قدیمی) - موجودی: {remaining}"), callback_data="adm_test_add",
         )])
 
+    if is_main_bot:
+        rows.append([InlineKeyboardButton(text=tr("🧪 افزودن سهمیهٔ تست یک کاربر"), callback_data="adm_test_quota")])
     rows.append([InlineKeyboardButton(text=tr("🔁 بازنشانی کانفیگ تست برای همه"), callback_data="adm_reset_test_configs")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:products")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

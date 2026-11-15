@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>کپی لینک‌ها</title>
+<style>
+body{font:16px sans-serif;background:#111827;color:#f9fafb;margin:0;padding:24px;line-height:1.8}main{max-width:720px;margin:auto}textarea{box-sizing:border-box;width:100%;min-height:240px;padding:16px;border:1px solid #475569;border-radius:12px;background:#1e293b;color:#f9fafb;direction:ltr;text-align:left;font:14px monospace}button{width:100%;padding:14px;margin:16px 0;border:0;border-radius:12px;background:#16a34a;color:white;font:inherit;cursor:pointer}button:disabled{opacity:.5}#status{min-height:2em}
+</style>
+<script src="copy-links.js" defer></script>
+</head>
+<body><main>
+<h1>کپی لینک‌ها</h1>
+<p>با دکمهٔ زیر، تمام محتوای کادر یکجا کپی می‌شود.</p>
+<textarea id="links" readonly aria-label="لینک‌های اتصال" spellcheck="false"></textarea>
+<button id="copy" type="button" disabled>📋 کپی همه</button>
+<p id="status" role="status" aria-live="polite"></p>
+</main></body></html>

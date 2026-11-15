@@ -4,6 +4,9 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class BuyFlow(StatesGroup):
+    choosing_payment = State()
+    checkout_review = State()
+    waiting_checkout_code = State()
     waiting_config_name = State()
     waiting_receipt = State()
     waiting_customgw_phone = State()
@@ -212,6 +215,7 @@ class AdminEditButton(StatesGroup):
 
 
 class AdminSetCard(StatesGroup):
+    waiting_sheba = State()
     waiting_number = State()
     waiting_holder = State()
     waiting_autodelete_custom = State()
@@ -635,6 +639,8 @@ class AdminUserFullStats(StatesGroup):
 
 
 class AdminUserManage(StatesGroup):
+    waiting_test_quota_user = State()
+    waiting_test_quota_count = State()
     waiting_message_text = State()
     waiting_wallet_amount = State()
     waiting_discount_type_value = State()

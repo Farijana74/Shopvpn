@@ -8,7 +8,9 @@
 """
 
 from config_delivery import build_qr_bytes, build_summary_text, get_post_delivery_text, prepare_delivery, strip_html
-from admin_panel.telegram_notify import send_message as tg_send, send_photo as tg_send_photo
+from admin_panel.telegram_notify import send_message as tg_send, send_photo as tg_send_photo, send_document_bytes as tg_send_document
+from delivery_copy import delivery_copy_markup
+from config_delivery import _visible_len
 from config import BOT_TOKEN
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 
@@ -105,26 +107,32 @@ async def deliver_config_to_user_web(
         links = [links]
     total = len(links)
 
-    async def _send_html(text: str) -> None:
-        ok = await tg_send(bot_token, user_tg_id, text, parse_mode="HTML")
+    async def _send_html(text: str, reply_markup=None) -> None:
+        ok = await tg_send(bot_token, user_tg_id, text, parse_mode="HTML", reply_markup=reply_markup)
         if not ok:
-            await tg_send(bot_token, user_tg_id, strip_html(text))
+            await tg_send(bot_token, user_tg_id, strip_html(text), reply_markup=reply_markup)
 
     for idx, link in enumerate(links, start=1):
         caption, extras = await prepare_delivery(link, product_name, idx, total, db=db, user_tg_id=user_tg_id, is_test=is_test)
 
-        sent = False
-        try:
-            qr_bytes = build_qr_bytes(link, db=db)
-            sent = await tg_send_photo(bot_token, user_tg_id, qr_bytes, "config_qr.png", caption, parse_mode="HTML")
-        except Exception:
+        body = '\n\n'.join([caption] + extras)
+        buttons = None if is_test else delivery_copy_markup(body)
+        markup = buttons.model_dump(mode='json', exclude_none=True) if buttons else None
+        if _visible_len(body) > 4096:
+            if not await tg_send_document(bot_token, user_tg_id, strip_html(body).encode('utf-8'), 'configs.txt',
+                                          '📎 همهٔ لینک‌های اتصال در فایل پیوست قرار دارند.', reply_markup=markup):
+                raise RuntimeError('Sending configuration document failed')
+        elif _visible_len(body) > 1024:
+            await _send_html(body, reply_markup=markup)
+        else:
             sent = False
-        if not sent:
-            # اگر ساخت/ارسال QR به هر دلیلی ناموفق بود، حداقل متن اطلاعات برای کاربر ارسال شود‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
-            await _send_html(caption)
-
-        for extra in extras:
-            await _send_html(extra)
+            try:
+                qr_bytes = build_qr_bytes(link, db=db)
+                sent = await tg_send_photo(bot_token, user_tg_id, qr_bytes, 'config_qr.png', body, parse_mode='HTML', reply_markup=markup)
+            except Exception:
+                sent = False
+            if not sent:
+                await _send_html(body, reply_markup=markup)
 
     post_text = get_post_delivery_text(db, is_test=is_test)
     summary = build_summary_text(final_price, total) if final_price is not None else ''

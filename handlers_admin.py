@@ -8334,6 +8334,60 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await replace_admin_view(call, tr("💰 قیمت‌گذاری بر اساس بازه‌ی حجم:"), reply_markup=kb.pricing_tiers_kb(db))
         await call.answer(db.get_text('handlers_admin.auto_a2f65e87', 'بازه حذف شد.'))
 
+    async def _prompt_user_test_quota(target, state, user_id):
+        status = await asyncio.to_thread(db.get_test_quota_status, user_id)
+        await state.update_data(test_quota_user_id=user_id)
+        await state.set_state(AdminUserManage.waiting_test_quota_count)
+        await target.answer(tr(f"🧪 کاربر {user_id}\nسهمیهٔ باقی‌مانده: {status['remaining']} تست\n\nچند تست اضافه به این کاربر بدهیم؟ عدد مثبت ارسال کنید.\nسابقهٔ قبلی پاک نمی‌شود؛ این سهمیه بین ربات اصلی و نمایندگی‌ها مشترک است."),
+                            reply_markup=kb.admin_back_kb('adm_test_menu'))
+
+    @router.callback_query(F.data == 'adm_test_quota')
+    async def cb_admin_test_quota(call: CallbackQuery, state: FSMContext):
+        if not is_main_bot or not full_admin_only(call.from_user.id):
+            return await call.answer(tr('افزودن سهمیه فقط توسط ادمین اصلی در ربات اصلی مجاز است.'), show_alert=True)
+        await state.set_state(AdminUserManage.waiting_test_quota_user)
+        await safe_edit(call, tr('آیدی عددی کاربر را برای افزودن سهمیهٔ تست ارسال کنید:'), reply_markup=kb.admin_back_kb('adm_test_menu'))
+        await call.answer()
+
+    @router.callback_query(F.data.startswith('adm_user_trial_quota:'))
+    async def cb_admin_user_trial_quota(call: CallbackQuery, state: FSMContext):
+        if not is_main_bot or not full_admin_only(call.from_user.id):
+            return await call.answer(tr('افزودن سهمیه فقط توسط ادمین اصلی در ربات اصلی مجاز است.'), show_alert=True)
+        user_id = callback_id(call.data, 'adm_user_trial_quota')
+        if user_id is None or user_id <= 0:
+            return await call.answer(tr('آیدی کاربر معتبر نیست.'), show_alert=True)
+        await _prompt_user_test_quota(call.message, state, user_id)
+        await call.answer()
+
+    @router.message(AdminUserManage.waiting_test_quota_user)
+    async def process_test_quota_user(message: Message, state: FSMContext):
+        if not is_main_bot or not full_admin_only(message.from_user.id):return
+        try:
+            user_id = int((message.text or '').strip())
+            if user_id <= 0:raise ValueError()
+        except ValueError:
+            return await message.answer(tr('آیدی عددی مثبت کاربر را ارسال کنید.'))
+        await _prompt_user_test_quota(message, state, user_id)
+
+    @router.message(AdminUserManage.waiting_test_quota_count)
+    async def process_test_quota_count(message: Message, state: FSMContext):
+        if not is_main_bot or not full_admin_only(message.from_user.id):return
+        data = await state.get_data()
+        user_id = data.get('test_quota_user_id')
+        if not user_id:
+            await state.clear()
+            return await message.answer(tr('دوباره کاربر را انتخاب کنید.'))
+        try:
+            amount = int((message.text or '').strip())
+            key = f'admin:{message.chat.id}:{message.message_id}'
+            await asyncio.to_thread(db.grant_extra_test_slots,user_id,amount,request_key=key)
+        except ValueError as exc:
+            return await message.answer(tr(str(exc)) if (message.text or '').strip().isdecimal() else tr('تعداد تست اضافه را به‌صورت عدد مثبت ارسال کنید.'))
+        await asyncio.to_thread(db.log_admin_action,message.from_user.id,'grant_test_quota',f'user={user_id} extra={amount}')
+        await state.clear()
+        status = await asyncio.to_thread(db.get_test_quota_status,user_id)
+        await message.answer(tr(f"✅ {amount} تست اضافه برای کاربر {user_id} ثبت شد.\nسهمیهٔ باقی‌مانده: {status['remaining']} تست"), reply_markup=kb.admin_back_kb('adm_test_menu'))
+
     @router.callback_query(F.data == "adm_reset_test_configs")
     async def cb_admin_reset_test_configs(call: CallbackQuery, state: FSMContext):
         if not senior_admin_only(call.from_user.id):
@@ -10669,9 +10723,11 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
     # -------------------------------------------------------------------
 
     @router.callback_query(F.data == "adm_set_card")
-    async def cb_admin_set_card(call: CallbackQuery):
+    async def cb_admin_set_card(call: CallbackQuery, state: FSMContext):
         if not full_admin_only(call.from_user.id):
             return await deny_support(call)
+        if await state.get_state() == AdminSetCard.waiting_sheba.state:
+            await state.clear()
         await replace_admin_view(call, tr("💳 تنظیمات پرداخت کارت‌به‌کارت:"), reply_markup=kb.card_settings_kb(db))
         await call.answer()
 
@@ -10784,6 +10840,31 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         except Exception:
             pass
         await message.answer(tr(f"✅ {title} {'حذف شد.' if not value else 'ذخیره شد.'}"), reply_markup=kb.ai_providers_kb(db))
+
+    @router.callback_query(F.data == "adm_set_card_sheba")
+    async def cb_admin_set_card_sheba(call: CallbackQuery, state: FSMContext):
+        if not full_admin_only(call.from_user.id):
+            return await deny_support(call)
+        await state.set_state(AdminSetCard.waiting_sheba)
+        await safe_edit(call, tr("شماره شبا را ارسال کنید (IR و ۲۴ رقم). برای حذف، کلمهٔ حذف را ارسال کنید."),
+                        reply_markup=kb.admin_back_kb("adm_set_card"))
+        await call.answer()
+
+    @router.message(AdminSetCard.waiting_sheba)
+    async def process_set_card_sheba(message: Message, state: FSMContext):
+        if not full_admin_only(message.from_user.id):
+            return
+        from bank_details import normalize_sheba
+        raw = (message.text or "").strip()
+        try:
+            value = "" if raw == "حذف" else normalize_sheba(raw)
+        except ValueError as exc:
+            await message.answer(tr(str(exc)))
+            return
+        await asyncio.to_thread(db.set_setting, "card_sheba", value)
+        await state.clear()
+        await asyncio.to_thread(db.log_admin_action, message.from_user.id, "sheba_change", value or "حذف شد")
+        await message.answer(tr("✅ شماره شبا ذخیره شد." if value else "✅ شماره شبا حذف شد."), reply_markup=kb.card_settings_kb(db))
 
     @router.callback_query(F.data == "adm_set_card_edit")
     async def cb_admin_set_card_edit(call: CallbackQuery, state: FSMContext):

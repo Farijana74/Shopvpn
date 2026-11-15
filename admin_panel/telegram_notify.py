@@ -59,6 +59,7 @@ async def send_photo(
     caption: str = "",
     parse_mode: str = None,
     content_type: str = "image/png",
+    reply_markup: dict = None,
 ) -> bool:
     """ارسال عکس (مثلاً QR کد کانفیگ) به کاربر تلگرامی، بدون وابستگی به aiogram."""
     if not bot_token:
@@ -71,12 +72,34 @@ async def send_photo(
             form.add_field("caption", caption)
             if parse_mode:
                 form.add_field("parse_mode", parse_mode)
+        if reply_markup:
+            form.add_field("reply_markup", json.dumps(reply_markup, ensure_ascii=False))
         form.add_field("photo", photo_bytes, filename=filename, content_type=content_type)
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 return resp.status == 200
     except Exception:
         logger.exception("ارسال عکس تلگرام به %s ناموفق بود", chat_id)
+        return False
+
+
+async def send_document_bytes(bot_token: str, chat_id: int, content: bytes, filename: str, caption: str = '', reply_markup: dict = None) -> bool:
+    if not bot_token:
+        return False
+    try:
+        form = aiohttp.FormData()
+        form.add_field('chat_id', str(chat_id))
+        form.add_field('document', content, filename=filename, content_type='text/plain; charset=utf-8')
+        if caption:
+            form.add_field('caption', caption)
+        if reply_markup:
+            form.add_field('reply_markup', json.dumps(reply_markup, ensure_ascii=False))
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f'https://api.telegram.org/bot{bot_token}/sendDocument', data=form,
+                                    timeout=aiohttp.ClientTimeout(total=20)) as response:
+                return response.status == 200
+    except Exception:
+        logger.exception('ارسال فایل تلگرام به %s ناموفق بود', chat_id)
         return False
 
 

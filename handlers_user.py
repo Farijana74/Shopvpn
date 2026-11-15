@@ -243,6 +243,23 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         return f"\nسقف موجودی کیف پول: {max_balance:,} تومان (حداکثر مبلغ قابل شارژ فعلی: {remaining:,} تومان)"
 
     router = Router()
+    from weakref import WeakValueDictionary
+    _checkout_locks = WeakValueDictionary()
+
+    def _checkout_lock(user_id):
+        lock = _checkout_locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _checkout_locks[user_id] = lock
+        return lock
+
+    def _checkout_serialized(handler):
+        from functools import wraps
+        @wraps(handler)
+        async def guarded(event, state, *args, **kwargs):
+            async with _checkout_lock(event.from_user.id):
+                return await handler(event, state, *args, **kwargs)
+        return guarded
 
 
     @router.message(Command("language"))
@@ -406,12 +423,16 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         card_number = (await asyncio.to_thread(db.get_setting, "card_number"))
         card_holder = (await asyncio.to_thread(db.get_setting, "card_holder"))
         text = "\n".join(intro_lines) + "\n" if intro_lines else ""
+        sheba = await asyncio.to_thread(db.get_setting, "card_sheba", "")
         text += f"💳 شماره کارت: `{card_number}`\n"
+        if sheba:
+            text += f"🏦 شماره شبا: `{sheba}`\n"
         text += f"👤 به نام: {escape_md(card_holder)}\n"
         text += f"💰 مبلغ (تومان): `{final_price}` ({final_price:,} تومان)\n"
         text += f"💰 مبلغ (ریال): `{final_price * 10}` ({final_price * 10:,} ریال)\n\n"
         text += "لطفاً عدد بالا رو لمس کن تا کپی بشه، مبلغ رو واریز کن و عکس رسید رو همینجا ارسال کن."
-        sent = await target.answer(text, parse_mode="Markdown")
+        sent = await target.answer(text, parse_mode="Markdown",
+                                   reply_markup=kb.card_payment_copy_kb(card_number, final_price * 10, sheba=sheba))
         await _schedule_card_msg_autodelete(sent.chat.id, sent.message_id)
 
     async def _send_card_auto_details(target, intro_lines: list, kind: str, ref_id: int,
@@ -446,9 +467,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         )
         sent = await target.answer(
             text, parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=tr("🔄 بررسی وضعیت پرداخت"), callback_data=f"check_c2c:{invoice['invoice_id']}"),
-            ]]),
+            reply_markup=kb.card_payment_copy_kb(invoice['card_number'], amount_rial, invoice_id=invoice['invoice_id']),
         )
         await _schedule_card_msg_autodelete(sent.chat.id, sent.message_id)
 
@@ -500,6 +519,18 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 InlineKeyboardButton(text=tr("🔗 رفتن به صفحه‌ی پرداخت"), url=result["invoice_url"]),
             ]]),
         )
+
+    @router.callback_query(F.data.startswith('delivery_copy_help:'))
+    async def cb_delivery_copy_help(call: CallbackQuery):
+        await call.answer(tr('برای کپی کامل متن طولانی، گزینهٔ Copy بالای کادر کانفیگ‌ها را بزنید؛ اگر فایل پیوست است، آن را باز و همهٔ متن را کپی کنید.'), show_alert=True)
+
+    @router.callback_query(F.data == "card:send_receipt")
+    async def cb_card_send_receipt(call: CallbackQuery):
+        await call.answer()
+        from inline_navigation import separate_messages
+        # Preserve the active order/top-up receipt state and the bank details message.
+        with separate_messages():
+            await call.message.answer(tr("📸 لطفاً عکس یا فایل رسید پرداخت را ارسال کنید."))
 
     @router.callback_query(F.data.startswith("check_c2c:"))
     async def cb_check_card_auto(call: CallbackQuery):
@@ -1185,12 +1216,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             )
             await message.answer(text, parse_mode="HTML")
             return
-        tier_info = await _tier_info(message.from_user.id, product["price"], 1, product["id"])
-        discount_amount, discount_label = await _apply_pending_discount(
-            state, tier_info["total_after"], product_id, user_id=message.from_user.id
-        )
-        text = _product_confirm_text(product, 1, stock, wallet_credit, discount_amount, discount_label, tier_info)
-        await message.answer(text, parse_mode="HTML", reply_markup=kb.product_confirm_kb(db, product_id, 1, stock, 10 if tier_info["title"] else 0))
+        await state.update_data(buy_users_pid=None, buy_users=None)
+        progress = await message.answer(tr('⏳ در حال آماده‌سازی خرید...'))
+        call = _MessageCall(message.from_user, progress)
+        max_users = await _users_option(product)
+        if max_users:
+            await _show_users_picker(call, product, max_users)
+        else:
+            await _show_checkout_methods(call, state, product_id, new=True)
 
     async def _handle_referral_invite_rewards(bot: Bot, referrer_id: int, reward_info: dict):
         """پیام‌ها به دعوت‌کننده می‌رود؛ پس باید به زبان خودِ او رندر شوند، نه زبان
@@ -1482,6 +1515,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await message.answer(text)
 
     @router.callback_query(F.data.startswith("prod:"))
+    @_checkout_serialized
     async def cb_product(call: CallbackQuery, state: FSMContext):
         from merchant_controls import purchase_allowed
         if not purchase_allowed(db,int(call.data.split(':')[1]),call.from_user.id):return await call.answer("این محصول در دسترس شما نیست.",show_alert=True)
@@ -1510,7 +1544,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await _show_users_picker(call, product, max_users)
             await call.answer()
             return
-        await _show_product_confirm(call, state, product, 1, stock)
+        await _show_checkout_methods(call, state, product["id"], new=True)
         await call.answer()
 
     async def _show_users_picker(call: CallbackQuery, product, max_users: int):
@@ -1549,6 +1583,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         await call.answer()
 
     @router.callback_query(F.data.startswith("buy_users:"))
+    @_checkout_serialized
     async def cb_buy_users(call: CallbackQuery, state: FSMContext):
         try:
             _, product_id_s, users_s = call.data.split(":")
@@ -1566,7 +1601,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(db.get_text("handlers_user.product.currently_unavailable", "این محصول در حال حاضر موجود نیست."), show_alert=True)
             return
         await state.update_data(buy_users_pid=product_id, buy_users=users)
-        await _show_product_confirm(call, state, product, 1, stock)
+        await _show_checkout_methods(call, state, product["id"], new=True)
         await call.answer()
 
     async def _cb_qty_change(call: CallbackQuery, state: FSMContext, delta: int):
@@ -2126,12 +2161,227 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             )
         await call.message.answer(text)
 
+    async def _checkout_preview(state, user_id, product_id):
+        product = await asyncio.to_thread(db.get_product, product_id)
+        from merchant_controls import purchase_allowed
+        if not product or not product['is_active'] or not purchase_allowed(db, product_id, user_id):
+            raise ValueError('این محصول در دسترس نیست.')
+        if await asyncio.to_thread(db.count_available_configs, product_id) <= 0:
+            raise ValueError('موجودی این محصول تمام شده است.')
+        data = await state.get_data()
+        users = _chosen_users(data, product)
+        if users:
+            max_users = await _users_option(product)
+            if not max_users or users > max_users:
+                raise ValueError('تعداد کاربر انتخاب‌شده دیگر در دسترس نیست؛ محصول را دوباره انتخاب کنید.')
+        else:
+            users = await asyncio.to_thread(ul.included_users, db, product)
+        tier = await _tier_info(user_id, ul.price_for_users(product, users), 1, product_id)
+        discount, label = await _apply_pending_discount(state, tier['total_after'], product_id, user_id=user_id)
+        allowed = await asyncio.to_thread(db.get_product_payment_methods, product_id)
+        plan = await asyncio.to_thread(db.plan_wallet_spend, user_id, max(tier['total_after'] - discount, 0),
+                                       allowed is None or 'wallet' in allowed)
+        if plan['blocked']:
+            raise ValueError(plan['message'])
+        remaining = max(tier['total_after'] - discount - plan['wallet_used'], 0)
+        markup = kb.payment_choice_kb(
+            crypto_payment.crypto_payment_available(db),
+            abangateway_payment.abangateway_payment_available(db),
+            custom_gateway_payment.list_enabled_gateways(db),
+            await asyncio.to_thread(db.get_setting, 'card_to_card_enabled', '1') == '1',
+            amount=remaining, db=db, allowed_methods=allowed,
+            card_auto_enabled=await asyncio.to_thread(db.get_setting, 'card_to_card_auto_enabled', '0') == '1',
+            noapay_enabled=noapay_payment.noapay_payment_available(db),
+            blupal_enabled=blupal_payment.blupal_payment_available(db),
+            extra_gateways=extra_gateway_payment.available_keys(db, is_main_bot), user_id=user_id,
+        )
+        credit_button = InlineKeyboardButton(text=tr('👛 کیف پول / کد تخفیف'), callback_data='checkout_credit')
+        if remaining <= 0:
+            markup = InlineKeyboardMarkup(inline_keyboard=[[credit_button]])
+        elif allowed is None or 'wallet' in allowed or not any(b.callback_data != 'cancel_flow' for row in markup.inline_keyboard for b in row):
+            # Keep codes usable even when no gateway can accept the undiscounted amount.
+            markup = markup.model_copy(update={'inline_keyboard': [[credit_button]] + markup.inline_keyboard})
+        text = f"📦 {escape_html(product['name'])}\n💰 قیمت: {tier['total']:,} تومان\n"
+        if users:
+            text += f'👥 تعداد کاربر همزمان: {users}\n'
+        if tier['amount']:
+            text += f"🎁 تخفیف سطح: {tier['amount']:,} تومان\n"
+        if discount:
+            text += f'🎟 تخفیف کد: {discount:,} تومان\n'
+        if plan['wallet_used']:
+            text += f"👛 استفاده از کیف پول: {plan['wallet_used']:,} تومان\n"
+        text += f'💵 مبلغ نهایی قابل پرداخت: {remaining:,} تومان'
+        return text, markup, remaining
+
+    async def _show_checkout_methods(call, state, product_id, *, new=False):
+        try:
+            text, markup, _ = await _checkout_preview(state, call.from_user.id, product_id)
+        except ValueError as exc:
+            await call.answer(str(exc), show_alert=True)
+            return
+        data = await state.get_data()
+        draft = data.get('product_checkout') or {}
+        if new or draft.get('product_id') != product_id:
+            import secrets
+            draft = dict(product_id=product_id, token=secrets.token_hex(4))
+        draft.update(phase='methods', method=None, method_label=None)
+        rows = []
+        for row in markup.inline_keyboard:
+            buttons = [b.model_copy(update={'callback_data': f"checkout_method:{draft['token']}:{b.callback_data}"})
+                       for b in row if b.callback_data != 'cancel_flow']
+            if buttons:
+                rows.append(buttons)
+        if not rows:
+            await call.answer(tr('هیچ روش پرداختی برای این مبلغ در دسترس نیست.'), show_alert=True)
+            return
+        rows.append([InlineKeyboardButton(text=tr('❌ انصراف'), callback_data='cancel_flow')])
+        await state.update_data(product_checkout=draft)
+        await state.set_state(BuyFlow.choosing_payment)
+        await _safe_edit(call.message, text + '\n\n' + tr('روش پرداخت را انتخاب کنید:'), parse_mode='HTML',
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        await call.answer()
+
+    async def _checkout_review(target, state, user_id, draft, *, edit=False):
+        text, _, _ = await _checkout_preview(state, user_id, draft['product_id'])
+        draft = dict(draft, phase='review', quote=text)
+        await state.update_data(product_checkout=draft)
+        await state.set_state(BuyFlow.checkout_review)
+        token = draft['token']
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=tr('✅ ادامه پرداخت'), callback_data=f'checkout_pay:{token}')],
+            [InlineKeyboardButton(text=tr('🎟 اعمال کد تخفیف'), callback_data=f'checkout_code:{token}')],
+            [InlineKeyboardButton(text=tr('⬅️ تغییر روش پرداخت'), callback_data=f'checkout_back:{token}')],
+            [InlineKeyboardButton(text=tr('❌ انصراف'), callback_data='cancel_flow')],
+        ])
+        text += '\n\n' + tr('روش پرداخت:') + ' ' + escape_html(draft['method_label'])
+        if edit:
+            await _safe_edit(target, text, parse_mode='HTML', reply_markup=markup)
+        else:
+            await target.answer(text, parse_mode='HTML', reply_markup=markup)
+
+    async def _checkout_draft(call, state):
+        draft = (await state.get_data()).get('product_checkout') or {}
+        parts = call.data.split(':', 2)
+        current_state = await state.get_state()
+        checkout_states = (BuyFlow.choosing_payment.state, BuyFlow.checkout_review.state, BuyFlow.waiting_checkout_code.state)
+        if current_state not in checkout_states or len(parts) < 2 or parts[1] != draft.get('token') or draft.get('phase') not in ('methods', 'review', 'code'):
+            await call.answer(tr('این مرحله منقضی شده؛ دوباره محصول را انتخاب کنید.'), show_alert=True)
+            return None
+        return dict(draft)
+
+    @router.callback_query(F.data.startswith('checkout_method:'))
+    @_checkout_serialized
+    async def cb_checkout_method(call: CallbackQuery, state: FSMContext):
+        draft = await _checkout_draft(call, state)
+        if not draft:
+            return
+        try:
+            _, markup, _ = await _checkout_preview(state, call.from_user.id, draft['product_id'])
+            method = call.data.split(':', 2)[2]
+            button = next((b for row in markup.inline_keyboard for b in row if b.callback_data == method), None)
+            if button is None:
+                raise ValueError('این روش پرداخت دیگر برای این مبلغ در دسترس نیست؛ روش دیگری انتخاب کنید.')
+            draft.update(method=method, method_label=button.text)
+            await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
+            await call.answer()
+        except ValueError as exc:
+            await call.answer(str(exc), show_alert=True)
+
+    @router.callback_query(F.data.startswith('checkout_back:'))
+    @_checkout_serialized
+    async def cb_checkout_back(call: CallbackQuery, state: FSMContext):
+        draft = await _checkout_draft(call, state)
+        if draft:
+            await _show_checkout_methods(call, state, draft['product_id'])
+
+    @router.callback_query(F.data.startswith('checkout_code:'))
+    @_checkout_serialized
+    async def cb_checkout_code(call: CallbackQuery, state: FSMContext):
+        draft = await _checkout_draft(call, state)
+        if not draft or not draft.get('method'):
+            return
+        await state.update_data(product_checkout=dict(draft, phase='code'))
+        await state.set_state(BuyFlow.waiting_checkout_code)
+        await _safe_edit(call.message, tr('🎟 کد تخفیف را ارسال کنید:'), reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=tr('⬅️ بازگشت بدون تغییر کد'), callback_data=f"checkout_review:{draft['token']}")],
+        ]))
+        await call.answer()
+
+    @router.callback_query(F.data.startswith('checkout_review:'))
+    @_checkout_serialized
+    async def cb_checkout_review(call: CallbackQuery, state: FSMContext):
+        draft = await _checkout_draft(call, state)
+        if draft and draft.get('method'):
+            try:
+                await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
+                await call.answer()
+            except ValueError as exc:
+                await call.answer(str(exc), show_alert=True)
+
+    @router.message(BuyFlow.waiting_checkout_code)
+    @_checkout_serialized
+    async def process_checkout_code(message: Message, state: FSMContext):
+        data = await state.get_data()
+        draft = data.get('product_checkout') or {}
+        if draft.get('phase') != 'code':
+            return
+        try:
+            product_id = draft['product_id']
+            await _checkout_preview(state, message.from_user.id, product_id)
+            product = await asyncio.to_thread(db.get_product, product_id)
+            users = _chosen_users(data, product) or await asyncio.to_thread(ul.included_users, db, product)
+            tier = await _tier_info(message.from_user.id, ul.price_for_users(product, users), 1, product_id)
+            code = await asyncio.to_thread(db.get_discount_code, (message.text or '').strip())
+            reason = await asyncio.to_thread(db.get_discount_invalid_reason, code, tier['total_after'], product_id, user_id=message.from_user.id)
+            if reason:
+                await message.answer(tr(f'❌ {reason}\nکد دیگری ارسال کنید یا به مرحلهٔ قبل برگردید.'))
+                return
+            amount = await asyncio.to_thread(db.compute_discount_amount, code, tier['total_after'])
+            await state.update_data(discount_code_id=code['id'], discount_amount=amount, discount_product_id=product_id,
+                                    pending_discount_code_id=None, pending_discount_code_label=None)
+            await _checkout_review(message, state, message.from_user.id, draft)
+        except ValueError as exc:
+            await message.answer(tr(str(exc)))
+
+    @router.callback_query(F.data.startswith('checkout_pay:'))
+    async def cb_checkout_pay(call: CallbackQuery, state: FSMContext, bot: Bot):
+        # Serialize confirmation, including repeated clicks, before touching money.
+        async with _checkout_lock(call.from_user.id):
+            draft = await _checkout_draft(call, state)
+            if not draft or draft.get('phase') != 'review' or not draft.get('method'):
+                return
+            try:
+                quote, markup, amount = await _checkout_preview(state, call.from_user.id, draft['product_id'])
+                if quote != draft.get('quote'):
+                    await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
+                    return await call.answer(tr('مبلغ سفارش تغییر کرده؛ مبلغ جدید را بررسی و دوباره تایید کنید.'), show_alert=True)
+                if amount > 0 and draft['method'] == 'checkout_credit':
+                    return await call.answer(tr('اعتبار کیف پول و تخفیف برای پرداخت کامل کافی نیست؛ کد تخفیف وارد کنید یا روش پرداخت را تغییر دهید.'), show_alert=True)
+                if amount > 0 and draft['method'] not in [b.callback_data for r in markup.inline_keyboard for b in r]:
+                    await call.answer(tr('مبلغ یا روش‌های مجاز تغییر کرده؛ روش پرداخت را دوباره انتخاب کنید.'), show_alert=True)
+                    return await _show_checkout_methods(call, state, draft['product_id'])
+            except ValueError as exc:
+                return await call.answer(str(exc), show_alert=True)
+            await state.update_data(product_checkout=dict(draft, phase='committing'))
+            await _buy_start_impl(call, state, bot, draft['product_id'], 1)
+
     @router.callback_query(F.data.startswith("buy_start:"))
     async def cb_buy_start(call: CallbackQuery, state: FSMContext, bot: Bot):
         _, product_id, quantity = call.data.split(":")
         await _buy_start(call, state, bot, int(product_id), int(quantity))
 
     async def _buy_start(call, state: FSMContext, bot: Bot, product_id: int, quantity: int, config_name: str = None):
+        async with _checkout_lock(call.from_user.id):
+            await _buy_start_impl(call, state, bot, product_id, quantity, config_name)
+
+    async def _buy_start_impl(call, state: FSMContext, bot: Bot, product_id: int, quantity: int, config_name: str = None):
+        draft = (await state.get_data()).get('product_checkout') or {}
+        checkout_method = None
+        if draft:
+            if draft.get('product_id') != product_id or draft.get('phase') not in ('committing', 'naming'):
+                return await call.answer(tr('این مرحله قبلاً ثبت شده یا منقضی شده است.'), show_alert=True)
+            quantity = 1
+            checkout_method = draft.get('method')
         product = (await asyncio.to_thread(db.get_product, product_id))
         stock = (await asyncio.to_thread(db.count_available_configs, product_id))
         if not product or stock <= 0:
@@ -2144,6 +2394,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
 
         if config_name is None and product["is_auto_provision"] and product["provision_server_id"]:
+            if draft:
+                await state.update_data(product_checkout=dict(draft, phase='naming'))
             await state.update_data(buy_name_product_id=product_id, buy_name_quantity=quantity)
             await state.set_state(BuyFlow.waiting_config_name)
             prefix = (await asyncio.to_thread(db.get_custom_config_prefix))
@@ -2182,6 +2434,10 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
         tier_info = await _tier_info(call.from_user.id, ul.price_for_users(product, users), quantity, product["id"])
         total_price = tier_info["total_after"]
+        if draft:
+            discount_amount, _ = await _apply_pending_discount(state, total_price, product_id, user_id=call.from_user.id)
+            fresh = await state.get_data()
+            discount_code_id = fresh.get('discount_code_id')
         price_after_code = max(total_price - discount_amount, 0)
         plan = await asyncio.to_thread(db.plan_wallet_spend, call.from_user.id, price_after_code, wallet_allowed)
         if plan["blocked"]:
@@ -2190,6 +2446,22 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
         wallet_used = plan["wallet_used"]
 
+        if draft:
+            try:
+                quote, methods, due = await _checkout_preview(state, call.from_user.id, product_id)
+                if quote != draft.get('quote'):
+                    await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
+                    return await call.answer(tr('مبلغ سفارش تغییر کرده؛ مبلغ جدید را بررسی کنید.'), show_alert=True)
+                if due > 0 and checkout_method == 'checkout_credit':
+                    await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
+                    return await call.answer(tr('اعتبار کیف پول و تخفیف برای پرداخت کامل کافی نیست.'), show_alert=True)
+                if due > 0 and checkout_method not in [b.callback_data for row in methods.inline_keyboard for b in row]:
+                    await state.update_data(product_checkout=dict(draft, phase='review'))
+                    return await _show_checkout_methods(call, state, product_id)
+            except ValueError as exc:
+                await state.update_data(product_checkout=dict(draft, phase='review'))
+                return await call.answer(str(exc), show_alert=True)
+            await state.update_data(product_checkout=dict(draft, phase='submitted'))
         if discount_code_id:
             claimed = await asyncio.to_thread(db.claim_discount_use, discount_code_id, call.from_user.id)
             if not claimed:
@@ -2197,6 +2469,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                     discount_code_id=None, discount_amount=0, discount_product_id=None,
                     pending_discount_code_id=None, pending_discount_code_label=None,
                 )
+                if draft:
+                    await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
                 await call.answer(db.get_text('handlers_user.auto_ca864ddb', 'این کد تخفیف دیگر برای شما قابل استفاده نیست. دوباره تلاش کنید.'), show_alert=True)
                 return
         if wallet_used > 0:
@@ -2329,6 +2603,22 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 return
 
             await state.set_state(BuyFlow.waiting_receipt)
+            if checkout_method:
+                payment_call = _MessageCall(call.from_user, call.message)
+                payment_call.data = checkout_method
+                try:
+                    await router.callback_query.trigger(payment_call, state=state, bot=bot,
+                                                         raw_state=BuyFlow.waiting_receipt.state)
+                    await call.answer()
+                except Exception:
+                    # An invoice may already exist: preserve the pending order and
+                    # its wallet reservation, just as in the regular payment handlers.
+                    logging.getLogger('handlers_user').exception('Checkout payment presentation failed for order #%s', order_id)
+                    try:
+                        await call.message.answer(tr('⚠️ سفارش ثبت شد، اما نمایش اطلاعات پرداخت ناموفق بود. برای بررسی با پشتیبانی تماس بگیرید.'))
+                    except Exception:
+                        logging.getLogger('handlers_user').warning('Checkout payment error notice could not be sent for order #%s', order_id)
+                return
 
             after_buy_text = (await asyncio.to_thread(db.get_setting, "after_buy_text"))
 
@@ -2464,9 +2754,11 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             call.message, intro_lines, "order", order_id, call.from_user.id, order["final_price"],
         )
     @router.callback_query(F.data == "cancel_flow")
+    @_checkout_serialized
     async def cb_cancel_flow(call: CallbackQuery, state: FSMContext):
         data = await state.get_data()
-        order_id = data.get("order_id")
+        draft = data.get('product_checkout') or {}
+        order_id = None if draft.get('phase') in ('methods', 'review', 'code', 'committing', 'naming') else data.get("order_id")
         if order_id:
             order = (await asyncio.to_thread(db.get_order, order_id))
             if order and order["status"] == "pending":
@@ -3366,8 +3658,8 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             return
 
         user = (await asyncio.to_thread(db.get_user, message.from_user.id))
-        if user and user["test_used"] >= MAX_TEST_PER_USER:
-            await message.answer(db.get_text('handlers_user.auto_6aacb1a2', 'شما قبلاً کانفیگ تست خود را دریافت کرده\u200cاید. هر کاربر فقط یک بار مجاز به دریافت کانفیگ تست است.'))
+        if not await asyncio.to_thread(db.can_request_test, message.from_user.id):
+            await message.answer(db.get_text('handlers_user.auto_6aacb1a2', 'سهمیهٔ تست شما تمام شده یا درخواست تست شما در حال پردازش است.'))
             return
 
         plans = (await asyncio.to_thread(db.get_test_config_plans, True))
@@ -3391,7 +3683,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         # صفر) رد شوند و هرکدام یک کانفیگ از بانک لینک بگیرند. حالا سهمیه *قبل*
         # از برداشتن کانفیگ با یک UPDATE اتمیک رزرو می‌شود.
         if not (await asyncio.to_thread(db.try_reserve_test_slot, message.from_user.id, MAX_TEST_PER_USER)):
-            await message.answer(db.get_text('handlers_user.auto_6aacb1a2', 'شما قبلاً کانفیگ تست خود را دریافت کرده\u200cاید. هر کاربر فقط یک بار مجاز به دریافت کانفیگ تست است.'))
+            await message.answer(db.get_text('handlers_user.auto_6aacb1a2', 'سهمیهٔ تست شما تمام شده یا درخواست تست شما در حال پردازش است.'))
             return
 
         result = (await asyncio.to_thread(db.take_unused_test_config, message.from_user.id))
@@ -3421,7 +3713,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         # *قبل* از تماس با پنل رزرو می‌شود؛ اگر ساخت کانفیگ شکست بخورد، سهمیه
         # با release_test_slot برمی‌گردد تا کاربر واقعاً بتواند دوباره تلاش کند.
         if not (await asyncio.to_thread(db.try_reserve_test_slot, message.from_user.id, MAX_TEST_PER_USER)):
-            await message.answer(db.get_text('handlers_user.auto_6aacb1a2', 'شما قبلاً کانفیگ تست خود را دریافت کرده\u200cاید. هر کاربر فقط یک بار مجاز به دریافت کانفیگ تست است.'))
+            await message.answer(db.get_text('handlers_user.auto_6aacb1a2', 'سهمیهٔ تست شما تمام شده یا درخواست تست شما در حال پردازش است.'))
             return
 
         use_credit = (not full_access_bot) or (await asyncio.to_thread(is_volume_credit_bot, db, is_main_bot))
@@ -7300,13 +7592,18 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 card_number = await asyncio.to_thread(db.get_setting, "card_number")
                 card_holder = await asyncio.to_thread(db.get_setting, "card_holder")
                 text = f"💳 مبلغ {amount:,} تومان را واریز کنید و سپس عکس/فایل رسید را همین‌جا ارسال کنید:\n\n💳 شماره کارت: `{card_number}`\n👤 به نام: {escape_md(card_holder)}"
-                await call.message.answer(text, parse_mode="Markdown")
+                sheba = await asyncio.to_thread(db.get_setting, "card_sheba", "")
+                if sheba:
+                    text += f"\n🏦 شماره شبا: `{sheba}`"
+                await call.message.answer(text, parse_mode="Markdown",
+                                          reply_markup=kb.card_payment_copy_kb(card_number, amount * 10, sheba=sheba))
             elif method == "card_auto":
                 inv = card_to_card_payment.create_invoice(db, "reseller_request", req["id"], call.from_user.id, amount)
                 await call.message.answer(
                     tr(f"💳 مبلغ دقیق برای واریز: `{inv['amount_toman']:,}` تومان\n"
                     f"💳 کارت: `{inv['card_number']}`\n👤 به نام: {escape_md(inv['card_holder'] or '')}\n\n"
-                    "بعد از واریز، پرداخت به‌صورت خودکار بررسی می‌شود."), parse_mode="Markdown")
+                    "بعد از واریز، پرداخت به‌صورت خودکار بررسی می‌شود."), parse_mode="Markdown",
+                    reply_markup=kb.card_payment_copy_kb(inv["card_number"], inv.get("amount_rial") or inv["amount_toman"] * 10, invoice_id=inv["invoice_id"]))
             elif method == "abangateway":
                 inv = await abangateway_payment.create_invoice_for(db, tenant_id, call.from_user.id, "reseller_request", req["id"], amount, label)
                 await call.message.answer(db.get_text('handlers_user.auto_e2a9ed99', '💳 فاکتور آبان\u200cگیت\u200cوی ساخته شد.'), reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=tr("🔗 پرداخت"), url=inv["payment_url"])]]))
