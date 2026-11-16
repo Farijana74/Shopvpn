@@ -25,6 +25,8 @@ from panel_providers import get_provider
 
 logger = logging.getLogger(__name__)
 
+EXPIRY_WARNING_TEXT = "⚠️ سرویس شما به‌زودی منقضی می‌شود. لطفاً در صورت نیاز، قبل از پایان مهلت آن را تمدید یا سرویس جدید تهیه کنید."
+
 
 def _utcnow():
     return datetime.utcnow()
@@ -50,11 +52,11 @@ def _safe_bool(db, key, default=True):
     return raw in {"1", "true", "yes", "on"}
 
 
-async def _notify_user(bot: Bot, db, user_id: int, text: str, product_id=None):
+async def _notify_user(bot: Bot, db, user_id: int, text: str, product_id=None, *, expiry_warning=False):
     markup = None
     if product_id:
         markup = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=tr("🛒 خرید سرویس جدید"), callback_data=f"prod:{int(product_id)}")
+            InlineKeyboardButton(text=tr("🛒 خرید سرویس جدید"), callback_data="cleanup:buy" if expiry_warning else f"prod:{int(product_id)}")
         ]])
     try:
         await send_telegram(bot, db, user_id, text, reply_markup=markup)
@@ -220,8 +222,9 @@ async def cleanup_once(bot: Bot, db):
                 bot,
                 db,
                 row["user_id"],
-                "⚠️ سرویس شما به‌زودی منقضی می‌شود. لطفاً در صورت نیاز، قبل از پایان مهلت آن را تمدید یا سرویس جدید تهیه کنید.",
+                EXPIRY_WARNING_TEXT,
                 row["product_id"] if "product_id" in row.keys() else None,
+                expiry_warning=True,
             )
 
     for row, is_test, grace_days, exp in candidates:

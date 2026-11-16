@@ -204,15 +204,17 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.get_wallet_credit(101),0)
 
     async def test_insufficient_credit_does_not_create_an_unpayable_order(self):
-        draft=await self.enter('checkout_credit')
-        await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
+        await self.invoke('cb_product',f'prod:{self.pid}')
+        draft=(await self.state.get_data())['product_checkout']
+        call=await self.invoke('cb_checkout_method',f"checkout_method:{draft['token']}:checkout_credit")
         self.assertFalse(self.orders())
-        self.assertEqual(await self.state.get_state(),BuyFlow.checkout_review.state)
+        self.assertEqual(await self.state.get_state(),BuyFlow.choosing_payment.state)
+        self.assertTrue(call.answer.await_args.kwargs['show_alert'])
 
     async def test_full_discount_can_cover_order_without_payment_gateway(self):
         self.db.set_setting('card_to_card_enabled','0')
         cid=self.db.create_discount_code('FREE',percent=100,max_uses=1)
-        draft=await self.enter('checkout_credit')
+        draft=await self.enter('checkout_coupon')
         await self.code(draft['token'],'FREE')
         with patch('handlers_user.deliver_config_to_user',new=AsyncMock()) as delivery, \
              patch('handlers_user.check_and_notify_low_stock',new=AsyncMock()), \
@@ -250,3 +252,86 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('موجودی فعلی کیف پول: 0 تومان',text)
         self.assertIn('مبلغ (ریال): `1700000`',text)
         self.assertEqual(self.orders()[0]['final_price'],170000)
+
+    async def test_wallet_option_only_appears_when_final_amount_is_fully_covered(self):
+        for balance in (0, 199999, 200000, 250000):
+            with self.subTest(balance=balance):
+                with self.db._get_conn() as conn:
+                    conn.execute('UPDATE users SET referral_credit=? WHERE telegram_id=?',(balance,101))
+                await self.invoke('cb_product',f'prod:{self.pid}')
+                buttons=[button for row in self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for button in row]
+                wallet=[button for button in buttons if button.callback_data and button.callback_data.endswith(':checkout_credit')]
+                self.assertEqual(bool(wallet),balance>=200000)
+                if balance<200000:
+                    self.assertTrue(any(button.callback_data and button.callback_data.endswith(':pay_card2card') for button in buttons))
+                self.assertEqual(self.db.get_wallet_credit(101),balance)
+                self.assertFalse(self.orders())
+
+    async def test_balance_drop_before_confirmation_returns_to_available_methods_without_charge(self):
+        self.db.add_wallet_credit(101,200000)
+        draft=await self.enter('checkout_credit')
+        self.db.deduct_wallet_credit(101,1)
+        await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
+        self.assertEqual(await self.state.get_state(),BuyFlow.choosing_payment.state)
+        buttons=[b.callback_data for row in self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for b in row]
+        self.assertFalse(any(value and value.endswith(':checkout_credit') for value in buttons))
+        self.assertTrue(any(value and value.endswith(':pay_card2card') for value in buttons))
+        self.assertEqual(self.db.get_wallet_credit(101),199999)
+        self.assertFalse(self.orders())
+
+    async def test_discount_can_make_wallet_sufficient(self):
+        self.db.add_wallet_credit(101,100000)
+        self.db.create_discount_code('HALF',percent=50)
+        draft=await self.enter('pay_card2card')
+        await self.code(draft['token'],'HALF')
+        await self.invoke('cb_checkout_back',f"checkout_back:{draft['token']}")
+        buttons=[b for row in self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for b in row]
+        self.assertTrue(any(b.callback_data and b.callback_data.endswith(':checkout_credit') for b in buttons))
+        self.assertEqual(self.db.get_wallet_credit(101),100000)
+        self.assertFalse(self.orders())
+
+    async def test_partial_discount_without_gateway_does_not_create_order(self):
+        self.db.set_setting('card_to_card_enabled','0')
+        self.db.create_discount_code('HALF',percent=50)
+        draft=await self.enter('checkout_coupon')
+        await self.code(draft['token'],'HALF')
+        call=await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
+        self.assertFalse(self.orders())
+        self.assertTrue(call.answer.await_args.kwargs['show_alert'])
+        self.assertEqual(self.db.get_wallet_credit(101),0)
+
+    async def test_full_discount_without_wallet_does_not_show_wallet_label(self):
+        self.db.create_discount_code('FREE',percent=100)
+        draft=await self.enter('pay_card2card')
+        await self.code(draft['token'],'FREE')
+        await self.invoke('cb_checkout_back',f"checkout_back:{draft['token']}")
+        buttons=[b for row in self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for b in row]
+        selection=next(b for b in buttons if b.callback_data and b.callback_data.endswith(':checkout_credit'))
+        self.assertNotIn('کیف پول',selection.text)
+        self.assertFalse(self.orders())
+        self.assertEqual(self.db.get_wallet_credit(101),0)
+
+    async def test_postpaid_credit_remains_available_under_its_own_label(self):
+        with self.db._get_conn() as conn:
+            conn.execute('UPDATE users SET referral_credit=0, credit_limit=250000 WHERE telegram_id=101')
+        await self.invoke('cb_product',f'prod:{self.pid}')
+        buttons=[b for row in self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for b in row]
+        selection=next(b for b in buttons if b.callback_data and b.callback_data.endswith(':checkout_credit'))
+        self.assertNotIn('کیف پول',selection.text)
+        self.assertIn('اعتبار',selection.text)
+        self.assertFalse(self.orders())
+        self.assertEqual(self.db.get_wallet_credit(101),0)
+
+    async def test_postpaid_purchase_still_completes_and_records_debt(self):
+        with self.db._get_conn() as conn:
+            conn.execute('UPDATE users SET referral_credit=0, credit_limit=250000 WHERE telegram_id=101')
+        draft=await self.enter('checkout_credit')
+        self.assertIn('اعتبار',draft['method_label'])
+        with patch('handlers_user.deliver_config_to_user',new=AsyncMock()) as delivery, \
+             patch('handlers_user.check_and_notify_low_stock',new=AsyncMock()), \
+             patch('handlers_user.report_router.send_text',new=AsyncMock(return_value=None)):
+            await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
+        self.assertEqual(len(self.orders()),1)
+        self.assertEqual(self.orders()[0]['status'],'approved')
+        self.assertEqual(self.db.get_wallet_credit(101),-200000)
+        delivery.assert_awaited_once()

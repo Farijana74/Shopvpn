@@ -1514,6 +1514,43 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         else:
             await message.answer(text)
 
+    # Existing expiry reminders contain prod:<id>; scope compatibility to the
+    # original message so ordinary product links retain their existing behavior.
+    from cleanup_loop import EXPIRY_WARNING_TEXT
+
+    async def _open_cleanup_expiry_categories(call: CallbackQuery):
+        from inline_navigation import separate_messages
+        await call.answer()
+        categories = await asyncio.to_thread(db.get_categories, active_only=True)
+        custom_enabled = (full_access_bot or bool(db.get_setting("managed_reseller_bot_id", ""))) and (
+            await asyncio.to_thread(db.get_setting, "custom_config_enabled", "0") == "1"
+            or await asyncio.to_thread(db.count_active_custom_config_products) > 0
+        )
+        with separate_messages():
+            if not categories and not custom_enabled:
+                await call.message.answer(db.get_text("handlers_user.category.none_active", "در حال حاضر دسته‌بندی فعالی وجود ندارد."))
+                return
+            await call.message.answer(db.get_text("handlers_user.category.choose_option", "یک گزینه را انتخاب کنید:"),
+                                      reply_markup=kb.categories_kb(db, categories, full_access_bot))
+
+    @router.callback_query(F.data == "cleanup:buy")
+    async def cb_cleanup_expiry_buy(call: CallbackQuery):
+        await _open_cleanup_expiry_categories(call)
+
+    async def _is_legacy_cleanup_expiry(call: CallbackQuery):
+        text = call.message.text
+        if text in (EXPIRY_WARNING_TEXT, tr(EXPIRY_WARNING_TEXT, 'en')):
+            return True
+        try:
+            from notification_i18n import localized
+            return text == await asyncio.to_thread(localized, EXPIRY_WARNING_TEXT, db, call.from_user.id)
+        except Exception:
+            return False
+
+    @router.callback_query(F.data.startswith("prod:"), F.message.text.startswith("⚠️"), _is_legacy_cleanup_expiry)
+    async def cb_legacy_cleanup_expiry_buy(call: CallbackQuery):
+        await _open_cleanup_expiry_categories(call)
+
     @router.callback_query(F.data.startswith("prod:"))
     @_checkout_serialized
     async def cb_product(call: CallbackQuery, state: FSMContext):
@@ -2192,7 +2229,9 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                                        allowed is None or 'wallet' in allowed)
         if plan['blocked']:
             raise ValueError(plan['message'])
-        remaining = max(tier['total_after'] - discount - plan['wallet_used'], 0)
+        price_after_discount = max(tier['total_after'] - discount, 0)
+        remaining = max(price_after_discount - plan['wallet_used'], 0)
+        wallet_balance = await asyncio.to_thread(db.get_wallet_credit, user_id)
         markup = kb.payment_choice_kb(
             crypto_payment.crypto_payment_available(db),
             abangateway_payment.abangateway_payment_available(db),
@@ -2204,14 +2243,21 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             blupal_enabled=blupal_payment.blupal_payment_available(db),
             extra_gateways=extra_gateway_payment.available_keys(db, is_main_bot), user_id=user_id,
         )
-        credit_button = InlineKeyboardButton(text=tr('👛 کیف پول / کد تخفیف'), callback_data='checkout_credit')
         if remaining <= 0:
-            markup = InlineKeyboardMarkup(inline_keyboard=[[credit_button]])
-        elif allowed is None or 'wallet' in allowed or not any(b.callback_data != 'cancel_flow' for row in markup.inline_keyboard for b in row):
-            # Keep codes usable even when no gateway can accept the undiscounted amount.
-            markup = markup.model_copy(update={'inline_keyboard': [[credit_button]] + markup.inline_keyboard})
+            if not plan['wallet_used']:
+                label = '✅ ادامه با تخفیف / خرید رایگان'
+            elif wallet_balance >= price_after_discount:
+                label = '👛 کیف پول / کد تخفیف'
+            else:
+                label = '💳 پرداخت با اعتبار'
+            markup = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=tr(label), callback_data='checkout_credit'),
+            ]])
+        elif not any(b.callback_data != 'cancel_flow' for row in markup.inline_keyboard for b in row):
+            # Preserve the ability to apply a full discount when no gateway is available.
+            coupon = InlineKeyboardButton(text=tr('🎟 استفاده از کد تخفیف'), callback_data='checkout_coupon')
+            markup = markup.model_copy(update={'inline_keyboard': [[coupon]] + markup.inline_keyboard})
         text = f"📦 {escape_html(product['name'])}\n💰 قیمت: {tier['total']:,} تومان\n"
-        wallet_balance = await asyncio.to_thread(db.get_wallet_credit, user_id)
         text += f'👛 موجودی کیف پول: {wallet_balance:,} تومان\n'
         if users:
             text += f'👥 تعداد کاربر همزمان: {users}\n'
@@ -2363,11 +2409,13 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
                 return
             try:
                 quote, markup, amount = await _checkout_preview(state, call.from_user.id, draft['product_id'])
+                if amount > 0 and draft['method'] == 'checkout_credit':
+                    return await _show_checkout_methods(call, state, draft['product_id'])
                 if quote != draft.get('quote'):
                     await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
                     return await call.answer(tr('مبلغ سفارش تغییر کرده؛ مبلغ جدید را بررسی و دوباره تایید کنید.'), show_alert=True)
-                if amount > 0 and draft['method'] == 'checkout_credit':
-                    return await call.answer(tr('اعتبار کیف پول و تخفیف برای پرداخت کامل کافی نیست؛ کد تخفیف وارد کنید یا روش پرداخت را تغییر دهید.'), show_alert=True)
+                if amount > 0 and draft['method'] == 'checkout_coupon':
+                    return await call.answer(tr('تخفیف برای پرداخت کامل کافی نیست؛ کد دیگری وارد کنید یا روش پرداخت را تغییر دهید.'), show_alert=True)
                 if amount > 0 and draft['method'] not in [b.callback_data for r in markup.inline_keyboard for b in r]:
                     await call.answer(tr('مبلغ یا روش‌های مجاز تغییر کرده؛ روش پرداخت را دوباره انتخاب کنید.'), show_alert=True)
                     return await _show_checkout_methods(call, state, draft['product_id'])
@@ -2460,12 +2508,14 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         if draft:
             try:
                 quote, methods, due = await _checkout_preview(state, call.from_user.id, product_id)
+                if due > 0 and checkout_method == 'checkout_credit':
+                    return await _show_checkout_methods(call, state, product_id)
                 if quote != draft.get('quote'):
                     await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
                     return await call.answer(tr('مبلغ سفارش تغییر کرده؛ مبلغ جدید را بررسی کنید.'), show_alert=True)
-                if due > 0 and checkout_method == 'checkout_credit':
+                if due > 0 and checkout_method == 'checkout_coupon':
                     await _checkout_review(call.message, state, call.from_user.id, draft, edit=True)
-                    return await call.answer(tr('اعتبار کیف پول و تخفیف برای پرداخت کامل کافی نیست.'), show_alert=True)
+                    return await call.answer(tr('تخفیف برای پرداخت کامل کافی نیست.'), show_alert=True)
                 if due > 0 and checkout_method not in [b.callback_data for row in methods.inline_keyboard for b in row]:
                     await state.update_data(product_checkout=dict(draft, phase='review'))
                     return await _show_checkout_methods(call, state, product_id)
