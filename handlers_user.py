@@ -3711,6 +3711,11 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
 
     @router.message(F.text.func(lambda t: t in (db.get_setting("btn_test"), tr(db.get_setting("btn_test")))))
     async def get_test_config(message: Message):
+        from inline_navigation import separate_messages
+        with separate_messages():
+            await _get_test_config(message)
+
+    async def _get_test_config(message: Message):
         if (await asyncio.to_thread(db.get_setting, "test_enabled", "1")) != "1":
             await message.answer(db.get_text('handlers_user.auto_e61183a5', 'در حال حاضر امکان دریافت کانفیگ تست غیرفعال است.'))
             return
