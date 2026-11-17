@@ -11660,6 +11660,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             broadcast_chat_id=message.chat.id,
             broadcast_message_id=message.message_id,
             broadcast_text=message.text,
+            broadcast_entities=[entity.model_dump(mode='json', exclude_none=True) for entity in (message.entities or [])],
             broadcast_caption=message.caption,
         )
         await state.set_state(AdminBroadcast.waiting_duration)
@@ -11826,9 +11827,12 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await message.answer(db.get_text('handlers_admin.auto_9949b97e', '⚠️ زمان باید در آینده باشد.'))
             return
         data = await state.get_data()
-        text = (data.get("broadcast_text") or "").strip()
+        entities = data.get('broadcast_entities') or []
+        text = data.get("broadcast_text") or ""
+        if not entities:
+            text = text.strip()
         await state.clear()
-        job_id = await asyncio.to_thread(db.create_scheduled_broadcast, message.from_user.id, text, when_utc.isoformat(timespec="seconds"))
+        job_id = await asyncio.to_thread(db.create_scheduled_broadcast, message.from_user.id, text, when_utc.isoformat(timespec="seconds"), entities)
         await asyncio.to_thread(db.log_admin_action, message.from_user.id, "broadcast_schedule", f"پیام همگانی زمان‌بندی‌شده #{job_id} برای {local.strftime('%Y-%m-%d %H:%M')} (تهران)")
         await message.answer(
             tr(f"⏰ پیام برای {local.strftime('%Y-%m-%d %H:%M')} (وقت تهران) زمان‌بندی شد. شناسه: {job_id}"),

@@ -10,6 +10,8 @@ etc.) are localized separately by the caller.
 from __future__ import annotations
 
 from typing import Any
+import json
+from aiogram.types import MessageEntity
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 
 
@@ -22,13 +24,18 @@ def custom_broadcast_text(text: str) -> str:
     return text if isinstance(text, str) else str(text or "")
 
 
-async def send_scheduled_broadcast(bot: Any, chat_id: int, text: str, **kwargs):
+async def send_scheduled_broadcast(bot: Any, chat_id: int, text: str, message_entities=None, **kwargs):
     """Deliver a scheduled custom broadcast verbatim.
 
     The recipient's language affects system notifications, not text authored
     by an administrator. This function is the single delivery path used by the
     scheduled-broadcast worker.
     """
+    if message_entities:
+        entities = json.loads(message_entities) if isinstance(message_entities, str) else message_entities
+        if entities:
+            kwargs['entities'] = [MessageEntity.model_validate(entity) for entity in entities]
+            kwargs['parse_mode'] = None
     return await bot.send_message(chat_id, custom_broadcast_text(text), **kwargs)
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 # 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

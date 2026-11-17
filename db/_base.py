@@ -351,6 +351,7 @@ class DatabaseBase:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     admin_id INTEGER NOT NULL,
                     message_text TEXT NOT NULL,
+                    message_entities TEXT,
                     scheduled_at TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     sent_count INTEGER DEFAULT 0,
@@ -1773,6 +1774,8 @@ class DatabaseBase:
 
 
     def _migrate_columns(self, conn):
+        if not self._column_exists(conn, 'scheduled_broadcasts', 'message_entities'):
+            conn.execute('ALTER TABLE scheduled_broadcasts ADD COLUMN message_entities TEXT')
         for column, definition in [('upstream_category_id','INTEGER'),('managed_name_override','INTEGER DEFAULT 0'),('managed_icon_override','INTEGER DEFAULT 0')]:
             if not self._column_exists(conn, 'categories', column):
                 conn.execute(f'ALTER TABLE categories ADD COLUMN {column} {definition}')

@@ -84,7 +84,7 @@ async def scheduled_broadcast_loop(bot, db):
                 sent=failed=0
                 for uid in user_ids:
                     try:
-                        await send_scheduled_broadcast(bot, uid, job["message_text"])
+                        await send_scheduled_broadcast(bot, uid, job["message_text"], message_entities=job['message_entities'])
                         sent+=1
                     except Exception:
                         failed+=1
