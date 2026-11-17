@@ -2,8 +2,9 @@
 import asyncio
 import html
 import logging
+from urllib.parse import urlsplit
 
-from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 import dedicated_sub
 from config_delivery import build_qr_bytes, collect_service_info, strip_html, _delivery_flags, panel_individual_links
@@ -63,11 +64,19 @@ async def send_trial(bot, db, user_id, links, *, plan_name='', amount='', userna
         except (KeyError, ValueError):
             pass
         caption += '\n\n' + success
-    back = InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [InlineKeyboardButton(text='📖 پیام راهنما', callback_data='trial:help')],
         [InlineKeyboardButton(text='🏠 بازگشت به منو', callback_data='trial:main_menu')],
-    ])
-    buttons = back
+    ]
+    for url in subscriptions:
+        try:
+            parsed = urlsplit(url)
+            if parsed.scheme == 'https' and parsed.hostname and not parsed.username and not parsed.password and not any(c.isspace() for c in url):
+                rows.insert(0, [InlineKeyboardButton(text='🔗 پنل کاربری', web_app=WebAppInfo(url=url))])
+                break
+        except ValueError:
+            continue
+    buttons = InlineKeyboardMarkup(inline_keyboard=rows)
     long_body = _length(caption) > 1024
     try:
         qr = await asyncio.to_thread(build_qr_bytes, qr_link, db)

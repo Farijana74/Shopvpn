@@ -107,8 +107,9 @@ class DeliveryCopyTests(unittest.IsolatedAsyncioTestCase):
         bot.send_message.assert_not_awaited()
         args=bot.send_photo.await_args.kwargs
         rows=args['reply_markup'].inline_keyboard
-        self.assertEqual([row[0].callback_data for row in rows],['trial:help','trial:main_menu'])
-        self.assertTrue(all(b.copy_text is None and b.web_app is None for row in rows for b in row))
+        self.assertEqual(rows[0][0].web_app.url, 'https://example.invalid/sub')
+        self.assertEqual([row[0].callback_data for row in rows[1:]],['trial:help','trial:main_menu'])
+        self.assertTrue(all(b.copy_text is None for row in rows for b in row))
         self.assertIn('<pre><code>vless://one\n\nvless://two</code></pre>',args['caption'])
         self.assertEqual(rows[-1][0].callback_data,'trial:main_menu')
         self.assertIn('لینک ساب',args['caption'])

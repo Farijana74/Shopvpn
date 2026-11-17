@@ -295,11 +295,12 @@ class CatalogMixin:
             cur = conn.execute(
                 "INSERT INTO products (category_id, name, price, description, duration_days, "
                 "is_auto_provision, auto_provision_volume_gb, provision_server_id, provision_ssh_node_id, payment_methods, "
-                "base_users, extra_user_price, max_users, compare_price, delivery_mode) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "base_users, extra_user_price, max_users, compare_price, delivery_mode, sort_order) "
+                "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(MAX(sort_order), -1) + 1 "
+                "FROM products WHERE category_id=?",
                 (category_id, name, price, description, duration_days,
                  1 if is_auto_provision else 0, auto_provision_volume_gb, provision_server_id, provision_ssh_node_id, pm_value,
-                 base_users, extra_user_price, max_users, compare_price, delivery_mode),
+                 base_users, extra_user_price, max_users, compare_price, delivery_mode, category_id),
             )
             return cur.lastrowid
 
@@ -364,7 +365,8 @@ class CatalogMixin:
         if len(ids) != len(set(ids)):
             raise ValueError("شناسه‌های محصولات تکراری هستند.")
         with self._get_conn() as conn:
-            rows = conn.execute("SELECT id FROM products WHERE category_id=?", (category_id,)).fetchall()
+            rows = conn.execute("SELECT id FROM products WHERE category_id=? AND NOT EXISTS "
+                                "(SELECT 1 FROM settings WHERE key='volume_template:'||products.id AND value='1')", (category_id,)).fetchall()
             existing = {int(r["id"]) for r in rows}
             if set(ids) != existing:
                 raise ValueError("فهرست محصولات کامل نیست یا شامل محصول نامعتبر است.")

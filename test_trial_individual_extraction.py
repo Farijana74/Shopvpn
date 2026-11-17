@@ -32,7 +32,8 @@ class TrialIndividualExtractionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('لینک ساب',caption)
         self.assertNotIn('expandable',caption)
         rows=bot.send_photo.await_args.kwargs['reply_markup'].inline_keyboard
-        self.assertEqual([row[0].callback_data for row in rows],['trial:help','trial:main_menu'])
+        self.assertEqual(rows[0][0].web_app.url, 'https://example.invalid/sub')
+        self.assertEqual([row[0].callback_data for row in rows[1:]],['trial:help','trial:main_menu'])
         bot.send_message.assert_not_awaited()
 
     async def test_explicit_test_enabled_overrides_disabled_purchase_setting(self):

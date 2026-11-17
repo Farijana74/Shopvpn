@@ -2225,7 +2225,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
 
     @router.message(AdminAddProduct.waiting_name)
     async def process_product_name(message: Message, state: FSMContext):
-        await state.update_data(name=message.text.strip())
+        from product_emoji import extract as extract_product_emoji
+        name = message.text.strip()
+        await state.update_data(name=name, product_name_emoji=extract_product_emoji(message, name))
         await state.set_state(AdminAddProduct.waiting_price)
         await message.answer(db.get_text('handlers_admin.auto_5b64c2fe', 'قیمت محصول را به تومان و فقط عدد وارد کنید (مثال: 150000):'))
 
@@ -2497,7 +2499,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         auto_provision_volume_gb = data.get("auto_provision_volume_gb")
         payment_methods = data.get("payment_methods")
 
-        (await asyncio.to_thread(db.add_product, 
+        product_id = (await asyncio.to_thread(db.add_product,
             data["category_id"], data["name"], data["price"], data["description"], data["duration_days"],
             is_auto_provision=(auto_provision_volume_gb is not None), auto_provision_volume_gb=auto_provision_volume_gb,
             provision_server_id=provision_server_id, payment_methods=payment_methods,
@@ -2505,6 +2507,9 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             extra_user_price=int(data.get("user_extra_price") or 0),
             max_users=int(data.get("user_max") or 0),
         ))
+        if data.get('product_name_emoji'):
+            from product_emoji import save_value as save_product_emoji_value
+            await asyncio.to_thread(save_product_emoji_value, db, product_id, data['product_name_emoji'])
         pm_log = "همه" if payment_methods is None else "، ".join(payment_methods)
         if auto_provision_volume_gb is not None:
             volume_log = "نامحدود" if auto_provision_volume_gb == 0 else f"{auto_provision_volume_gb} گیگ"

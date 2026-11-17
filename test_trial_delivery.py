@@ -28,7 +28,8 @@ class TrialDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('راهنما', args['caption'])
         rows = args['reply_markup'].inline_keyboard
         self.assertEqual([r[0].callback_data for r in rows if r[0].callback_data in ('trial:help','trial:main_menu')], ['trial:help', 'trial:main_menu'])
-        self.assertTrue(all(b.copy_text is None and b.web_app is None for row in rows for b in row))
+        self.assertEqual(rows[0][0].web_app.url, links[0])
+        self.assertTrue(all(b.copy_text is None for row in rows for b in row))
 
     async def test_long_link_has_qr_and_one_text_message(self):
         bot = AsyncMock()
@@ -47,6 +48,21 @@ class TrialDeliveryTests(unittest.IsolatedAsyncioTestCase):
             await send_trial(bot, db, 42, 'https://example.invalid/sub')
         self.assertIn('vless://individual', bot.send_photo.await_args.kwargs['caption'])
         self.assertNotIn('https://example.invalid/sub', bot.send_photo.await_args.kwargs['caption'])
+        self.assertTrue(all(b.web_app is None for row in bot.send_photo.await_args.kwargs['reply_markup'].inline_keyboard for b in row))
+
+    async def test_http_subscription_does_not_create_web_app_button(self):
+        bot = AsyncMock()
+        with patch('trial_delivery.dedicated_sub.dedicated_link_for_upstream', side_effect=lambda db, url: url), patch('trial_delivery.build_qr_bytes', return_value=b'png'):
+            await send_trial(bot, FakeDB(), 42, 'http://example.invalid/sub')
+        rows = bot.send_photo.await_args.kwargs['reply_markup'].inline_keyboard
+        self.assertTrue(all(b.web_app is None for row in rows for b in row))
+
+    async def test_long_subscription_puts_button_on_text_message(self):
+        bot = AsyncMock()
+        link = 'https://example.invalid/' + 'a' * 1100
+        with patch('trial_delivery.dedicated_sub.dedicated_link_for_upstream', side_effect=lambda db, url: url), patch('trial_delivery.build_qr_bytes', return_value=b'png'):
+            await send_trial(bot, FakeDB(), 42, link)
+        self.assertEqual(bot.send_message.await_args.kwargs['reply_markup'].inline_keyboard[0][0].web_app.url, link)
 
 
     async def test_long_trial_is_delivered_when_photo_send_fails(self):

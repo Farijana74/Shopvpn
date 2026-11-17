@@ -7,20 +7,26 @@ def key(product_id):
     return f'product_name_emoji:{int(product_id)}'
 
 
-def save(db, product_id, message, name):
+def extract(message, name):
     text = message.text or ''
     entities = [e for e in (getattr(message, 'entities', None) or [])
                 if e.type == 'custom_emoji' and e.custom_emoji_id]
     if not entities:
-        db.set_setting(key(product_id), '')
-        return
+        return {}
     first = entities[0]
     raw = text.encode('utf-16-le')
     start, end = first.offset * 2, (first.offset + first.length) * 2
     label = (raw[:start] + raw[end:]).decode('utf-16-le').strip() or name
-    value = {'name': name, 'label': label, 'icon': first.custom_emoji_id,
-             'html': html_decoration.unparse(text, entities).strip()}
-    db.set_setting(key(product_id), json.dumps(value, ensure_ascii=False))
+    return {'name': name, 'label': label, 'icon': first.custom_emoji_id,
+            'html': html_decoration.unparse(text, entities).strip()}
+
+
+def save_value(db, product_id, value):
+    db.set_setting(key(product_id), json.dumps(value, ensure_ascii=False) if value else '')
+
+
+def save(db, product_id, message, name):
+    save_value(db, product_id, extract(message, name))
 
 
 def get(db, product):
