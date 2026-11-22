@@ -35,6 +35,9 @@ async def topup_completed(db, bot, topup_id, topup, method=None):
     try:
         lines=[f'✅ پرداخت آنلاین شارژ کیف پول تأیید شد - #{int(topup_id)}',
                f"👤 آیدی کاربر: {int(topup['user_id'])}",f"💰 مبلغ: {int(topup['amount']):,} تومان"]
+        if 'credit_amount' in topup.keys() and topup['credit_amount'] is not None:
+            lines.append(f"🎟 تخفیف: {int(topup['discount_amount'] or 0):,} تومان")
+            lines.append(f"👛 مبلغ شارژ: {int(topup['credit_amount']):,} تومان")
         if method:lines.append('💳 روش پرداخت: '+html.escape(str(method)))
         await report_router.report(bot,db,'finance','\n'.join(lines))
     except Exception:

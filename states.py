@@ -23,6 +23,7 @@ class RenewalDiscountEntry(StatesGroup):
 
 class WalletTopup(StatesGroup):
     waiting_amount = State()
+    waiting_discount_code = State()
     waiting_receipt = State()
     waiting_customgw_phone = State()
 
@@ -267,6 +268,7 @@ class AdminBulkDiscount(StatesGroup):
     waiting_no_purchase_days = State()
     waiting_type_value = State()
     waiting_expiry = State()
+    waiting_minimum = State()
 
 
 class AdminXuiInbound(StatesGroup):
@@ -460,6 +462,10 @@ class AdminWheelSettings(StatesGroup):
     waiting_cooldown = State()
 
 
+class AdminCouponMinimum(StatesGroup):
+    waiting_amount = State()
+
+
 class AdminWheelPrize(StatesGroup):
     waiting_discount_percent = State()
     waiting_title = State()
@@ -639,12 +645,14 @@ class AdminUserFullStats(StatesGroup):
 
 
 class AdminUserManage(StatesGroup):
+    waiting_config_prefix = State()
     waiting_test_quota_user = State()
     waiting_test_quota_count = State()
     waiting_message_text = State()
     waiting_wallet_amount = State()
     waiting_discount_type_value = State()
     waiting_discount_expiry = State()
+    waiting_discount_minimum = State()
 
 
 class AdminConfigManage(StatesGroup):
@@ -710,6 +718,10 @@ class AdminAddCustomConfigProductTier(StatesGroup):
 
 class ServiceRenameFlow(StatesGroup):
     waiting_suffix = State()
+
+
+class UserConfigPrefixFlow(StatesGroup):
+    waiting_prefix = State()
 
 
 class ServiceTransferFlow(StatesGroup):

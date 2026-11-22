@@ -263,7 +263,7 @@ class SeasonsMixin:
         code = f"{prefix}{int(season_id)}R{int(rank)}{secrets.token_hex(3).upper()}"
         self.create_discount_code(
             code, percent=int(percent), max_uses=1, expires_at=expires_at, source="season_prize", per_user_limit=1,
-            product_id=product_id,
+            product_id=product_id, min_purchase=0 if product_id else int(self.get_setting('season_coupon_min', '0') or 0),
         )
         return code
 
@@ -403,10 +403,12 @@ class SeasonsMixin:
                     win_rank = rank
                     expires_at = (datetime.utcnow() + timedelta(hours=int(quiz["code_valid_hours"]))).isoformat()
                     code = f"QZ{int(quiz_id)}{secrets.token_hex(3).upper()}"
+                    setting = conn.execute("SELECT value FROM settings WHERE key='quiz_coupon_min'").fetchone()
+                    minimum = int(setting['value'] or 0) if setting else 0
                     conn.execute(
-                        "INSERT INTO discount_codes (code, percent, max_uses, expires_at, source, per_user_limit) "
-                        "VALUES (?,?,?,?,?,?)",
-                        (code, int(quiz["discount_percent"]), 1, expires_at, "quiz_prize", 1),
+                        "INSERT INTO discount_codes (code, percent, max_uses, expires_at, source, per_user_limit, min_purchase) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (code, int(quiz["discount_percent"]), 1, expires_at, "quiz_prize", 1, minimum or None),
                     )
             conn.execute(
                 "INSERT INTO daily_quiz_answers (quiz_id, user_id, choice, is_correct, win_rank, code) VALUES (?,?,?,?,?,?)",

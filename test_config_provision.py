@@ -39,11 +39,13 @@ async def provision_test_plan(db, plan, user_id: int, override_server=None,
     duration_days = plan["duration_hours"] / 24.0
 
     provider = get_provider(server)
+    from user_config_prefix import get_prefix
+    prefix = get_prefix(db, user_id) if user_id is not None else plan['name_prefix']
     username = None
     result = None
     try:
         for _ in range(10):
-            candidate = _random_username(plan["name_prefix"])
+            candidate = _random_username(prefix)
             try:
                 result = await provider.create_user(candidate, volume_gb, duration_days)
                 username = candidate

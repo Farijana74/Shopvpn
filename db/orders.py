@@ -650,6 +650,7 @@ class OrdersMixin:
             return conn.execute(
                 "SELECT * FROM orders WHERE user_id=? AND status='pending' "
                 "AND receipt_file_id IS NULL "
+                "AND (discount_code_id IS NULL OR payment_started=0 OR payment_method='card') "
                 "AND NOT EXISTS (SELECT 1 FROM crypto_invoices ci WHERE ci.kind='order' AND ci.ref_id=orders.id) "
                 "ORDER BY id DESC LIMIT 1",
                 (user_tg_id,),
@@ -2125,18 +2126,21 @@ class OrdersMixin:
             ).fetchone()
 
 
-    def approve_topup(self, topup_id: int) -> bool:
+    def approve_topup(self, topup_id: int, verified_payment: bool = False) -> bool:
         """تایید شارژ کیف پول و اعمال کش‌بک یک‌باره در صورت فعال بودن."""
         topup = self.get_topup(topup_id)
         if not topup:
             return False
         percent = max(0, min(int(self.get_setting("topup_cashback_percent", "0") or 0), 100))
         cashback = (int(topup["amount"] or 0) * percent) // 100
+        credit_amount = int(topup['credit_amount'] if topup['credit_amount'] is not None else topup['amount'])
         with self._get_conn() as conn:
             cur = conn.execute(
                 "UPDATE wallet_topups SET status='approved', updated_at=?, cashback_paid=1, cashback_amount=? "
-                "WHERE id=? AND status='pending'",
-                (datetime.utcnow().isoformat(), cashback, topup_id),
+                "WHERE id=? AND status='pending' AND (discount_code_id IS NULL OR amount=0 OR "
+                "(payment_started=1 AND ((payment_method='card' AND receipt_file_id IS NOT NULL) "
+                "OR (payment_method<>'card' AND ?=1))))",
+                (datetime.utcnow().isoformat(), cashback, topup_id, 1 if verified_payment else 0),
             )
             if cur.rowcount == 0:
                 return False
@@ -2144,7 +2148,7 @@ class OrdersMixin:
             with _wallet_tag(conn, topup["user_id"], "topup", f"شارژ کیف پول #{topup_id}"):
                 conn.execute(
                     "UPDATE users SET referral_credit=MAX(referral_credit + ?, MIN(referral_credit,0)) WHERE telegram_id=?",
-                    (int(topup["amount"]) + cashback, topup["user_id"]),
+                    (credit_amount + cashback, topup["user_id"]),
                 )
         return True
 
@@ -2159,9 +2163,15 @@ class OrdersMixin:
         """فقط topup pending را رد می‌کند (نه processing/approved)."""
         with self._get_conn() as conn:
             cur = conn.execute(
-                "UPDATE wallet_topups SET status='rejected', close_reason=?, updated_at=? WHERE id=? AND status='pending'",
-                (reason or "", datetime.utcnow().isoformat(), topup_id),
+                "UPDATE wallet_topups SET status='rejected', close_reason=?, updated_at=? WHERE id=? AND status='pending' "
+                "AND (discount_code_id IS NULL OR payment_started=0 OR (payment_method='card' AND ? <> 'user_cancel'))",
+                (reason or "", datetime.utcnow().isoformat(), topup_id, reason or ""),
             )
+            if cur.rowcount:
+                redemption = conn.execute('SELECT id,code_id FROM discount_redemptions WHERE topup_id=?', (topup_id,)).fetchone()
+                if redemption:
+                    conn.execute('DELETE FROM discount_redemptions WHERE id=?', (redemption['id'],))
+                    conn.execute('UPDATE discount_codes SET used_count=MAX(used_count-1,0) WHERE id=?', (redemption['code_id'],))
             if cur.rowcount and reason != "user_cancel":
                 self._mark_receipt_decision(conn, "topup", topup_id, "rejected")
             return cur.rowcount > 0
@@ -2588,7 +2598,7 @@ class OrdersMixin:
                 expires = (datetime.utcnow() + timedelta(hours=settings["discount_expiry_hours"])).isoformat()
                 code = f"NIGHT{winner['user_id']}{secrets.randbelow(900000)+100000}"
                 try:
-                    self.create_discount_code(code, percent=winner["prize"], max_uses=1, expires_at=expires, source="lottery")
+                    self.create_discount_code(code, percent=winner["prize"], max_uses=1, expires_at=expires, source="lottery", min_purchase=int(self.get_setting('wallet_coupon_min_lottery', '0') or 0))
                     winner["code"] = code
                     winner["expires_at"] = expires
                 except Exception:
@@ -2635,6 +2645,7 @@ class OrdersMixin:
             "prizes": [int(r["discount_percent"]) for r in rows if r["kind"] == "discount" and r["discount_percent"]],
             "expiry_hours": int(self.get_setting("wheel_code_expiry_hours", "24") or 24),
             "cooldown_hours": int(self.get_setting("wheel_cooldown_hours", "24") or 24),
+            "coupon_min": max(0, int(self.get_setting('wallet_coupon_min_wheel', '0') or 0)),
         }
 
     def list_wheel_prizes(self, active_only: bool = False):
@@ -2742,12 +2753,13 @@ class OrdersMixin:
         expires_at = (datetime.utcnow() + timedelta(hours=settings["expiry_hours"])).isoformat()
         code = f"LUCKY{user_tg_id}{secrets.randbelow(9000) + 1000}"
         self.create_discount_code(
-            code, percent=percent, max_uses=1, expires_at=expires_at, source="wheel"
+            code, percent=percent, max_uses=1, expires_at=expires_at, source="wheel",
+            min_purchase=int(self.get_setting('wallet_coupon_min_wheel', '0') or 0)
         )
         return code, expires_at
 
     def generate_bulk_discount_codes(
-        self, user_ids: list, percent: int = None, fixed_amount: int = None, expires_at: str = None,
+        self, user_ids: list, percent: int = None, fixed_amount: int = None, expires_at: str = None, min_purchase: int = None,
     ) -> list:
         """برای هر کاربر در user_ids یک کد تخفیف یکبارمصرف و یکتا می‌سازد (کد تخفیف
         گروهی بر اساس فیلتر، پنل مدیریت). هر کد فقط برای همان کاربر و فقط یک‌بار
@@ -2766,7 +2778,7 @@ class OrdersMixin:
                 continue
             self.create_discount_code(
                 code, percent=percent, fixed_amount=fixed_amount, max_uses=1,
-                expires_at=expires_at, source="bulk_admin", per_user_limit=1,
+                expires_at=expires_at, source="bulk_admin", per_user_limit=1, min_purchase=min_purchase,
             )
             results.append((uid, code))
         return results
@@ -2783,7 +2795,8 @@ class OrdersMixin:
         expires_at = (datetime.utcnow() + timedelta(hours=settings["discount_expiry_hours"])).isoformat()
         code = f"RENEW{user_tg_id}{secrets.randbelow(9000) + 1000}"
         self.create_discount_code(
-            code, percent=settings["discount_percent"], max_uses=1, expires_at=expires_at, source="renewal_reminder"
+            code, percent=settings["discount_percent"], max_uses=1, expires_at=expires_at, source="renewal_reminder",
+            min_purchase=int(self.get_setting('wallet_coupon_min_renewal', '0') or 0)
         )
         return code, expires_at, settings["discount_percent"], settings["discount_expiry_hours"]
 
@@ -2799,7 +2812,8 @@ class OrdersMixin:
         expires_at = (datetime.utcnow() + timedelta(hours=settings["discount_expiry_hours"])).isoformat()
         code = f"VOLUME{user_tg_id}{secrets.randbelow(9000) + 1000}"
         self.create_discount_code(
-            code, percent=settings["discount_percent"], max_uses=1, expires_at=expires_at, source="volume_reminder"
+            code, percent=settings["discount_percent"], max_uses=1, expires_at=expires_at, source="volume_reminder",
+            min_purchase=int(self.get_setting('wallet_coupon_min_volume', '0') or 0)
         )
         return code, expires_at, settings["discount_percent"], settings["discount_expiry_hours"]
 
@@ -2810,6 +2824,7 @@ class OrdersMixin:
 
     def get_churn_settings(self) -> dict:
         return {
+            "coupon_min": max(0, int(self.get_setting('wallet_coupon_min_churn', '0') or 0)),
             "enabled": self.get_setting("churn_offer_enabled", "0") == "1",
             "ai_enabled": self.get_setting("churn_offer_ai_enabled", "1") == "1",
             "min_score": max(1, min(int(self.get_setting("churn_offer_min_score", "60") or 60), 100)),
@@ -2940,7 +2955,7 @@ class OrdersMixin:
         code = f"BACK{user_tg_id}{secrets.randbelow(9000) + 1000}"
         self.create_discount_code(
             code, percent=percent, max_uses=1, expires_at=expires_at,
-            source="churn_offer", per_user_limit=1,
+            source="churn_offer", per_user_limit=1, min_purchase=int(self.get_setting('wallet_coupon_min_churn', '0') or 0),
         )
         return code, expires_at, percent, expiry_hours
 

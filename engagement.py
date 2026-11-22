@@ -23,6 +23,8 @@ SETTINGS = {
     "lootbox_daily_limit": ("سقف خرید صندوق در روز برای هر کاربر (۰ = نامحدود)", 10, 0, 1000),
     "lootbox_code_valid_days": ("مدت اعتبار کد جایزه‌ی صندوق (روز)", 7, 1, 365),
     "streak_code_valid_days": ("مدت اعتبار کد تخفیف نقاط عطف (روز)", 14, 1, 365),
+    "wallet_coupon_min_lootbox": ("حداقل شارژ کد تخفیف صندوق (تومان)", 0, 0, 1000000000),
+    "wallet_coupon_min_milestone": ("حداقل شارژ کد تخفیف نقاط عطف (تومان)", 0, 0, 1000000000),
 }
 
 
@@ -79,6 +81,8 @@ async def process_milestones(db, bot, user_id: int):
             lines.append(f"💰 {money(result['wallet'])} تومان به کیف پولت اضافه شد.")
         if result["code"]:
             lines.append(f"🎟 کد تخفیف {milestone['discount']}٪ (یک‌بار مصرف، {valid_days} روز اعتبار): <code>{result['code']}</code>")
+            from wallet_coupon import conditions
+            lines.append(conditions(await asyncio.to_thread(db.get_discount_code, result['code'])))
         if result["box"]:
             lines.append(f"📦 یک «{html.escape(result['box'])}» به صندوق‌هایت اضافه شد.")
         try:

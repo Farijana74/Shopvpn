@@ -208,6 +208,7 @@ def create_season_quiz_router(db, is_main_bot: bool = True) -> Router:
                 _btn(f"🆓 رتبه {rank}", f"ssq_set:season_prize_product_{rank}"),
             ])
         rows.append([_btn("⏱ اعتبار کد جایزه (روز)", "ssq_set:season_prize_valid_days")])
+        rows.append([_btn("💰 حداقل شارژ کد تخفیف", "ssq_set:season_coupon_min")])
         if season:
             rows.append([_btn("⏹ پایان فصل و اهدای جوایز", "ssn_end")])
         else:
@@ -385,6 +386,7 @@ def create_season_quiz_router(db, is_main_bot: bool = True) -> Router:
             [_btn("🕗 ساعت انتشار", "ssq_set:quiz_hour"), _btn("⏳ مدت باز بودن", "ssq_set:quiz_close_hours")],
             [_btn("👥 تعداد برندگان", "ssq_set:quiz_winner_limit"), _btn("🎟 درصد تخفیف", "ssq_set:quiz_discount_percent")],
             [_btn("⏱ اعتبار کد (ساعت)", "ssq_set:quiz_code_valid_hours")],
+            [_btn("💰 حداقل شارژ کد جایزه", "ssq_set:quiz_coupon_min")],
             [_btn("📚 بانک سوال", "dq_bank:0")],
             [_btn("📣 ارسال کوییز همین حالا", "dq_now")],
         ]

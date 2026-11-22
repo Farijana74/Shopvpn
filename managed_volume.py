@@ -158,7 +158,8 @@ def register(router,local,is_main_bot):
         from managed_native_volume import ask_volume
         root=Database(local.get_setting('managed_root_db_path',''))
         try:
-            prefix=local.get_custom_config_prefix()
+            from user_config_prefix import get_prefix
+            prefix=get_prefix(local,call.from_user.id)
             name=(prefix+'-' if prefix else '')+'u'+secrets.token_hex(4)
             await ask_volume(call.message,state,local,root,name);await call.answer()
         except ValueError as exc:await call.answer(customer_error(exc),show_alert=True)
@@ -174,7 +175,8 @@ def register(router,local,is_main_bot):
         if not re.fullmatch(r'[A-Za-z0-9_]{3,20}',text):return await message.answer('نام باید شامل ۳ تا ۲۰ حرف انگلیسی، عدد یا آندرلاین باشد.')
         root=Database(local.get_setting('managed_root_db_path',''))
         try:
-            prefix=local.get_custom_config_prefix()
+            from user_config_prefix import get_prefix
+            prefix=get_prefix(local,message.from_user.id)
             await ask_volume(message,state,local,root,(prefix+'-' if prefix else '')+text)
         except ValueError as exc:await message.answer(customer_error(exc))
         finally:root.close()

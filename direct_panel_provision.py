@@ -98,7 +98,8 @@ async def _provision_vpn(db, product, quantity: int = 1, user_id: int = None, or
     duration_days = product["duration_days"] if product["duration_days"] is not None else 30
 
     provider = get_provider(server)
-    prefix = db.get_custom_config_prefix()
+    from user_config_prefix import get_prefix
+    prefix = get_prefix(db, user_id) if user_id is not None else db.get_custom_config_prefix()
     planned = []
     order = db.get_order(order_id) if order_id is not None else None
     generated_order_name = False
@@ -344,7 +345,12 @@ async def provision_ssh_direct(db, product, quantity: int = 1, user_id: int = No
     # Keep the SSH login recognizable and tied to the name shown for the order.
     # SSH usernames are restricted to portable ASCII account-name characters.
     requested_base = _order_config_name(order).strip().lower()
+    if not requested_base and user_id is not None:
+        from user_config_prefix import get_prefix
+        requested_base = get_prefix(db, user_id).lower()
     requested_base = "".join(ch for ch in requested_base if ch in string.ascii_lowercase + string.digits + "_-").strip("_-")
+    if requested_base and requested_base[0].isdigit():
+        requested_base = 'u' + requested_base
     requested_base = requested_base[:12]
     try:
         for item_index in range(quantity):

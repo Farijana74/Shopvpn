@@ -4418,12 +4418,12 @@ async function renderResellerTiers() {
 function discountExtraFieldsHtml(categories, products) {
   return `
       <div class="form-row">
-        <input class="input" id="code-minpurchase" type="number" placeholder="حداقل مبلغ خرید (تومان)">
-        <input class="input" id="code-maxpurchase" type="number" placeholder="حداکثر مبلغ خرید (تومان)">
+        <input class="input" id="code-minpurchase" type="number" placeholder="حداقل مبلغ شارژ (تومان)">
+        <input class="input" id="code-maxpurchase" type="number" placeholder="حداکثر مبلغ شارژ (تومان)">
       </div>
       <label class="field"><span>سقف مبلغ تخفیف (تومان، فقط برای تخفیف درصدی — مثلاً ۲۰٪ تا سقف ۴۰۰۰۰ تومان)</span>
         <input class="input" id="code-maxdiscount" type="number" placeholder="خالی = بدون سقف"></label>
-      <select class="input" id="code-scope">
+      <select class="input" id="code-scope" style="display:none">
         <option value="">🌐 بدون محدودیت (همه‌ی محصولات)</option>
         ${categories.length ? `<optgroup label="فقط یک دسته‌بندی خاص">${categories.map(c => `<option value="cat:${c.id}">📁 ${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
         ${products.length ? `<optgroup label="فقط یک محصول خاص">${products.map(p => `<option value="prod:${p.id}">📦 ${esc(p.name)}</option>`).join('')}</optgroup>` : ''}
@@ -5416,6 +5416,7 @@ async function renderSalesSettings() {
       <label class="field"><span>جوایز (٪ تخفیف، با کاما جدا کن)</span><input class="input" data-fkey="wheel_prizes" type="text" value="${(wheel.prizes || []).join(', ')}"></label>
       <label class="field"><span>اعتبار کد (ساعت)</span><input class="input" data-fkey="wheel_expiry_hours" type="number" value="${wheel.code_expiry_hours}"></label>
       <label class="field"><span>فاصله‌ی بین دو چرخش (ساعت)</span><input class="input" data-fkey="wheel_cooldown_hours" type="number" value="${wheel.cooldown_hours}"></label>
+      <label class="field"><span>حداقل شارژ برای کد جایزه (تومان)</span><input class="input" data-fkey="wheel_coupon_min" type="number" min="0" value="${wheel.coupon_min || 0}"></label>
       <button class="btn btn-primary btn-sm" id="save-wheel">ذخیره</button>
     </div>
 
@@ -5425,6 +5426,7 @@ async function renderSalesSettings() {
       <label class="field"><span>چند روز قبل از انقضا</span><input class="input" data-fkey="renewal_days_before" type="number" value="${renewal.days_before}"></label>
       <label class="field"><span>درصد تخفیف کد پیشنهادی</span><input class="input" data-fkey="renewal_discount_percent" type="number" value="${renewal.discount_percent}"></label>
       <label class="field"><span>اعتبار کد (ساعت)</span><input class="input" data-fkey="renewal_discount_expiry_hours" type="number" value="${renewal.discount_expiry_hours}"></label>
+      <label class="field"><span>حداقل شارژ برای کد تخفیف (تومان)</span><input class="input" data-fkey="renewal_coupon_min" type="number" min="0" value="${renewal.coupon_min || 0}"></label>
       <button class="btn btn-primary btn-sm" id="save-renewal">ذخیره</button>
     </div>
 
@@ -5437,6 +5439,7 @@ async function renderSalesSettings() {
       <label class="field"><span>حداقل خطر ریزش برای ارسال (۱ تا ۱۰۰)</span><input class="input" data-fkey="churn_min_score" type="number" value="${churn.min_score}"></label>
       <label class="field"><span>درصد تخفیف پیش‌فرض (بدون AI)</span><input class="input" data-fkey="churn_discount_percent" type="number" value="${churn.discount_percent}"></label>
       <label class="field"><span>اعتبار کد (ساعت)</span><input class="input" data-fkey="churn_discount_expiry_hours" type="number" value="${churn.discount_expiry_hours}"></label>
+      <label class="field"><span>حداقل شارژ برای کد تخفیف (تومان)</span><input class="input" data-fkey="churn_coupon_min" type="number" min="0" value="${churn.coupon_min || 0}"></label>
       <label class="field"><span>حداقل فاصله بین دو پیشنهاد به یک کاربر (روز)</span><input class="input" data-fkey="churn_cooldown_days" type="number" value="${churn.cooldown_days}"></label>
       <label class="field"><span>حداکثر پیشنهاد در هر دور بررسی</span><input class="input" data-fkey="churn_max_per_run" type="number" value="${churn.max_per_run}"></label>
       <button class="btn btn-primary btn-sm" id="save-churn">ذخیره</button>
@@ -5455,6 +5458,7 @@ async function renderSalesSettings() {
       <label class="field"><span>گیگ باقی‌مانده (وقتی مبنا گیگ است)</span><input class="input" data-fkey="volume_gb_left" type="number" value="${volumeReminder.gb_left}"></label>
       <label class="field"><span>درصد تخفیف کد پیشنهادی</span><input class="input" data-fkey="volume_discount_percent" type="number" value="${volumeReminder.discount_percent}"></label>
       <label class="field"><span>اعتبار کد (ساعت)</span><input class="input" data-fkey="volume_discount_expiry_hours" type="number" value="${volumeReminder.discount_expiry_hours}"></label>
+      <label class="field"><span>حداقل شارژ برای کد تخفیف (تومان)</span><input class="input" data-fkey="volume_coupon_min" type="number" min="0" value="${volumeReminder.coupon_min || 0}"></label>
       <button class="btn btn-primary btn-sm" id="save-volume">ذخیره</button>
     </div>
 
@@ -5563,6 +5567,7 @@ async function renderSalesSettings() {
       await apiPost('/settings/wheel', {
         enabled: _swOn(root, 'wheel_enabled'), win_percent: _num(root, 'wheel_win_percent'),
         prizes, expiry_hours: _num(root, 'wheel_expiry_hours'), cooldown_hours: _num(root, 'wheel_cooldown_hours'),
+        coupon_min: _num(root, 'wheel_coupon_min'),
       });
       toast('تنظیمات گردونه ذخیره شد.');
     } catch (e) { handleErr(e); }
@@ -5573,6 +5578,7 @@ async function renderSalesSettings() {
       await apiPost('/settings/renewal', {
         enabled: _swOn(root, 'renewal_enabled'), days_before: _num(root, 'renewal_days_before'),
         discount_percent: _num(root, 'renewal_discount_percent'), discount_expiry_hours: _num(root, 'renewal_discount_expiry_hours'),
+        coupon_min: _num(root, 'renewal_coupon_min'),
       });
       toast('تنظیمات یادآوری تمدید ذخیره شد.');
     } catch (e) { handleErr(e); }
@@ -5584,6 +5590,7 @@ async function renderSalesSettings() {
         enabled: _swOn(root, 'churn_enabled'), ai_enabled: _swOn(root, 'churn_ai_enabled'),
         max_discount_percent: _num(root, 'churn_max_discount_percent'), min_score: _num(root, 'churn_min_score'),
         discount_percent: _num(root, 'churn_discount_percent'), discount_expiry_hours: _num(root, 'churn_discount_expiry_hours'),
+        coupon_min: _num(root, 'churn_coupon_min'),
         cooldown_days: _num(root, 'churn_cooldown_days'), max_per_run: _num(root, 'churn_max_per_run'),
       });
       toast('تنظیمات پیش‌بینی ریزش ذخیره شد.');
@@ -5596,6 +5603,7 @@ async function renderSalesSettings() {
         enabled: _swOn(root, 'volume_enabled'), mode: _val(root, 'volume_mode'),
         percent: _num(root, 'volume_percent'), gb_left: _num(root, 'volume_gb_left'),
         discount_percent: _num(root, 'volume_discount_percent'), discount_expiry_hours: _num(root, 'volume_discount_expiry_hours'),
+        coupon_min: _num(root, 'volume_coupon_min'),
       });
       toast('تنظیمات یادآوری حجمی ذخیره شد.');
     } catch (e) { handleErr(e); }

@@ -85,8 +85,7 @@ def build_offer_text(candidate: dict, usage: dict, code: str, percent: int, expi
         f"🎁 یک کد تخفیف اختصاصی {percent}٪ فقط برای شما صادر شد:\n"
         f"🎟 کد تخفیف: `{code}`\n"
         f"⏳ این کد فقط تا {expiry_hours} ساعت آینده و برای یک‌بار استفاده معتبر است.\n\n"
-        "برای تمدید، از منوی اصلی «🛒 خرید کانفیگ» را بزنید و هنگام خرید، دکمه‌ی "
-        "«🎟 وارد کردن کد تخفیف» را زده و این کد را وارد کنید."
+        "این کد را در بخش شارژ کیف پول وارد کنید."
     )
 
 
@@ -108,7 +107,7 @@ _AI_SYSTEM_PROMPT = """تو تحلیلگر ریزش مشتری یک فروشگا
 ۳. اگر کاربر کمتر از ۲ خرید دارد یا همیشه با تخفیف خرید می‌کند، حساس به قیمت است؛ اگر قبلاً کد پیشنهادی گرفته و استفاده نکرده، تخفیف بیشتر مفید نیست.
 ۴. تخفیف را فقط وقتی لازم است بده. کاربر وفادار با خریدهای بدون تخفیف معمولاً با یادآوری ساده برمی‌گردد (discount_percent برابر 0). هرگز بیشتر از max_discount_percent نده.
 ۵. expiry_hours بین ۶ تا ۱۶۸ باشد.
-۶. message را به زبان language بنویس، کوتاه (حداکثر ۵۰۰ کاراکتر)، محترمانه و شخصی، بدون فشار و بدون اطلاعات ساختگی و بدون مارک‌داون/HTML. اگر discount_percent بیشتر از 0 است، دقیقاً یک بار {code} و در صورت نیاز {percent} و {hours} را به‌عنوان جانشین بنویس؛ هیچ جانشین دیگری ننویس. برای تمدید، کاربر را به دکمه‌ی buy_button و سپس discount_button هدایت کن.
+۶. message را به زبان language بنویس، کوتاه (حداکثر ۵۰۰ کاراکتر)، محترمانه و شخصی، بدون فشار و بدون اطلاعات ساختگی و بدون مارک‌داون/HTML. اگر discount_percent بیشتر از 0 است، دقیقاً یک بار {code} و در صورت نیاز {percent} و {hours} را به‌عنوان جانشین بنویس؛ هیچ جانشین دیگری ننویس. کد فقط در بخش شارژ کیف پول قابل استفاده است.
 ۷. reason یک جمله‌ی کوتاه فارسی برای ادمین است که دلیل تصمیم را بر اساس داده می‌گوید.
 
 خروجی فقط یک آبجکت JSON با این کلیدها باشد:
@@ -191,6 +190,8 @@ async def _process_rule_based(bot, db, cand: dict, usage: dict, settings: dict) 
     code, _, percent, expiry_hours = await _db(db.generate_churn_discount_code, user_id)
     await _db(db.record_churn_offer, user_id, score, code, "offer", "rule-based", False, percent)
     text = build_offer_text(cand, usage, code, percent, expiry_hours)
+    from wallet_coupon import conditions
+    text += '\n' + conditions(await _db(db.get_discount_code, code))
     try:
         await send_telegram(bot, db, user_id, text, parse_mode="Markdown")
     except Exception:
@@ -214,6 +215,9 @@ async def _process_ai(bot, db, cand: dict, usage: dict, settings: dict) -> bool:
         decision["reason"], True, decision["percent"],
     )
     text = render_ai_message(decision["message"], code, decision["percent"], decision["hours"])
+    if code:
+        from wallet_coupon import conditions
+        text += '\n' + conditions(await _db(db.get_discount_code, code))
     try:
         await bot.send_message(user_id, text, parse_mode="HTML")
     except Exception:

@@ -36,6 +36,7 @@ SETTINGS = {
     "season_prize_product_2": ("سرویس رایگان رتبه ۲ (شناسه‌ی محصول، ۰ = ندارد)", 0, 0, 1_000_000_000),
     "season_prize_product_3": ("سرویس رایگان رتبه ۳ (شناسه‌ی محصول، ۰ = ندارد)", 0, 0, 1_000_000_000),
     "season_prize_valid_days": ("مدت اعتبار کد تخفیف جایزه (روز)", 30, 1, 365),
+    "season_coupon_min": ("حداقل شارژ برای کد تخفیف فصل (تومان)", 0, 0, 1000000000),
 }
 
 BADGES = {
@@ -181,6 +182,8 @@ async def award_pending(db, bot):
             lines.append(f"💰 {money(result['prize_wallet'])} تومان به کیف پولت اضافه شد.")
         if result["prize_discount"] > 0:
             lines.append(f"🎟 کد تخفیف {result['prize_discount']}٪ (یک‌بار مصرف، {valid_days} روز اعتبار): <code>{codes[0]}</code>")
+            from wallet_coupon import conditions
+            lines.append(conditions(await asyncio.to_thread(db.get_discount_code, codes[0])))
         if result["prize_product"] > 0:
             lines.append(f"🆓 کد سرویس رایگان (فقط برای همان محصول، یک‌بار مصرف، {valid_days} روز اعتبار): <code>{codes[-1]}</code>")
         badge = BADGES.get(rank, _ELITE_BADGE)

@@ -38,7 +38,7 @@ import aiohttp
 from i18n import tr, api_message, set_language, reset_language, normalize_language, is_language_enabled
 from db_text_policy import render_stored_setting
 from price_display import compare_price_for
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Depends, Query, Request
+from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Depends, Query, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 
 
@@ -1191,6 +1191,8 @@ async def api_create_custom_config(body: CustomConfigPurchase, auth=Depends(requ
     username = (body.username or "").strip()
     if not _valid_custom_username(username):
         raise HTTPException(status_code=400, detail=tr("نام کاربری نامعتبر است. فقط حروف انگلیسی، عدد و آندرلاین، بین ۳ تا ۲۰ کاراکتر."))
+    from user_config_prefix import get_prefix
+    username = f'{get_prefix(db, tg_id)}-{username}'
     if db.is_custom_username_taken(username):
         raise HTTPException(status_code=400, detail=tr("این نام کاربری قبلاً استفاده شده است."))
 
@@ -1362,6 +1364,7 @@ async def api_create_custom_config(body: CustomConfigPurchase, auth=Depends(requ
 
 @app.get("/api/catalog")
 def api_catalog(auth=Depends(get_verified_user)):
+    import wallet_coupon
     tg_id, db, _ = auth
     categories = db.get_categories(active_only=True)
     result = []
@@ -1379,6 +1382,7 @@ def api_catalog(auth=Depends(get_verified_user)):
                     "description": p["description"],
                     "stock": db.count_available_configs(p["id"]),
                     "is_auto_provision": bool(p["is_auto_provision"]),
+                    "has_product_prize": wallet_coupon.has_product_prize(db, tg_id, p["id"]),
                 }
                 for p in products
             ],
@@ -2141,6 +2145,8 @@ async def report_topup_completed(tenant, db: Database, topup_id: int, via: str) 
             f"💰 مبلغ: {topup['amount']:,} تومان\n"
             f"✅ موجودی فعلی: {int(db.get_wallet_credit(topup['user_id']) or 0):,} تومان"
         )
+        if topup['credit_amount'] is not None:
+            text += f"\n🎟 تخفیف: {topup['discount_amount']:,} تومان\n👛 مبلغ شارژ: {topup['credit_amount']:,} تومان"
         await report_router.report_raw(tenant.bot_token, db, "finance", text, senior_only=False, parse_mode="HTML")
     except Exception:
         logging.getLogger("miniapp").exception("گزارش شارژ #%s به گروه ناموفق بود.", topup_id)
@@ -2255,6 +2261,17 @@ class OrderCreate(BaseModel):
 
 class TopupCreate(BaseModel):
     amount: int
+    discount_code: Optional[str] = None
+
+
+def _guard_coupon_topup_payment(db, topup, user_id, method, *, allow_existing_card=False):
+    if topup['discount_code_id'] is None:
+        return
+    if allow_existing_card and topup['payment_started'] and topup['payment_method'] == 'card' and not topup['receipt_file_id']:
+        return
+    from wallet_coupon import begin_payment
+    if not begin_payment(db, topup['id'], user_id, topup['amount'], method):
+        raise HTTPException(status_code=409, detail='برای این درخواست قبلاً روش پرداخت انتخاب شده است.')
 
 
 @app.get("/api/tier-quote")
@@ -2296,6 +2313,9 @@ async def api_create_order(body: OrderCreate, request: Request, auth=Depends(req
     discount_amount = 0
     if body.discount_code:
         code_row = db.get_discount_code(body.discount_code)
+        import wallet_coupon
+        if not wallet_coupon.is_product_prize(code_row) or not wallet_coupon.has_product_prize(db, tg_id, body.product_id, code_row['code']):
+            raise HTTPException(status_code=400, detail=tr('کد تخفیف فقط برای شارژ کیف پول قابل استفاده است.'))
         invalid_reason = db.get_discount_invalid_reason(code_row, total_price, body.product_id, user_id=tg_id)
         if invalid_reason:
             raise HTTPException(status_code=400, detail=invalid_reason)
@@ -2466,6 +2486,7 @@ async def api_wallet_crypto_invoice(body: CryptoWalletInvoiceRequest, auth=Depen
     if topup["status"] != "pending":
         raise HTTPException(status_code=400, detail=tr("این درخواست شارژ قبلاً بررسی شده است."))
     _require_payment_method_allowed(db, topup["amount"], "crypto", wallet_topup=True, user_id=topup["user_id"])
+    _guard_coupon_topup_payment(db, topup, tg_id, 'crypto')
     result = await _create_crypto_invoice_for(
         db, tenant, tg_id, "wallet_topup", body.topup_id, topup["amount"],
         order_name=f"شارژ کیف پول #{body.topup_id}",
@@ -2528,6 +2549,7 @@ async def api_wallet_abangateway_invoice(body: AbanGatewayWalletInvoiceRequest, 
     if topup["status"] != "pending":
         raise HTTPException(status_code=400, detail=tr("این درخواست شارژ قبلاً بررسی شده است."))
     _require_payment_method_allowed(db, topup["amount"], "abangateway", wallet_topup=True, user_id=topup["user_id"])
+    _guard_coupon_topup_payment(db, topup, tg_id, 'abangateway')
     result = await _create_abangateway_invoice_for(
         db, tenant, tg_id, "wallet_topup", body.topup_id, topup["amount"],
         order_name=f"شارژ کیف پول #{body.topup_id}",
@@ -2586,7 +2608,9 @@ async def api_abangateway_webhook(request: Request, tenant: Tenant = Depends(get
         return {"status": "ok"}
 
     if invoice["kind"] == "wallet_topup":
-        db.approve_topup(invoice["ref_id"])
+        db.approve_topup(invoice["ref_id"], verified_payment=True)
+        topup = db.get_topup(invoice['ref_id'])
+        credited = topup['credit_amount'] if topup and topup['credit_amount'] is not None else invoice['amount_toman']
         await report_topup_completed(tenant, db, invoice["ref_id"], "abangateway")
         try:
             async with aiohttp.ClientSession() as session:
@@ -2594,7 +2618,7 @@ async def api_abangateway_webhook(request: Request, tenant: Tenant = Depends(get
                     f"https://api.telegram.org/bot{tenant.bot_token}/sendMessage",
                     json={
                         "chat_id": invoice["user_id"],
-                        "text": f"✅ پرداخت تایید شد و {invoice['amount_toman']:,} تومان به کیف پول شما اضافه شد.",
+                        "text": f"✅ پرداخت تایید شد و {credited:,} تومان به کیف پول شما اضافه شد.",
                     },
                 )
         except Exception:
@@ -2815,6 +2839,7 @@ async def api_wallet_blupal_invoice(body: BluPalWalletInvoiceRequest, auth=Depen
     if topup["status"] != "pending":
         raise HTTPException(status_code=400, detail=tr("این درخواست شارژ قبلاً بررسی شده است."))
     _require_payment_method_allowed(db, topup["amount"], "blupal", wallet_topup=True, user_id=topup["user_id"])
+    _guard_coupon_topup_payment(db, topup, tg_id, 'blupal')
     result = await _create_blupal_invoice_for(
         db, tenant, tg_id, "wallet_topup", body.topup_id, topup["amount"],
         order_name=f"شارژ کیف پول #{body.topup_id}",
@@ -2868,7 +2893,9 @@ async def api_blupal_webhook(request: Request, tenant: Tenant = Depends(get_tena
         return {"status": "ok"}
 
     if invoice["kind"] == "wallet_topup":
-        db.approve_topup(invoice["ref_id"])
+        db.approve_topup(invoice["ref_id"], verified_payment=True)
+        topup = db.get_topup(invoice['ref_id'])
+        credited = topup['credit_amount'] if topup and topup['credit_amount'] is not None else invoice['amount_toman']
         await report_topup_completed(tenant, db, invoice["ref_id"], "blupal")
         try:
             async with aiohttp.ClientSession() as session:
@@ -2876,7 +2903,7 @@ async def api_blupal_webhook(request: Request, tenant: Tenant = Depends(get_tena
                     f"https://api.telegram.org/bot{tenant.bot_token}/sendMessage",
                     json={
                         "chat_id": invoice["user_id"],
-                        "text": f"✅ پرداخت تایید شد و {invoice['amount_toman']:,} تومان به کیف پول شما اضافه شد.",
+                        "text": f"✅ پرداخت تایید شد و {credited:,} تومان به کیف پول شما اضافه شد.",
                     },
                 )
         except Exception:
@@ -3093,6 +3120,7 @@ async def api_wallet_noapay_invoice(body: NoapayWalletInvoiceRequest, auth=Depen
     if topup["status"] != "pending":
         raise HTTPException(status_code=400, detail=tr("این درخواست شارژ قبلاً بررسی شده است."))
     _require_payment_method_allowed(db, topup["amount"], "noapay", wallet_topup=True, user_id=topup["user_id"])
+    _guard_coupon_topup_payment(db, topup, tg_id, 'noapay')
     result = await _create_noapay_invoice_for(
         db, tenant, tg_id, "wallet_topup", body.topup_id, topup["amount"],
         order_name=f"شارژ کیف پول #{body.topup_id}",
@@ -3194,6 +3222,7 @@ async def api_wallet_extra_gateway_invoice(gateway: str, body: NoapayWalletInvoi
     if topup["status"] != "pending":
         raise HTTPException(status_code=400, detail=tr("این درخواست شارژ قبلاً بررسی شده است."))
     _require_payment_method_allowed(db, topup["amount"], gateway, wallet_topup=True, user_id=topup["user_id"])
+    _guard_coupon_topup_payment(db, topup, tg_id, gateway)
     return await _create_extra_gateway_invoice(
         db, tenant, tg_id, gateway, "wallet_topup", body.topup_id, topup["amount"], f"شارژ کیف پول #{body.topup_id}",
     )
@@ -3817,11 +3846,13 @@ async def _complete_generic_gateway_payment(db: Database, tenant: "Tenant", invo
         return {"status": "ok"}
 
     if invoice["kind"] == "wallet_topup":
-        db.approve_topup(invoice["ref_id"])
+        db.approve_topup(invoice["ref_id"], verified_payment=True)
+        topup = db.get_topup(invoice['ref_id'])
+        credited = topup['credit_amount'] if topup and topup['credit_amount'] is not None else invoice['amount_toman']
         await report_topup_completed(tenant, db, invoice["ref_id"], "custom")
         await _notify(
             invoice["user_id"],
-            f"✅ پرداخت تایید شد و {invoice['amount_toman']:,} تومان به کیف پول شما اضافه شد.",
+            f"✅ پرداخت تایید شد و {credited:,} تومان به کیف پول شما اضافه شد.",
         )
         return
 
@@ -3999,6 +4030,7 @@ async def api_wallet_custom_gateway_invoice(gateway_key: str, body: CustomGatewa
     if topup["status"] != "pending":
         raise HTTPException(status_code=400, detail=tr("این درخواست شارژ قبلاً بررسی شده است."))
     _require_payment_method_allowed(db, topup["amount"], f"custom:{gateway_key}", wallet_topup=True, user_id=topup["user_id"])
+    _guard_coupon_topup_payment(db, topup, tg_id, f'custom:{gateway_key}')
     result = await _create_custom_gateway_invoice_for(
         db, tenant, tg_id, gateway_key, "wallet_topup", body.topup_id, topup["amount"],
         order_name=f"شارژ کیف پول #{body.topup_id}",
@@ -4118,6 +4150,7 @@ async def api_wallet_card_auto_invoice(body: CardAutoWalletInvoiceRequest, auth=
     if topup["status"] != "pending":
         raise HTTPException(status_code=400, detail=tr("این درخواست شارژ قبلاً بررسی شده است."))
     _require_payment_method_allowed(db, topup["amount"], "card_auto", wallet_topup=True, user_id=tg_id)
+    _guard_coupon_topup_payment(db, topup, tg_id, 'card_auto')
     result = _create_card_to_card_invoice_for(db, "wallet_topup", body.topup_id, tg_id, topup["amount"])
     result["topup_id"] = body.topup_id
     return result
@@ -4302,7 +4335,9 @@ async def api_plisio_webhook(request: Request, tenant: Tenant = Depends(get_tena
         return {"status": "ok"}
 
     if invoice["kind"] == "wallet_topup":
-        db.approve_topup(invoice["ref_id"])
+        db.approve_topup(invoice["ref_id"], verified_payment=True)
+        topup = db.get_topup(invoice['ref_id'])
+        credited = topup['credit_amount'] if topup and topup['credit_amount'] is not None else invoice['amount_toman']
         await report_topup_completed(tenant, db, invoice["ref_id"], "plisio")
         try:
             async with aiohttp.ClientSession() as session:
@@ -4310,7 +4345,7 @@ async def api_plisio_webhook(request: Request, tenant: Tenant = Depends(get_tena
                     f"https://api.telegram.org/bot{tenant.bot_token}/sendMessage",
                     json={
                         "chat_id": invoice["user_id"],
-                        "text": f"✅ پرداخت کریپتو تایید شد و {invoice['amount_toman']:,} تومان به کیف پول شما اضافه شد.",
+                        "text": f"✅ پرداخت کریپتو تایید شد و {credited:,} تومان به کیف پول شما اضافه شد.",
                     },
                 )
         except Exception:
@@ -4517,7 +4552,8 @@ async def api_wheel_spin(auth=Depends(require_joined)):
             tenant.bot_token, db, "برنده‌ی گردونه شانس (کد تخفیف)", tg_id, name, username,
             f"🎟 کد تخفیف {percent}٪ - {code}",
         )
-        return {"won": True, "kind": "discount", "percent": percent, "code": code, "expires_at": expires_at}
+        from wallet_coupon import conditions
+        return {"won": True, "kind": "discount", "percent": percent, "code": code, "expires_at": expires_at, "conditions": conditions(db.get_discount_code(code))}
     return {"won": False}
 
 
@@ -4526,7 +4562,7 @@ async def api_wheel_spin(auth=Depends(require_joined)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/wallet/topup-request")
-def api_topup_request(body: TopupCreate, auth=Depends(require_joined)):
+def api_topup_request(body: TopupCreate, background_tasks: BackgroundTasks, auth=Depends(require_joined)):
     tg_id, db, tenant = auth
     user_row = db.get_user(tg_id)
     if user_row and user_row["is_blocked"]:
@@ -4543,13 +4579,59 @@ def api_topup_request(body: TopupCreate, auth=Depends(require_joined)):
                 status_code=400,
                 detail=tr(f"با این شارژ موجودی از سقف مجاز ({max_balance:,} تومان) بیشتر می‌شود. حداکثر مبلغ قابل شارژ: {remaining:,} تومان."),
             )
-    topup_id = db.create_topup(tg_id, body.amount)
+    discount = 0
+    payable = body.amount
+    if body.discount_code:
+        import wallet_coupon
+        try:
+            quote = wallet_coupon.quote(db, body.discount_code, tg_id, body.amount)
+            topup_id = wallet_coupon.reserve(db, body.discount_code, tg_id, body.amount)
+            topup = db.get_topup(topup_id)
+            payable = int(topup['amount'])
+            discount = int(topup['discount_amount'])
+            if payable != quote['pay_amount']:
+                db.reject_topup(topup_id, 'user_cancel')
+                raise HTTPException(status_code=409, detail='شرایط کد تغییر کرده است؛ دوباره تلاش کنید.')
+        except wallet_coupon.WalletCouponError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if not payable:
+            if not db.approve_topup(topup_id):
+                raise HTTPException(status_code=409, detail='درخواست شارژ قبلاً بررسی شده است.')
+            background_tasks.add_task(report_topup_completed, tenant, db, topup_id, 'کد تخفیف')
+            return {'topup_id': topup_id, 'status': 'approved', 'credit_amount': body.amount, 'pay_amount': 0, 'discount_amount': discount}
+    else:
+        topup_id = db.create_topup(tg_id, body.amount)
     return {
         "topup_id": topup_id,
+        "pay_amount": payable, "credit_amount": body.amount, "discount_amount": discount,
         **_card_info(db, tg_id),
         "note": tr("مبلغ را واریز کرده و عکس رسید را همینجا ارسال کنید."),
-        **_payment_flags(db, body.amount, None, tenant=tenant, wallet_topup=True, user_id=tg_id),
+        **_payment_flags(db, payable, None, tenant=tenant, wallet_topup=True, user_id=tg_id),
     }
+
+
+@app.post('/api/wallet/topup/{topup_id}/card-start')
+def api_topup_card_start(topup_id: int, auth=Depends(require_joined)):
+    tg_id, db, _ = auth
+    topup = db.get_topup(topup_id)
+    if not topup or topup['user_id'] != tg_id or topup['status'] != 'pending':
+        raise HTTPException(status_code=404, detail='درخواست شارژ یافت نشد.')
+    if db.get_setting('card_to_card_enabled', '1') != '1':
+        raise HTTPException(status_code=400, detail='روش کارت به کارت غیرفعال است.')
+    _require_payment_method_allowed(db, topup['amount'], 'card', wallet_topup=True, user_id=tg_id)
+    _guard_coupon_topup_payment(db, topup, tg_id, 'card')
+    return {'ok': True}
+
+
+@app.post('/api/wallet/topup/{topup_id}/cancel')
+def api_topup_cancel(topup_id: int, auth=Depends(require_joined)):
+    tg_id, db, _ = auth
+    topup = db.get_topup(topup_id)
+    if not topup or topup['user_id'] != tg_id:
+        raise HTTPException(status_code=404, detail='درخواست شارژ یافت نشد.')
+    if not db.reject_topup(topup_id, 'user_cancel'):
+        raise HTTPException(status_code=409, detail='این درخواست قابل لغو نیست.')
+    return {'ok': True}
 
 
 @app.post("/api/wallet/topup-receipt")
@@ -4574,6 +4656,8 @@ async def api_topup_receipt(
     if len(photo_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail=tr("حجم عکس بیش از حد مجاز است."))
 
+    _guard_coupon_topup_payment(db, topup, tg_id, 'card', allow_existing_card=True)
+
     user = db.get_user(tg_id)
     caption = (
         f"👛 درخواست شارژ کیف پول #{topup_id}\n"
@@ -4581,6 +4665,8 @@ async def api_topup_receipt(
         f"🆔 آیدی عددی: {tg_id}\n"
         f"💰 مبلغ: {topup['amount']:,} تومان"
     )
+    if topup['credit_amount'] is not None:
+        caption += f"\n🎟 تخفیف: {topup['discount_amount']:,} تومان\n👛 مبلغ شارژ: {topup['credit_amount']:,} تومان"
     reply_markup = json.dumps({
         "inline_keyboard": [[
             {"text": "✅ تایید و شارژ کیف پول", "callback_data": f"topup_approve:{topup_id}"},
@@ -6131,6 +6217,7 @@ class WheelSettingsUpdate(BaseModel):
     prizes: list[int]
     expiry_hours: int
     cooldown_hours: int
+    coupon_min: Optional[int] = None
 
 
 class RenewalSettingsUpdate(BaseModel):
@@ -6139,6 +6226,7 @@ class RenewalSettingsUpdate(BaseModel):
     discount_percent: int
     discount_expiry_hours: int
     cashback_percent: int = 0
+    coupon_min: Optional[int] = None
 
 
 class VolumeReminderSettingsUpdate(BaseModel):
@@ -6148,6 +6236,7 @@ class VolumeReminderSettingsUpdate(BaseModel):
     gb_left: float
     discount_percent: int
     discount_expiry_hours: int
+    coupon_min: Optional[int] = None
 
 
 class CryptoSettingsUpdate(BaseModel):
@@ -6248,6 +6337,8 @@ def api_admin_get_wheel_settings(auth=Depends(require_senior_admin)):
 @app.post("/api/admin/settings/wheel")
 def api_admin_set_wheel_settings(body: WheelSettingsUpdate, auth=Depends(require_senior_admin)):
     _, db, _ = auth
+    if body.coupon_min is not None and body.coupon_min < 0:
+        raise HTTPException(status_code=400, detail='حداقل شارژ نمی‌تواند منفی باشد.')
     if body.win_percent < 0 or body.win_percent > 100:
         raise HTTPException(status_code=400, detail=tr("درصد برد باید بین ۰ تا ۱۰۰ باشد."))
     if not body.prizes or any(p <= 0 for p in body.prizes):
@@ -6259,6 +6350,8 @@ def api_admin_set_wheel_settings(body: WheelSettingsUpdate, auth=Depends(require
     db.set_wheel_prizes(body.prizes)
     db.set_setting("wheel_code_expiry_hours", str(body.expiry_hours))
     db.set_setting("wheel_cooldown_hours", str(body.cooldown_hours))
+    if body.coupon_min is not None:
+        db.set_setting('wallet_coupon_min_wheel', str(body.coupon_min))
     return {"status": "ok"}
 
 
@@ -6585,6 +6678,8 @@ def api_admin_set_cashback_settings(body: CashbackSettingsUpdate, auth=Depends(r
 @app.post("/api/admin/settings/renewal")
 def api_admin_set_renewal_settings(body: RenewalSettingsUpdate, auth=Depends(require_senior_admin)):
     _, db, _ = auth
+    if body.coupon_min is not None and body.coupon_min < 0:
+        raise HTTPException(status_code=400, detail='حداقل شارژ نمی‌تواند منفی باشد.')
     if body.discount_percent < 0 or body.discount_percent > 100:
         raise HTTPException(status_code=400, detail=tr("درصد تخفیف باید بین ۰ تا ۱۰۰ باشد."))
     if body.days_before <= 0 or body.discount_expiry_hours <= 0:
@@ -6596,6 +6691,8 @@ def api_admin_set_renewal_settings(body: RenewalSettingsUpdate, auth=Depends(req
     db.set_setting("renewal_discount_percent", str(body.discount_percent))
     db.set_setting("renewal_discount_expiry_hours", str(body.discount_expiry_hours))
     db.set_setting("renewal_cashback_percent", str(body.cashback_percent))
+    if body.coupon_min is not None:
+        db.set_setting('wallet_coupon_min_renewal', str(body.coupon_min))
     return {"status": "ok"}
 
 
@@ -6670,6 +6767,8 @@ def api_admin_get_volume_reminder_settings(auth=Depends(require_senior_admin)):
 @app.post("/api/admin/settings/volume-reminder")
 def api_admin_set_volume_reminder_settings(body: VolumeReminderSettingsUpdate, auth=Depends(require_senior_admin)):
     _, db, _ = auth
+    if body.coupon_min is not None and body.coupon_min < 0:
+        raise HTTPException(status_code=400, detail='حداقل شارژ نمی‌تواند منفی باشد.')
     if body.mode not in ("percent", "gb"):
         raise HTTPException(status_code=400, detail=tr("مبنای آستانه باید percent یا gb باشد."))
     if body.discount_percent < 0 or body.discount_percent > 100:
@@ -6686,6 +6785,8 @@ def api_admin_set_volume_reminder_settings(body: VolumeReminderSettingsUpdate, a
     db.set_setting("volume_reminder_gb_left", str(body.gb_left))
     db.set_setting("volume_discount_percent", str(body.discount_percent))
     db.set_setting("volume_discount_expiry_hours", str(body.discount_expiry_hours))
+    if body.coupon_min is not None:
+        db.set_setting('wallet_coupon_min_volume', str(body.coupon_min))
     return {"status": "ok"}
 
 

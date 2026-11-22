@@ -22,6 +22,7 @@ SETTINGS = {
     "quiz_winner_limit": ("تعداد برندگان (نفرات اول درست‌جواب)", 3, 1, 50),
     "quiz_discount_percent": ("درصد کد تخفیف برندگان", 10, 1, 100),
     "quiz_code_valid_hours": ("مدت اعتبار کد تخفیف (ساعت)", 48, 1, 720),
+    "quiz_coupon_min": ("حداقل مبلغ شارژ برای کد جایزه (تومان)", 0, 0, 1000000000),
     "quiz_close_hours": ("مدت باز بودن کوییز (ساعت)", 20, 1, 23),
 }
 
@@ -186,7 +187,9 @@ async def answer_quiz_for_message(db, message, quiz_id: int, choice: int):
         if result["reason"] == "already":
             previous = result["answer"]
             if previous["code"]:
-                await message.answer(f"ℹ️ قبلاً به این کوییز پاسخ داده‌ای.\n🎟 کد تخفیف تو: <code>{previous['code']}</code>")
+                from wallet_coupon import conditions
+                terms = conditions(await asyncio.to_thread(db.get_discount_code, previous['code']))
+                await message.answer(f"ℹ️ قبلاً به این کوییز پاسخ داده‌ای.\n🎟 کد تخفیف تو: <code>{previous['code']}</code>\n{terms}")
             else:
                 await message.answer("ℹ️ قبلاً به این کوییز پاسخ داده‌ای؛ هر نفر یک‌بار می‌تواند شرکت کند.")
         elif result["reason"] == "closed":
@@ -199,10 +202,12 @@ async def answer_quiz_for_message(db, message, quiz_id: int, choice: int):
     elif not eligible:
         await message.answer("✅ پاسخ درست بود. (ادمین‌ها جایزه نمی‌گیرند.)")
     elif result["code"]:
+        from wallet_coupon import conditions
+        terms = conditions(await asyncio.to_thread(db.get_discount_code, result['code']))
         await message.answer(
             f"🎉 آفرین! پاسخ درست بود و نفر {result['win_rank']} شدی.\n"
             f"🎟 کد تخفیف {result['quiz']['discount_percent']}٪ (یک‌بار مصرف، تا {fmt_local(result['code_expires_at'])}):\n"
-            f"<code>{result['code']}</code>"
+            f"<code>{result['code']}</code>\n{terms}"
         )
     else:
         await message.answer("✅ پاسخ درست بود، اما ظرفیت جایزه‌ی این کوییز تکمیل شده بود. فردا دوباره امتحان کن!")

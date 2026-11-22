@@ -1257,6 +1257,7 @@ class SystemMixin:
 
     def get_renewal_settings(self) -> dict:
         return {
+            "coupon_min": max(0, int(self.get_setting('wallet_coupon_min_renewal', '0') or 0)),
             "enabled": self.get_setting("renewal_reminder_enabled", "1") == "1",
             "send_discount_code": self.get_setting("renewal_send_discount_code", "1") == "1",
             "days_before": int(self.get_setting("renewal_reminder_days_before", "5") or 5),
@@ -1273,6 +1274,7 @@ class SystemMixin:
 
     def get_volume_reminder_settings(self) -> dict:
         return {
+            "coupon_min": max(0, int(self.get_setting('wallet_coupon_min_volume', '0') or 0)),
             "enabled": self.get_setting("volume_reminder_enabled", "1") == "1",
             "send_discount_code": self.get_setting("volume_send_discount_code", "1") == "1",
             "mode": self.get_setting("volume_reminder_mode", "percent"),

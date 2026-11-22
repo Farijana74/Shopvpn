@@ -422,7 +422,9 @@ async def _provision(local_db, product, quantity, user_id, order_id, *, trial_po
                 conn.execute('UPDATE managed_purchases SET is_trial=1 WHERE request_key=?',(f'{bot_id}:{order_id}',))
         else:
             purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],quantity,Fraction(cost_factor,1),extra)
-        name=(str(volume_quote['username'])+f'a{bot_id}') if volume_quote.get('username') else f"{local_db.get_custom_config_prefix()+'-' if local_db.get_custom_config_prefix() else ''}a{bot_id}o{purchase}"
+        from user_config_prefix import get_prefix
+        customer_prefix = get_prefix(local_db, user_id)
+        name=(str(volume_quote['username'])+f'a{bot_id}') if volume_quote.get('username') else f"{customer_prefix}-a{bot_id}o{purchase}"
         with root._get_conn() as conn:
             conn.execute('UPDATE orders SET config_name=COALESCE(config_name,?),user_limit=? WHERE id=?',(name,users,purchase))
             ledger=conn.execute('SELECT status FROM managed_purchases WHERE request_key=?',(f'{bot_id}:{order_id}',)).fetchone()

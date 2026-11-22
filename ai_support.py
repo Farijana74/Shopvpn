@@ -1305,7 +1305,11 @@ async def _tool_check_discount_code(db, user_tg_id: int, args: dict) -> dict:
         row = db.get_discount_code(code)
         if not row:
             return None, None
-        reason = db.get_discount_invalid_reason(row, product_id=product_id, user_id=user_tg_id)
+        from wallet_coupon import is_product_prize
+        checked = dict(row)
+        if not is_product_prize(row):
+            checked.update(product_id=None, category_id=None, product_ids=None)
+        reason = db.get_discount_invalid_reason(checked, product_id=product_id, user_id=user_tg_id)
         return row, reason
 
     row, reason = await asyncio.to_thread(_read)
@@ -1317,6 +1321,8 @@ async def _tool_check_discount_code(db, user_tg_id: int, args: dict) -> dict:
         "valid": True,
         "percent": row["percent"] or 0,
         "fixed_amount_toman": row["fixed_amount"] or 0,
+        "scope": "product_prize" if row['source'] in ('lootbox_prize', 'season_prize') and row['product_id'] and row['percent'] == 100 else "wallet_topup",
+        "min_topup_toman": row['min_purchase'] or 0,
     }
 
 

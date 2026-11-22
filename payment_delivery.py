@@ -197,11 +197,12 @@ async def finalize_paid_topup(db, topup_id: int, bot=None, payment_method=None) 
     topup = db.get_topup(topup_id)
     if not topup:
         return tr("⚠️ درخواست شارژ یافت نشد.")
-    if not db.approve_topup(topup_id):
+    if not db.approve_topup(topup_id, verified_payment=True):
         return tr("✅ این درخواست شارژ قبلاً بررسی شده است.")
     if bot is not None:
         from online_payment_reports import topup_completed
         await topup_completed(db, bot, topup_id, topup, payment_method)
-    return tr(f"✅ پرداخت تایید شد و {topup['amount']:,} تومان به کیف پول کاربر اضافه شد.")
+    credit = topup['credit_amount'] if 'credit_amount' in topup.keys() and topup['credit_amount'] is not None else topup['amount']
+    return tr(f"✅ پرداخت تایید شد و {credit:,} تومان به کیف پول کاربر اضافه شد.")
 #‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
 # 		   		 		  	 	 		 		   		  	 	 		 			  		 				 			  	 

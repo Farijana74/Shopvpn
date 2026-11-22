@@ -122,62 +122,26 @@ class DatabaseBase:
 
 
     def replace_file(self, uploaded_file_path: str) -> str:
-        """فایل دیتابیس را با فایل بکاپ آپلودشده جایگزین می‌کند (برای «بازیابی از
-        فایل بکاپ»). قبل از جایگزینی یک نسخه‌ی «قبل از بازیابی» گرفته می‌شود.
+        """بازیابی تراکنشی با SQLite و تهیه نسخه پیش از بازیابی.
 
-        نکته‌ی مهم (باگ قبلی): قبلاً این عملیات با یک `db.close()` جدا و بعد
-        یک `shutil.copyfile` جدا انجام می‌شد، بدون این‌که لاک را بین این دو
-        نگه دارد. در همین فاصله‌ی کوتاه، حلقه‌ی پس‌زمینه‌ی
-        `cache_autorefresh_loop` (که هر ۲ ثانیه یک‌بار روی یک ترد جدا اجرا
-        می‌شود) می‌توانست دقیقاً وسط جایگزینی فایل، یک اتصال sqlite تازه به
-        فایلی که هنوز کامل نوشته نشده بود باز کند و آن را برای همیشه به‌عنوان
-        `self._conn` نگه دارد - نتیجه‌اش این بود که بعد از بازیابی، همه‌ی
-        دستورهای بعدی (حتی /start) تا ری‌استارت دستی پروسه با خطا مواجه
-        می‌شدند، بدون این‌که خود عملیات بازیابی خطایی نشان بدهد.
-
-        الان کل عملیات (بستن اتصال قدیمی + جایگزینی فایل) زیر یک لاک واحد
-        انجام می‌شود، پس هیچ ترد دیگری نمی‌تواند در همین فاصله یک اتصال به
-        فایل نیمه‌نوشته باز کند؛ اولین `_get_conn()` بعدی (که خودش هم منتظر
-        همین لاک می‌ماند) یک اتصال تازه و سالم به فایل جدید باز خواهد کرد.
+        اتصال‌های دیگر پردازش‌ها و فایل‌های WAL/SHM دست‌نخورده می‌مانند؛ لاک
+        این نمونه هم تا پایان بازیابی و ابطال کش‌ها حفظ می‌شود.
         """
         if self.get_setting("managed_reseller_bot_id", ""):
             raise ValueError("بازیابی دیتابیس نمایندگی باید توسط مدیر ربات اصلی انجام شود.")
         backup_dir = os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "backups")
         os.makedirs(backup_dir, exist_ok=True)
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
         pre_restore_path = os.path.join(backup_dir, f"pre_restore_{timestamp}.db")
 
+        from backup import _restore_sqlite_in_place
         with self._lock:
-            if self._conn is not None:
-                try:
-                    self._conn.close()
-                except Exception:
-                    pass
-                self._conn = None
+            # Other processes can still have this WAL database open. SQLite's
+            # backup API replaces its contents transactionally, without unlinking
+            # the live database or its shared WAL/SHM files.
+            _restore_sqlite_in_place(uploaded_file_path, self.db_path, pre_restore_path)
             self._settings_cache = None
             self._admin_cache = None
-
-            if os.path.exists(self.db_path):
-                src = sqlite3.connect(self.db_path)
-                try:
-                    dst = sqlite3.connect(pre_restore_path)
-                    try:
-                        src.backup(dst)
-                    finally:
-                        dst.close()
-                finally:
-                    src.close()
-
-            # پاک‌کردن فایل‌های کمکی WAL دیتابیس فعلی، وگرنه ممکن است داده‌ی
-            # commit‌نشده‌ی قدیمی با دیتابیس جدید قاطی شود
-            for suffix in ("-wal", "-shm"):
-                stale = self.db_path + suffix
-                if os.path.exists(stale):
-                    os.remove(stale)
-
-            shutil.copyfile(uploaded_file_path, self.db_path)
-            # عمداً اتصال تازه اینجا باز نمی‌کنیم؛ self._conn همچنان None
-            # می‌ماند تا اولین _get_conn() بعدی (زیر همین لاک) آن را بسازد.
 
         return pre_restore_path
 
@@ -484,6 +448,7 @@ class DatabaseBase:
                     code_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
                     order_id INTEGER,
+                    topup_id INTEGER,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_discount_redemptions_code_user ON discount_redemptions(code_id, user_id);
@@ -557,6 +522,11 @@ class DatabaseBase:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
                     amount INTEGER NOT NULL,
+                    credit_amount INTEGER,
+                    discount_code_id INTEGER,
+                    discount_amount INTEGER NOT NULL DEFAULT 0,
+                    payment_started INTEGER NOT NULL DEFAULT 0,
+                    payment_method TEXT,
                     cashback_paid INTEGER DEFAULT 0,
                     cashback_amount INTEGER DEFAULT 0,
                     status TEXT DEFAULT 'pending',
@@ -1774,6 +1744,11 @@ class DatabaseBase:
 
 
     def _migrate_columns(self, conn):
+        if not self._column_exists(conn, 'discount_redemptions', 'topup_id'):
+            conn.execute('ALTER TABLE discount_redemptions ADD COLUMN topup_id INTEGER')
+        for column, definition in [('credit_amount', 'INTEGER'), ('discount_code_id', 'INTEGER'), ('discount_amount', 'INTEGER NOT NULL DEFAULT 0'), ('payment_started', 'INTEGER NOT NULL DEFAULT 0'), ('payment_method', 'TEXT')]:
+            if not self._column_exists(conn, 'wallet_topups', column):
+                conn.execute(f'ALTER TABLE wallet_topups ADD COLUMN {column} {definition}')
         if not self._column_exists(conn, 'scheduled_broadcasts', 'message_entities'):
             conn.execute('ALTER TABLE scheduled_broadcasts ADD COLUMN message_entities TEXT')
         for column, definition in [('upstream_category_id','INTEGER'),('managed_name_override','INTEGER DEFAULT 0'),('managed_icon_override','INTEGER DEFAULT 0')]:
@@ -2146,6 +2121,8 @@ class DatabaseBase:
         for table, col, coltype in migrations:
             if not self._column_exists(conn, table, col):
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_discount_product_prize ON discount_codes(product_id, source, is_active)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_wallet_coupon_pending ON wallet_topups(status, payment_started, created_at) WHERE discount_code_id IS NOT NULL')
 
         # ایندکس ستون ref_number باید بعد از migrations بالا اضافه شود چون
         # روی نصب‌های قدیمی این ستون همین بالا با ALTER TABLE اضافه می‌شود.

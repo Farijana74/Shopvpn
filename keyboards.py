@@ -431,6 +431,8 @@ def product_confirm_kb(db, product_id, quantity: int = 1, max_qty: int = 1, bulk
         if bulk_row:
             rows.append(bulk_row)
     for key in order:
+        if key == 'btn_enter_code':
+            continue
         rows.append([_PRODUCT_CONFIRM_BUILDERS[key](db, product_id, quantity)])
     if users_change:
         rows.append([InlineKeyboardButton(text=tr("👥 تغییر تعداد کاربر"), callback_data=f"buy_users_pick:{product_id}")])
@@ -685,6 +687,7 @@ def account_hub_kb(db, is_main_bot: bool = True) -> InlineKeyboardMarkup:
         text = tr(db.get_setting(f"{key}_text", ACCOUNT_HUB_META[key]["default_text"]))
         entries.append((key, text, _styled_inline(db, text, callback_data, f"{key}_style")))
     rows = _layout_group_rows(db, "account_hub", entries)
+    rows.append([InlineKeyboardButton(text=tr("✏️ پیشوند کانفیگ‌های جدید"), callback_data="acct:config_prefix")])
     rows.append([InlineKeyboardButton(text=tr(LANGUAGE_BTN_TEXT), callback_data="acct:language")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت به منوی اصلی"), callback_data="acct:main_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -736,10 +739,6 @@ def renewal_plans_kb(products, mode: str, cb_id: str) -> InlineKeyboardMarkup:
 # صفحه‌ی تایید خرید محصول - product_confirm_kb) تا برند/لحن یکسان بماند.
 def renewal_full_confirm_kb(db, cb_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_styled_inline(
-            db, db.get_setting("btn_enter_code_text", "🎟 وارد کردن کد تخفیف"),
-            f"renew_enter_code:{cb_id}", "btn_enter_code_style",
-        )],
         [_styled_inline(
             db, db.get_setting("btn_buy_continue_text", "✅ ادامه و انتخاب پرداخت"),
             f"renew_confirm_pay:{cb_id}", "btn_buy_continue_style",
@@ -2636,6 +2635,7 @@ def admin_lang_scope_kb(db=None) -> InlineKeyboardMarkup:
 
 def user_full_stats_kb(tg_id: int, is_blocked: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=tr("✏️ پیشوند کانفیگ کاربر"), callback_data=f"adm_user_prefix:{tg_id}")],
         [InlineKeyboardButton(text=tr("📜 ریز تراکنش‌ها"), callback_data=f"adm_user_tx:{tg_id}:all:0")],
         [InlineKeyboardButton(text=tr("🧪 افزودن سهمیهٔ تست"), callback_data=f"adm_user_trial_quota:{tg_id}")],
         [InlineKeyboardButton(text=tr("📦 لیست کامل کانفیگ‌های این کاربر"), callback_data=f"adm_user_configs:{tg_id}")],
@@ -4151,6 +4151,7 @@ def wheel_settings_kb(db) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=tr(f"فاصله بین دو چرخش: {s['cooldown_hours']} ساعت"), callback_data="noop")],
         [InlineKeyboardButton(text=toggle_text, callback_data="adm_wheel_toggle")],
         [InlineKeyboardButton(text=tr("✏️ تغییر اعتبار کد"), callback_data="adm_wheel_edit_expiry")],
+        [InlineKeyboardButton(text=tr("💰 حداقل شارژ برای کد جایزه"), callback_data="adm_coupon_min:wheel")],
         [InlineKeyboardButton(text=tr("✏️ تغییر فاصله چرخش"), callback_data="adm_wheel_edit_cooldown")],
         [InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:marketing")],
     ]
@@ -4194,6 +4195,7 @@ def renewal_settings_kb(db) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=tr("✏️ تغییر تعداد روز یادآوری"), callback_data="adm_renewal_edit_days")],
         [InlineKeyboardButton(text=tr("✏️ تغییر درصد تخفیف"), callback_data="adm_renewal_edit_percent")],
         [InlineKeyboardButton(text=tr("✏️ تغییر اعتبار کد (ساعت)"), callback_data="adm_renewal_edit_hours")],
+        [InlineKeyboardButton(text=tr("💰 حداقل شارژ برای کد تخفیف"), callback_data="adm_coupon_min:renewal")],
         [InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:alerts")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -4220,6 +4222,7 @@ def churn_settings_kb(db) -> InlineKeyboardMarkup:
     for short, (_key, field, label, unit) in CHURN_NUMERIC_FIELDS.items():
         rows.append([InlineKeyboardButton(
             text=tr(f"{label}: {s[field]}{unit}"), callback_data=f"adm_churn_edit:{short}")])
+    rows.append([InlineKeyboardButton(text=tr("💰 حداقل شارژ کد تخفیف"), callback_data="adm_coupon_min:churn")])
     rows.append([InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:alerts")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -4249,6 +4252,7 @@ def volume_reminder_settings_kb(db) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=toggle_text, callback_data="adm_volume_toggle")],
         [InlineKeyboardButton(text=tr("✏️ تغییر درصد تخفیف"), callback_data="adm_volume_edit_discount_percent")],
         [InlineKeyboardButton(text=tr("✏️ تغییر اعتبار کد (ساعت)"), callback_data="adm_volume_edit_discount_hours")],
+        [InlineKeyboardButton(text=tr("💰 حداقل شارژ برای کد تخفیف"), callback_data="adm_coupon_min:volume")],
         [InlineKeyboardButton(text=tr("⬅️ بازگشت"), callback_data="adm_cat:alerts")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)

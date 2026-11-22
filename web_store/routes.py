@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 import dedicated_sub as ds
+import wallet_coupon
 
 from miniapp.server import (
     BaseModel,
@@ -54,6 +55,7 @@ def _web_catalog_payload(db: Database) -> list:
                 "duration_days": p.get("duration_days") if hasattr(p, "get") else p["duration_days"],
                 "volume_gb": p.get("auto_provision_volume_gb") if hasattr(p, "get") else p["auto_provision_volume_gb"],
                 "in_stock": in_stock,
+                "has_product_prize": wallet_coupon.has_product_prize(db, None, p["id"]),
             })
         if products:
             categories.append({"id": c["id"], "name": c["name"], "products": products})

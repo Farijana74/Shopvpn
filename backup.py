@@ -17,6 +17,8 @@ import sqlite3
 import asyncio
 import logging
 import zipfile
+import time
+from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
@@ -158,6 +160,43 @@ def _sqlite_safe_copy(src_path: str, dst_path: str) -> None:
         src.close()
 
 
+def _restore_sqlite_in_place(src_path: str, target_path: str, pre_restore_path: str) -> None:
+    """Restore through SQLite so open connections and WAL files remain valid."""
+    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+    deadline = time.monotonic() + 20
+
+    def progress(status, remaining, total):
+        # SQLITE_BUSY=5 and SQLITE_LOCKED=6; Python 3.10 does not expose
+        # these constants on its sqlite3 module.
+        if status in (5, 6) and time.monotonic() >= deadline:
+            raise sqlite3.OperationalError('دیتابیس مشغول است؛ چند لحظه بعد دوباره تلاش کنید.')
+
+    target = sqlite3.connect(target_path, timeout=4)
+    try:
+        if os.path.getsize(target_path):
+            before = sqlite3.connect(pre_restore_path)
+            try:
+                target.backup(before, pages=256, progress=progress, sleep=0.05)
+            finally:
+                before.close()
+        source = sqlite3.connect(Path(src_path).resolve().as_uri() + '?mode=ro', uri=True)
+        try:
+            source.backup(target, pages=256, progress=progress, sleep=0.05)
+        finally:
+            source.close()
+    finally:
+        target.close()
+
+
+def _reseller_restore_target(path: str) -> str:
+    from config import RESELLER_DBS_DIR, resolve_db_path
+    if not path:
+        raise ValueError('مسیر دیتابیس نماینده در بکاپ خالی است.')
+    if os.path.isabs(path) and (os.path.basename(os.path.dirname(path)) == 'reseller_dbs' or not os.path.exists(path)):
+        return os.path.join(RESELLER_DBS_DIR, os.path.basename(path))
+    return resolve_db_path(path)
+
+
 def restore_full_backup(main_db, main_db_path: str, zip_path: str) -> dict:
     """یک فایل zip ساخته‌شده توسط `create_full_backup` را باز می‌کند:
 
@@ -197,11 +236,36 @@ def restore_full_backup(main_db, main_db_path: str, zip_path: str) -> dict:
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(tmp_dir)
+            # Only the flat backup format is accepted; never extract paths from
+            # an untrusted archive outside the temporary directory.
+            seen = set()
+            for entry in zf.infolist():
+                name = entry.filename
+                if entry.is_dir() or '/' in name or '\\' in name or name in ('.', '..'):
+                    raise ValueError('ساختار فایل بکاپ نامعتبر است.')
+                if name in seen:
+                    raise ValueError('نام فایل تکراری در بکاپ وجود دارد.')
+                seen.add(name)
+                if name == 'main_bot.db' or (name.startswith('reseller_') and name.endswith('.db')):
+                    with zf.open(entry) as source, open(os.path.join(tmp_dir, name), 'wb') as dest:
+                        import shutil
+                        shutil.copyfileobj(source, dest)
 
         main_extracted = os.path.join(tmp_dir, "main_bot.db")
         if not os.path.exists(main_extracted) or not is_valid_sqlite_db(main_extracted):
             raise ValueError("فایل main_bot.db داخل zip پیدا نشد یا دیتابیس sqlite معتبری نیست.")
+
+        # Validate the root and its destination paths before changing anything.
+        with sqlite3.connect(Path(main_extracted).resolve().as_uri() + '?mode=ro', uri=True) as conn:
+            if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                raise ValueError('دیتابیس اصلی بکاپ سالم نیست.')
+            try:
+                saved_paths = conn.execute('SELECT db_path FROM reseller_bots').fetchall()
+            except sqlite3.Error as exc:
+                raise ValueError('دیتابیس اصلی بکاپ جدول نماینده‌ها را ندارد.') from exc
+        targets = [os.path.realpath(_reseller_restore_target(row[0])) for row in saved_paths]
+        if len(set(targets)) != len(targets) or os.path.realpath(main_db_path) in targets:
+            raise ValueError('مسیر دیتابیس نماینده‌ها در بکاپ تکراری یا نامعتبر است.')
 
         # ۱) بازیابی دیتابیس اصلی (همان مسیر امن replace_file خود کلاس Database)
         result["main_pre_restore_path"] = main_db.replace_file(main_extracted)
@@ -209,6 +273,7 @@ def restore_full_backup(main_db, main_db_path: str, zip_path: str) -> dict:
 
         # ۲) حالا reseller_bots را از روی دیتابیس *تازه* بخوان‍​‌‌​​​‌‌​‌‌​​‌​‌​‌‌​‌‌​​​‌‌​​‌​‌​‌‌​‌‌‌​​‌‌​‌‌‌‌​‌‌‌​​‌​‍
         resellers_by_id = {row["id"]: row for row in main_db.list_reseller_bots(active_only=False)}
+        seen_resellers = set()
 
         for name in sorted(os.listdir(tmp_dir)):
             if not (name.startswith("reseller_") and name.endswith(".db")):
@@ -229,20 +294,51 @@ def restore_full_backup(main_db, main_db_path: str, zip_path: str) -> dict:
                 )
                 continue
 
+            if reseller_id in seen_resellers:
+                result["resellers_skipped"].append({"file": name, "reason": "فایل تکراری برای این نماینده."})
+                continue
+            seen_resellers.add(reseller_id)
+
             extracted_path = os.path.join(tmp_dir, name)
             if not is_valid_sqlite_db(extracted_path):
                 result["resellers_skipped"].append({"file": name, "reason": "دیتابیس sqlite معتبر نیست."})
                 continue
+            try:
+                with sqlite3.connect(Path(extracted_path).resolve().as_uri() + '?mode=ro', uri=True) as conn:
+                    if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                        raise ValueError('integrity check failed')
+            except (sqlite3.Error, ValueError):
+                result["resellers_skipped"].append({"file": name, "reason": "دیتابیس نماینده سالم نیست."})
+                continue
 
-            target_path = resolve_db_path(row["db_path"])
+            target_path = _reseller_restore_target(row["db_path"])
+            # Installations may live in a different directory on the new host.
+            # Generated reseller paths must follow the new installation, not
+            # silently recreate the previous server's absolute directory.
+            old_path = row["db_path"]
             try:
                 _raw_replace_db_file(extracted_path, target_path)
+                with sqlite3.connect(target_path, timeout=10) as conn:
+                    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                    if 'settings' in tables:
+                        conn.execute("UPDATE settings SET value=? WHERE key='managed_root_db_path' AND value<>''", (os.path.abspath(main_db_path),))
+                    if 'panel_servers' in tables:
+                        columns = {r[1] for r in conn.execute('PRAGMA table_info(panel_servers)')}
+                        if 'managed_root_db_path' in columns:
+                            conn.execute("UPDATE panel_servers SET managed_root_db_path=? WHERE managed_root_db_path IS NOT NULL AND managed_root_db_path<>''", (os.path.abspath(main_db_path),))
+                if target_path != resolve_db_path(old_path):
+                    with main_db._get_conn() as conn:
+                        conn.execute('UPDATE reseller_bots SET db_path=? WHERE id=?', (target_path, reseller_id))
                 result["resellers_restored"].append({
                     "id": reseller_id, "bot_username": row["bot_username"], "db_path": target_path,
                 })
             except Exception:
                 logger.exception("جایگزینی دیتابیس نماینده id=%s (%s) ناموفق بود.", reseller_id, target_path)
                 result["resellers_skipped"].append({"file": name, "reason": "خطا هنگام جایگزینی فایل."})
+        for reseller_id in sorted(set(resellers_by_id) - seen_resellers):
+            result['resellers_skipped'].append({
+                'file': f'reseller_{reseller_id}.db', 'reason': 'دیتابیس این نماینده در فایل بکاپ وجود ندارد.'
+            })
     finally:
         import shutil as _shutil
         _shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -251,31 +347,13 @@ def restore_full_backup(main_db, main_db_path: str, zip_path: str) -> dict:
 
 
 def _raw_replace_db_file(src_path: str, target_path: str) -> str:
-    """فایل دیتابیس در `target_path` را با `src_path` جایگزین می‌کند (برای
-    نماینده‌ای که بات‌اش پروسه‌ی جدا دارد و اتصال persistent‌اش از اینجا در
-    دسترس نیست). قبلش یک نسخه‌ی «پیش از بازیابی» می‌گیرد و فایل‌های WAL/SHM
-    قدیمی را پاک می‌کند تا داده‌ی commit‌نشده‌ی قدیمی با فایل جدید قاطی نشود.
-
-    نکته‌ی امنیتی: قبل از صدازدن این تابع باید مطمئن شد که هیچ پروسه‌ای
-    (بات نماینده‌ی در حال اجرا) هم‌زمان به `target_path` وصل نیست - وگرنه
-    همان باگ قدیمی «اتصال به فایل نیمه‌نوشته» ممکن است تکرار شود.
-    """
+    """بازیابی دیتابیس نماینده با SQLite و ذخیره نسخه پیش از بازیابی."""
     os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
     backup_dir = os.path.join(os.path.dirname(os.path.abspath(target_path)), "backups")
     os.makedirs(backup_dir, exist_ok=True)
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    pre_restore_path = os.path.join(backup_dir, f"pre_restore_{timestamp}.db")
-
-    if os.path.exists(target_path):
-        _sqlite_safe_copy(target_path, pre_restore_path)
-
-    for suffix in ("-wal", "-shm"):
-        stale = target_path + suffix
-        if os.path.exists(stale):
-            os.remove(stale)
-
-    import shutil as _shutil
-    _shutil.copyfile(src_path, target_path)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    pre_restore_path = os.path.join(backup_dir, f"pre_restore_{os.path.basename(target_path)}_{timestamp}.db")
+    _restore_sqlite_in_place(src_path, target_path, pre_restore_path)
     return pre_restore_path
 
 

@@ -87,7 +87,8 @@ def financial_history(db, user_id, page=0, kind='all', limit=6):
             args.append(user_id)
         if kind in ('all','topup'):
             queries.append("""SELECT 'topup' event_kind,id,created_at,amount,status,'شارژ کیف پول' title,
-                0 wallet_used,0 discount_amount,NULL balance_before,NULL balance_after,'' note,1 quantity
+                0 wallet_used,COALESCE(discount_amount,0) discount_amount,NULL balance_before,NULL balance_after,
+                CASE WHEN credit_amount IS NOT NULL THEN 'مبلغ شارژ: '||credit_amount||' تومان | تخفیف: '||COALESCE(discount_amount,0)||' تومان' ELSE '' END note,1 quantity
                 FROM wallet_topups WHERE user_id=?""")
             args.append(user_id)
         if kind in ('all','wallet'):

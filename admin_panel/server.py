@@ -3134,7 +3134,8 @@ async def api_approve_topup(topup_id: int, admin=Depends(require_permission("ord
     if not (await asyncio.to_thread(db.approve_topup, topup_id)):
         raise HTTPException(400, tr("قبلاً بررسی شده است."))
     (await asyncio.to_thread(db.log_admin_action, admin["id"], "topup_approve", f"شارژ #{topup_id} تایید شد (پنل وب - {admin['username']})", "topup", topup_id))
-    await notify_user(topup["user_id"], f"✅ شارژ کیف پول شما به مبلغ {topup['amount']:,} تومان تایید شد.")
+    credited = topup['credit_amount'] if topup['credit_amount'] is not None else topup['amount']
+    await notify_user(topup["user_id"], f"✅ شارژ کیف پول شما به مبلغ {credited:,} تومان تایید شد.")
     return {"ok": True}
 
 
@@ -3144,6 +3145,8 @@ async def api_reject_topup(topup_id: int, admin=Depends(require_permission("orde
     if not topup or topup["status"] != "pending":
         raise HTTPException(400, tr("یافت نشد یا قبلاً بررسی شده."))
     if not (await asyncio.to_thread(db.reject_topup, topup_id, "admin")):
+        if topup['discount_code_id'] and topup['payment_started'] and topup['payment_method'] != 'card':
+            raise HTTPException(409, 'پرداخت درگاه این شارژ هنوز ممکن است؛ ابتدا وضعیت فاکتور را بررسی کنید.')
         raise HTTPException(400, tr("یافت نشد یا قبلاً بررسی شده."))
     (await asyncio.to_thread(db.log_admin_action, admin["id"], "topup_reject", f"شارژ #{topup_id} رد شد (پنل وب - {admin['username']})", "topup", topup_id))
     await notify_user(topup["user_id"], "⛔️ درخواست شارژ کیف پول شما رد شد.")
@@ -7005,6 +7008,7 @@ class WheelSettingsBody(BaseModel):
     prizes: list[int]
     expiry_hours: int
     cooldown_hours: int
+    coupon_min: Optional[int] = None
 
 
 @app.get("/api/settings/wheel")
@@ -7014,6 +7018,8 @@ def api_get_wheel_settings(admin=Depends(require_permission("settings"))):
 
 @app.post("/api/settings/wheel")
 def api_set_wheel_settings(body: WheelSettingsBody, admin=Depends(require_permission("settings"))):
+    if body.coupon_min is not None and body.coupon_min < 0:
+        raise HTTPException(400, 'حداقل شارژ نمی‌تواند منفی باشد.')
     if body.win_percent < 0 or body.win_percent > 100:
         raise HTTPException(400, tr("درصد برد باید بین ۰ تا ۱۰۰ باشد."))
     if not body.prizes or any(p <= 0 for p in body.prizes):
@@ -7025,6 +7031,8 @@ def api_set_wheel_settings(body: WheelSettingsBody, admin=Depends(require_permis
     db.set_wheel_prizes(body.prizes)
     db.set_setting("wheel_code_expiry_hours", str(body.expiry_hours))
     db.set_setting("wheel_cooldown_hours", str(body.cooldown_hours))
+    if body.coupon_min is not None:
+        db.set_setting('wallet_coupon_min_wheel', str(body.coupon_min))
     db.log_admin_action(admin["id"], "setting_change", f"wheel updated (پنل وب - {admin['username']})", "setting", "wheel")
     return {"ok": True}
 
@@ -7038,6 +7046,7 @@ class RenewalSettingsBody(BaseModel):
     days_before: int
     discount_percent: int
     discount_expiry_hours: int
+    coupon_min: Optional[int] = None
 
 
 @app.get("/api/settings/renewal")
@@ -7047,6 +7056,8 @@ def api_get_renewal_settings(admin=Depends(require_permission("settings"))):
 
 @app.post("/api/settings/renewal")
 def api_set_renewal_settings(body: RenewalSettingsBody, admin=Depends(require_permission("settings"))):
+    if body.coupon_min is not None and body.coupon_min < 0:
+        raise HTTPException(400, 'حداقل شارژ نمی‌تواند منفی باشد.')
     if body.discount_percent < 0 or body.discount_percent > 100:
         raise HTTPException(400, tr("درصد تخفیف باید بین ۰ تا ۱۰۰ باشد."))
     if body.days_before <= 0 or body.discount_expiry_hours <= 0:
@@ -7056,6 +7067,8 @@ def api_set_renewal_settings(body: RenewalSettingsBody, admin=Depends(require_pe
     db.set_setting("renewal_reminder_days_before", str(body.days_before))
     db.set_setting("renewal_discount_percent", str(body.discount_percent))
     db.set_setting("renewal_discount_expiry_hours", str(body.discount_expiry_hours))
+    if body.coupon_min is not None:
+        db.set_setting('wallet_coupon_min_renewal', str(body.coupon_min))
     db.log_admin_action(admin["id"], "setting_change", "renewal settings updated (پنل وب)", "setting", "renewal")
     return {"ok": True}
 
@@ -7069,6 +7082,7 @@ class ChurnSettingsBody(BaseModel):
     discount_expiry_hours: int
     cooldown_days: int
     max_per_run: int
+    coupon_min: Optional[int] = None
 
 
 @app.get("/api/settings/churn")
@@ -7078,6 +7092,8 @@ def api_get_churn_settings(admin=Depends(require_permission("settings"))):
 
 @app.post("/api/settings/churn")
 def api_set_churn_settings(body: ChurnSettingsBody, admin=Depends(require_permission("settings"))):
+    if body.coupon_min is not None and body.coupon_min < 0:
+        raise HTTPException(400, 'حداقل شارژ نمی‌تواند منفی باشد.')
     if not (1 <= body.min_score <= 100):
         raise HTTPException(400, tr("حداقل امتیاز ریزش باید بین ۱ تا ۱۰۰ باشد."))
     if not (0 <= body.discount_percent <= 100) or not (0 <= body.max_discount_percent <= 100):
@@ -7092,6 +7108,8 @@ def api_set_churn_settings(body: ChurnSettingsBody, admin=Depends(require_permis
     db.set_setting("churn_offer_expiry_hours", str(body.discount_expiry_hours))
     db.set_setting("churn_offer_cooldown_days", str(body.cooldown_days))
     db.set_setting("churn_offer_max_per_run", str(body.max_per_run))
+    if body.coupon_min is not None:
+        db.set_setting('wallet_coupon_min_churn', str(body.coupon_min))
     db.log_admin_action(admin["id"], "setting_change", "churn offer settings updated (پنل وب)", "setting", "churn_offer")
     return {"ok": True}
 
@@ -7104,6 +7122,7 @@ class VolumeReminderSettingsBody(BaseModel):
     gb_left: int
     discount_percent: int
     discount_expiry_hours: int
+    coupon_min: Optional[int] = None
 
 
 @app.get("/api/settings/volume-reminder")
@@ -7113,6 +7132,8 @@ def api_get_volume_reminder_settings(admin=Depends(require_permission("settings"
 
 @app.post("/api/settings/volume-reminder")
 def api_set_volume_reminder_settings(body: VolumeReminderSettingsBody, admin=Depends(require_permission("settings"))):
+    if body.coupon_min is not None and body.coupon_min < 0:
+        raise HTTPException(400, 'حداقل شارژ نمی‌تواند منفی باشد.')
     if body.mode not in ("percent", "gb"):
         raise HTTPException(400, tr("مبنای آستانه باید percent یا gb باشد."))
     if body.discount_percent < 0 or body.discount_percent > 100:
@@ -7130,6 +7151,8 @@ def api_set_volume_reminder_settings(body: VolumeReminderSettingsBody, admin=Dep
     db.set_setting("volume_reminder_gb_left", str(body.gb_left))
     db.set_setting("volume_discount_percent", str(body.discount_percent))
     db.set_setting("volume_discount_expiry_hours", str(body.discount_expiry_hours))
+    if body.coupon_min is not None:
+        db.set_setting('wallet_coupon_min_volume', str(body.coupon_min))
     db.log_admin_action(admin["id"], "setting_change", "volume reminder settings updated (پنل وب)", "setting", "volume_reminder")
     return {"ok": True}
 

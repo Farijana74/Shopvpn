@@ -63,24 +63,41 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.state.get_state(),BuyFlow.choosing_payment.state)
         self.assertEqual(len(self.orders()),0)
 
-    async def test_discount_after_method_changes_actual_order_and_card_amount(self):
+    async def test_discount_code_is_not_offered_or_applied_to_product(self):
         cid=self.db.create_discount_code('SAVE',percent=25,max_uses=1)
         draft=await self.enter()
         self.assertEqual(len(self.orders()),0)
         buttons=self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard
-        self.assertTrue(any(b.callback_data.startswith('checkout_code:') for r in buttons for b in r))
-        await self.code(draft['token'],'SAVE')
+        self.assertFalse(any(b.callback_data.startswith('checkout_code:') for r in buttons for b in r))
         self.assertEqual(await self.state.get_state(),BuyFlow.checkout_review.state)
         self.assertEqual(self.db.get_discount_code_by_id(cid)['used_count'],0)
         await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
         order=self.orders()[0]
         self.assertEqual(order['quantity'],1)
-        self.assertEqual(order['discount_amount'],50000)
-        self.assertEqual(order['final_price'],150000)
-        self.assertEqual(self.db.get_discount_code_by_id(cid)['used_count'],1)
+        self.assertEqual(order['discount_amount'],0)
+        self.assertEqual(order['final_price'],200000)
+        self.assertEqual(self.db.get_discount_code_by_id(cid)['used_count'],0)
         card=self.message.answer.await_args.kwargs['reply_markup'].inline_keyboard[0]
-        self.assertEqual(card[1].copy_text.text,'1500000')
+        self.assertEqual(card[1].copy_text.text,'2000000')
         self.assertEqual(await self.state.get_state(),BuyFlow.waiting_receipt.state)
+
+    async def test_owned_box_product_prize_can_still_be_redeemed(self):
+        self.db._ensure_engage_tables()
+        cid = self.db.create_discount_code('BOXFREE123', percent=100, max_uses=1, source='lootbox_prize', product_id=self.pid)
+        with self.db._get_conn() as conn:
+            conn.execute("INSERT INTO user_lootboxes(user_id,type_id,status,prize_kind,prize_code) VALUES(101,1,'opened','product','BOXFREE123')")
+        draft = await self.enter()
+        buttons = self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard
+        self.assertTrue(any((b.callback_data or '').startswith('checkout_code:') for row in buttons for b in row))
+        await self.code(draft['token'], 'BOXFREE123')
+        with patch('handlers_user.deliver_config_to_user',new=AsyncMock()) as delivery, \
+             patch('handlers_user.check_and_notify_low_stock',new=AsyncMock()), \
+             patch('handlers_user.report_router.send_text',new=AsyncMock(return_value=None)):
+            await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
+        self.assertEqual(self.orders()[0]['status'], 'approved')
+        self.assertEqual(self.orders()[0]['final_price'], 0)
+        self.assertEqual(self.db.get_discount_code_by_id(cid)['used_count'], 1)
+        delivery.assert_awaited_once()
 
     async def test_double_confirmation_deducts_wallet_and_creates_only_once(self):
         self.db.add_wallet_credit(101,30000)
@@ -96,7 +113,7 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         self.db.add_wallet_credit(101,30000)
         draft=await self.enter()
         await self.code(draft['token'],'NOPE')
-        self.assertEqual(await self.state.get_state(),BuyFlow.waiting_checkout_code.state)
+        self.assertEqual(await self.state.get_state(),BuyFlow.checkout_review.state)
         self.assertFalse(self.orders())
         self.assertEqual(self.db.get_wallet_credit(101),30000)
         await self.invoke('cb_checkout_review',f"checkout_review:{draft['token']}")
@@ -122,7 +139,7 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         draft=await self.enter()
         await self.code(draft['token'],'BIG')
         await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
-        self.assertFalse(self.orders())
+        self.assertEqual(self.orders()[0]['final_price'], 200000)
 
     async def test_cancel_draft_does_not_spend_or_claim(self):
         self.db.add_wallet_credit(101,30000)
@@ -158,7 +175,7 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.state.get_state(),BuyFlow.waiting_receipt.state)
         self.assertEqual(self.message.answer.await_args.kwargs['reply_markup'].inline_keyboard[0][1].copy_text.text,'1000')
 
-    async def test_gateway_invoice_created_only_after_code_and_final_confirmation(self):
+    async def test_gateway_invoice_created_only_after_final_confirmation(self):
         self.db.create_discount_code('SAVE',percent=25)
         invoice=AsyncMock(return_value={'invoice_id':1,'payment_url':'https://example.invalid/pay'})
         with patch('handlers_user.extra_gateway_payment.available_keys',return_value=['zarinpal']), \
@@ -167,13 +184,11 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
              patch('extra_gateway_user.present_invoice',new=AsyncMock()) as present:
             draft=await self.enter('pay_zarinpal')
             invoice.assert_not_awaited()
-            await self.code(draft['token'],'SAVE')
-            invoice.assert_not_awaited()
             await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
         invoice.assert_awaited_once()
-        self.assertEqual(invoice.await_args.args[6],150000)
+        self.assertEqual(invoice.await_args.args[6],200000)
         present.assert_awaited_once()
-        self.assertEqual(self.orders()[0]['final_price'],150000)
+        self.assertEqual(self.orders()[0]['final_price'],200000)
 
     async def test_deactivated_product_is_not_charged(self):
         draft=await self.enter()
@@ -209,21 +224,15 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         call=await self.invoke('cb_checkout_method',f"checkout_method:{draft['token']}:checkout_credit")
         self.assertFalse(self.orders())
         self.assertEqual(await self.state.get_state(),BuyFlow.choosing_payment.state)
-        self.assertTrue(call.answer.await_args.kwargs['show_alert'])
+        self.assertTrue(any(args.kwargs.get('show_alert') for args in call.answer.await_args_list))
 
-    async def test_full_discount_can_cover_order_without_payment_gateway(self):
+    async def test_discount_cannot_replace_payment_gateway_for_product(self):
         self.db.set_setting('card_to_card_enabled','0')
         cid=self.db.create_discount_code('FREE',percent=100,max_uses=1)
-        draft=await self.enter('checkout_coupon')
-        await self.code(draft['token'],'FREE')
-        with patch('handlers_user.deliver_config_to_user',new=AsyncMock()) as delivery, \
-             patch('handlers_user.check_and_notify_low_stock',new=AsyncMock()), \
-             patch('handlers_user.report_router.send_text',new=AsyncMock(return_value=None)):
-            await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
-        self.assertEqual(self.orders()[0]['status'],'approved')
-        self.assertEqual(self.orders()[0]['final_price'],0)
-        self.assertEqual(self.db.get_discount_code_by_id(cid)['used_count'],1)
-        delivery.assert_awaited_once()
+        call=await self.invoke('cb_product',f'prod:{self.pid}')
+        self.assertFalse(self.orders())
+        self.assertTrue(any(args.kwargs.get('show_alert') for args in call.answer.await_args_list))
+        self.assertEqual(self.db.get_discount_code_by_id(cid)['used_count'],0)
 
     async def test_stale_checkout_cannot_override_another_active_flow(self):
         from states import WalletTopup
@@ -279,35 +288,30 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.get_wallet_credit(101),199999)
         self.assertFalse(self.orders())
 
-    async def test_discount_can_make_wallet_sufficient(self):
+    async def test_discount_does_not_make_wallet_sufficient_for_product(self):
         self.db.add_wallet_credit(101,100000)
         self.db.create_discount_code('HALF',percent=50)
         draft=await self.enter('pay_card2card')
-        await self.code(draft['token'],'HALF')
         await self.invoke('cb_checkout_back',f"checkout_back:{draft['token']}")
         buttons=[b for row in self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for b in row]
-        self.assertTrue(any(b.callback_data and b.callback_data.endswith(':checkout_credit') for b in buttons))
+        self.assertFalse(any(b.callback_data and b.callback_data.endswith(':checkout_credit') for b in buttons))
         self.assertEqual(self.db.get_wallet_credit(101),100000)
         self.assertFalse(self.orders())
 
     async def test_partial_discount_without_gateway_does_not_create_order(self):
         self.db.set_setting('card_to_card_enabled','0')
         self.db.create_discount_code('HALF',percent=50)
-        draft=await self.enter('checkout_coupon')
-        await self.code(draft['token'],'HALF')
-        call=await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
+        call=await self.invoke('cb_product',f'prod:{self.pid}')
         self.assertFalse(self.orders())
-        self.assertTrue(call.answer.await_args.kwargs['show_alert'])
+        self.assertTrue(any(args.kwargs.get('show_alert') for args in call.answer.await_args_list))
         self.assertEqual(self.db.get_wallet_credit(101),0)
 
     async def test_full_discount_without_wallet_does_not_show_wallet_label(self):
         self.db.create_discount_code('FREE',percent=100)
         draft=await self.enter('pay_card2card')
-        await self.code(draft['token'],'FREE')
         await self.invoke('cb_checkout_back',f"checkout_back:{draft['token']}")
         buttons=[b for row in self.message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for b in row]
-        selection=next(b for b in buttons if b.callback_data and b.callback_data.endswith(':checkout_credit'))
-        self.assertNotIn('کیف پول',selection.text)
+        self.assertFalse(any(b.callback_data and b.callback_data.endswith(':checkout_credit') for b in buttons))
         self.assertFalse(self.orders())
         self.assertEqual(self.db.get_wallet_credit(101),0)
 

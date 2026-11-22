@@ -134,6 +134,9 @@ async def provision_auto_config(
             except Exception:
                 pass
 
+    if user_id is not None:
+        from user_config_prefix import get_prefix
+        username_prefix = get_prefix(local_db, user_id)
     try:
         for _ in range(quantity):
             username = None

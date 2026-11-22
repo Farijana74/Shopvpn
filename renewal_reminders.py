@@ -110,10 +110,13 @@ async def _send_single_reminder(bot, db, row, mark_fn, cache) -> bool:
         code, discount_expires_at, percent, expiry_hours = await _db(
             db.generate_renewal_discount_code, user_id
         )
+        from wallet_coupon import conditions
+        terms = conditions(await _db(db.get_discount_code, code))
         discount_line = (
             f"🎁 برای اینکه دچار قطعی نشوید، یک کد تخفیف اختصاصی {percent}٪ برایتان صادر شد:\n"
             f"🎟 کد تخفیف: `{code}`\n"
             f"⏳ این کد فقط تا {expiry_hours} ساعت آینده معتبر است.\n\n"
+            f"{terms}\n\n"
         )
 
     days_line = (
@@ -210,10 +213,13 @@ async def _send_single_volume_reminder(bot, db, row, mark_fn, cache) -> bool:
         code, discount_expires_at, percent, expiry_hours = await _db(
             db.generate_volume_discount_code, user_id
         )
+        from wallet_coupon import conditions
+        terms = conditions(await _db(db.get_discount_code, code))
         discount_line = (
             f"🎁 برای اینکه دچار قطعی نشوید، یک کد تخفیف اختصاصی {percent}٪ برایتان صادر شد:\n"
             f"🎟 کد تخفیف: `{code}`\n"
             f"⏳ این کد فقط تا {expiry_hours} ساعت آینده معتبر است.\n\n"
+            f"{terms}\n\n"
         )
 
     text = (

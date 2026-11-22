@@ -1113,9 +1113,9 @@
       var tier = null;
       var seq = 0;
       var qtyOut = h("output", { class: "num", text: fmt(1) });
-      var code = h("input", { class: "input ltr", type: "text", autocomplete: "off", maxlength: "64" });
       var notice = h("div", { role: "alert" });
       var tsBox = turnstileBox();
+      var prizeCode = p.has_product_prize ? h("input", { class: "input", placeholder: "کد جایزه محصول رایگان" }) : null;
       var go1 = h("button", { class: "btn block", type: "button", text: t("continue_pay") });
       function refresh() {
         var base = p.price * qty;
@@ -1152,13 +1152,12 @@
           h("div", { class: "qty" },
             h("button", { type: "button", "aria-label": "-", text: "\u2212", onclick: function () { setQty(qty - 1); } }), qtyOut,
             h("button", { type: "button", "aria-label": "+", text: "+", onclick: function () { setQty(qty + 1); } }))),
-        h("label", { class: "field" }, h("span", { text: t("code") }), code),
-        tsBox, notice, go1));
+        prizeCode, tsBox, notice, go1));
       go1.addEventListener("click", function () {
         notice.textContent = "";
         go1.disabled = true;
         go1.setAttribute("aria-busy", "true");
-        api("/api/orders", { method: "POST", body: { product_id: p.id, quantity: qty, discount_code: code.value.trim() || null } }).then(function (res) {
+        api("/api/orders", { method: "POST", body: { product_id: p.id, quantity: qty, discount_code: prizeCode ? prizeCode.value.trim() || null : null } }).then(function (res) {
           try { history.replaceState(null, "", "#/order/" + res.order_id); } catch (e) { noop(); }
           var flowOpts = { product: p, onStep: setStep, onApproved: function (oid) { deliveryView(body, oid, 0, { onStep: setStep }); } };
           summary(p, qty, res.final_price, 0);

@@ -55,6 +55,8 @@ async def _report_result(bot, db, result):
             lang = db.get_user_language(w["user_id"]) if hasattr(db, "get_user_language") else "fa"
             if result.get("prize_type") == "discount" and w.get("code"):
                 msg = tr(f"🎉 تبریک! شما نفر {w['rank']} قرعه‌کشی شبانه شدید.\n🎟 کد تخفیف: <code>{w['code']}</code>\n⏳ اعتبار: {w.get('expires_at', '')}", lang)
+                from wallet_coupon import conditions
+                msg += '\n' + conditions(await asyncio.to_thread(db.get_discount_code, w['code']))
             elif result.get("prize_type") == "wallet":
                 msg = tr(f"🎉 تبریک! شما نفر {w['rank']} قرعه‌کشی شبانه شدید و {w['prize']:,} تومان به کیف پولتان اضافه شد.", lang)
             else:

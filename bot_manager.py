@@ -432,6 +432,7 @@ class WebhookServer:
 class BotManager:
     def __init__(self):
         self.instances = {}  # token -> {"bot": Bot, "dp": Dispatcher, "task": asyncio.Task, "db_path": str}
+        self.restore_in_progress = False
         self.webhook_server = WebhookServer() if BOT_MODE == "webhook" else None
 
     async def _sync_menu_button(self, bot: Bot, db) -> None:
@@ -453,6 +454,8 @@ class BotManager:
     async def start_bot(self, token: str, db_path: str, owner_id: int, is_main_bot: bool = False, initialized_db=None) -> bool:
         """یک بات جدید (اصلی یا نمایندگی) را با دیتابیس مستقل خودش راه‌اندازی می‌کند.
         اگر توکن از قبل در حال اجرا باشد، کاری نمی‌کند و False برمی‌گرداند."""
+        if self.restore_in_progress and not is_main_bot:
+            return False
         if token in self.instances:
             return False
 
@@ -720,6 +723,8 @@ class BotManager:
         from config import resolve_db_path
         while True:
             await asyncio.sleep(interval)
+            if self.restore_in_progress:
+                continue
             try:
                 # Recover the main bot too: previously only reseller bots were
                 # restarted, leaving the process alive with its main bot stopped.

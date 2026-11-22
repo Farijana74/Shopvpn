@@ -28,6 +28,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.filters import Command, StateFilter
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from states import AdminCouponMinimum
 from force_join import is_channel_member
 
 import keyboards as kb
@@ -4770,6 +4771,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await call.answer(db.get_text('handlers_admin.auto_55ad46cd', 'درخواست یافت نشد.'), show_alert=True)
             return
         caption = f"شارژ کیف پول #{topup_id}\nکاربر: {topup['user_id']}\nمبلغ: {topup['amount']:,} تومان"
+        if topup['credit_amount'] is not None:
+            caption += f"\n🎟 تخفیف: {topup['discount_amount']:,} تومان\n👛 مبلغ شارژ: {topup['credit_amount']:,} تومان"
         if topup["receipt_file_id"]:
             await _send_receipt(
                 bot, call.from_user.id, topup["receipt_file_id"], (topup["receipt_type"] if "receipt_type" in topup.keys() else "photo"),
@@ -4808,7 +4811,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         try:
             cashback_amount = await asyncio.to_thread(db.get_topup_cashback, topup_id)
             cashback_line = f"🎁 کش‌بک شارژ: {cashback_amount:,} تومان\n" if cashback_amount else ""
-            await send_telegram(bot, db, topup["user_id"], f"✅ شارژ کیف پول شما تایید شد!\n💰 مبلغ {topup['amount']:,} تومان اضافه شد.\n"
+            credited = topup['credit_amount'] if topup['credit_amount'] is not None else topup['amount']
+            await send_telegram(bot, db, topup["user_id"], f"✅ شارژ کیف پول شما تایید شد!\n💰 مبلغ {credited:,} تومان اضافه شد.\n"
                 f"{cashback_line}👛 موجودی فعلی کیف پول شما: {new_balance:,} تومان")
             await _notify_user_inline_menu(bot, topup["user_id"])
         except Exception:
@@ -4842,6 +4846,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             return
 
         if not (await asyncio.to_thread(db.reject_topup, topup_id, "admin")):
+            if topup['discount_code_id'] and topup['payment_started'] and topup['payment_method'] != 'card':
+                return await call.answer('پرداخت درگاه این شارژ هنوز ممکن است؛ ابتدا وضعیت فاکتور را بررسی کنید.', show_alert=True)
             await call.answer(db.get_text('handlers_admin.auto_eef1da1e', 'این درخواست قبلاً بررسی شده است.'), show_alert=True)
             return
         (await asyncio.to_thread(db.log_admin_action, 
@@ -5109,7 +5115,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         max_uses = int(message.text.strip())
         await state.update_data(disc_maxuses=max_uses)
         await state.set_state(AdminCreateDiscount.waiting_min_purchase)
-        await message.answer(db.get_text('handlers_admin.auto_a57dba1d', 'حداقل مبلغ سبد خرید برای اعمال این کد چقدر باشد؟ (تومان — برای بدون محدودیت عدد 0 را بفرست)'))
+        await message.answer('حداقل مبلغ شارژ کیف پول برای اعمال این کد چقدر باشد؟ (تومان — برای بدون محدودیت عدد 0 را بفرست)')
 
     @router.message(AdminCreateDiscount.waiting_min_purchase)
     async def process_disc_min_purchase(message: Message, state: FSMContext):
@@ -5118,19 +5124,16 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             return
         await state.update_data(disc_min_purchase=int(message.text.strip()) or None)
         await state.set_state(AdminCreateDiscount.waiting_max_purchase)
-        await message.answer(db.get_text('handlers_admin.auto_bbdcec92', 'حداکثر مبلغ سبد خرید برای اعمال این کد چقدر باشد؟ (تومان — برای بدون محدودیت عدد 0 را بفرست)'))
+        await message.answer('حداکثر مبلغ شارژ کیف پول برای اعمال این کد چقدر باشد؟ (تومان — برای بدون محدودیت عدد 0 را بفرست)')
 
     @router.message(AdminCreateDiscount.waiting_max_purchase)
     async def process_disc_max_purchase(message: Message, state: FSMContext):
         if not message.text.strip().isdigit():
             await message.answer(db.get_text('handlers_admin.auto_607a0779', 'لطفاً فقط عدد ارسال کنید (0 برای بدون محدودیت).'))
             return
-        await state.update_data(disc_max_purchase=int(message.text.strip()) or None)
-        await state.set_state(AdminCreateDiscount.waiting_scope)
-        await message.answer(
-            db.get_text('handlers_admin.auto_055c2c20', 'این کد تخفیف روی چه چیزی قابل استفاده باشد؟'),
-            reply_markup=kb.discount_scope_picker_kb(),
-        )
+        await state.update_data(disc_max_purchase=int(message.text.strip()) or None, disc_product_id=None, disc_category_id=None, disc_product_ids=None)
+        await state.set_state(AdminCreateDiscount.waiting_expiry)
+        await message.answer('چند روز دیگر این کد تخفیف منقضی شود؟ (برای بدون انقضا عدد 0 را بفرست)')
 
     @router.callback_query(AdminCreateDiscount.waiting_scope, F.data.startswith("adm_disc_scope:"))
     async def process_disc_scope_pick(call: CallbackQuery, state: FSMContext):
@@ -5409,8 +5412,18 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await message.answer(tr("لطفاً فقط عدد روز ارسال کنید (0 برای بدون انقضا)."))
             return
         days = int(message.text.strip())
-        expires_at = (datetime.utcnow() + timedelta(days=days)).isoformat() if days > 0 else None
+        await state.update_data(bulk_disc_days=days)
+        await state.set_state(AdminBulkDiscount.waiting_minimum)
+        return await message.answer('حداقل مبلغ شارژ کیف پول برای استفاده از کد (تومان) را بفرستید؛ ۰ یعنی بدون حداقل.')
+
+    @router.message(AdminBulkDiscount.waiting_minimum)
+    async def process_bulk_disc_minimum(message: Message, state: FSMContext):
+        value = (message.text or '').strip().replace(',', '').translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹','0123456789'))
+        if not value.isdigit():
+            return await message.answer('لطفاً حداقل مبلغ را به صورت عدد ارسال کنید.')
         data = await state.get_data()
+        days = int(data.get('bulk_disc_days') or 0)
+        expires_at = (datetime.utcnow() + timedelta(days=days)).isoformat() if days > 0 else None
         filters = list(data.get("bulk_disc_filters") or [])
         no_purchase_days = int(data.get("bulk_disc_no_purchase_days") or 30)
         user_ids = await _bulk_disc_user_ids(filters, no_purchase_days)
@@ -5421,14 +5434,14 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                 reply_markup=kb.discount_codes_kb(),
             )
             return
-        await state.update_data(bulk_disc_expires_at=expires_at, bulk_disc_user_ids=user_ids)
+        await state.update_data(bulk_disc_expires_at=expires_at, bulk_disc_user_ids=user_ids, bulk_disc_minimum=int(value))
         value_txt = f"{data.get('bulk_disc_percent')}%" if data.get("bulk_disc_percent") else f"{data.get('bulk_disc_fixed'):,} تومان"
         expiry_txt = f"{days} روز دیگر" if days > 0 else "بدون انقضا"
         filters_label = _bulk_disc_filters_label(filters, no_purchase_days)
         await message.answer(
             tr(
                 f"📋 خلاصه:\n👥 فیلتر: {filters_label}\n🔢 تعداد کاربر هدف: {len(user_ids)}\n"
-                f"🎟 تخفیف هر کاربر: {value_txt} (کد یکتا و یک‌بارمصرف)\n⏳ انقضا: {expiry_txt}\n\n"
+                f"🎟 تخفیف هر کاربر: {value_txt} (کد یکتا و یک‌بارمصرف)\n💰 حداقل شارژ: {int(value):,} تومان\n⏳ انقضا: {expiry_txt}\n\n"
                 "با تایید، برای هر کاربر یک کد اختصاصی ساخته و مستقیم در بات برایش ارسال می‌شود."
             ),
             reply_markup=kb.bulk_discount_confirm_kb(),
@@ -5443,6 +5456,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         percent = data.get("bulk_disc_percent")
         fixed_amount = data.get("bulk_disc_fixed")
         expires_at = data.get("bulk_disc_expires_at")
+        minimum = int(data.get('bulk_disc_minimum') or 0)
         filters = list(data.get("bulk_disc_filters") or [])
         no_purchase_days = int(data.get("bulk_disc_no_purchase_days") or 30)
         await state.clear()
@@ -5451,7 +5465,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             return
         await call.answer(tr("⏳ در حال ساخت و ارسال کدها..."))
         pairs = await asyncio.to_thread(
-            db.generate_bulk_discount_codes, user_ids, percent, fixed_amount, expires_at
+            db.generate_bulk_discount_codes, user_ids, percent, fixed_amount, expires_at, minimum
         )
         value_txt = f"{percent}%" if percent else f"{fixed_amount:,} تومان"
         expiry_txt = f"تا {to_jalali_str(datetime.fromisoformat(expires_at))} معتبر است" if expires_at else "بدون تاریخ انقضا"
@@ -5462,7 +5476,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                 f"🎟 کد: `{code}`\n"
                 f"💰 تخفیف: {value_txt}\n"
                 f"⏳ {expiry_txt}\n\n"
-                "این کد فقط یک‌بار و فقط برای شما قابل استفاده است."
+                + (f"این کد فقط برای شارژ کیف پول از {minimum:,} تومان و فقط یک‌بار قابل استفاده است." if minimum else "این کد فقط برای شارژ کیف پول و یک‌بار قابل استفاده است.")
             )
             for _attempt in range(3):
                 try:
@@ -5939,6 +5953,37 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
     # -------------------------------------------------------------------
     # مدیریت گردونه شانس
     # -------------------------------------------------------------------
+
+    @router.callback_query(F.data.startswith('adm_coupon_min:'))
+    async def cb_coupon_minimum(call: CallbackQuery, state: FSMContext):
+        if not senior_admin_only(call.from_user.id):
+            return await deny_mid(call)
+        source = call.data.split(':', 1)[1]
+        back = {'wheel': 'adm_wheel_settings', 'renewal': 'adm_renewal_settings', 'volume': 'adm_volume_reminder_settings', 'churn': 'adm_churn_settings'}.get(source)
+        if not back:
+            return await call.answer('درخواست نامعتبر است.', show_alert=True)
+        current = await asyncio.to_thread(db.get_setting, f'wallet_coupon_min_{source}', '0')
+        await state.update_data(coupon_min_source=source)
+        await state.set_state(AdminCouponMinimum.waiting_amount)
+        await call.answer()
+        await call.message.answer(f'حداقل مبلغ شارژ برای کدهای جدید این بخش (تومان): {int(current or 0):,}\nمبلغ جدید را بفرستید؛ ۰ یعنی بدون حداقل.', reply_markup=kb.admin_back_kb(back))
+
+    @router.message(AdminCouponMinimum.waiting_amount)
+    async def process_coupon_minimum(message: Message, state: FSMContext):
+        if not senior_admin_only(message.from_user.id):
+            return
+        text = (message.text or '').strip().replace(',', '').translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789'))
+        if not text.isdigit():
+            return await message.answer('مبلغ را به تومان و فقط به صورت عدد ارسال کنید.')
+        source = (await state.get_data()).get('coupon_min_source')
+        if source not in ('wheel', 'renewal', 'volume', 'churn'):
+            await state.clear()
+            return await message.answer('این مرحله منقضی شده است.')
+        await asyncio.to_thread(db.set_setting, f'wallet_coupon_min_{source}', str(int(text)))
+        await asyncio.to_thread(db.log_admin_action, message.from_user.id, 'coupon_minimum', f'{source}: {text}')
+        await state.clear()
+        markup = {'wheel': kb.wheel_settings_kb, 'renewal': kb.renewal_settings_kb, 'volume': kb.volume_reminder_settings_kb, 'churn': kb.churn_settings_kb}[source](db)
+        await message.answer(f'✅ حداقل شارژ کدهای جدید این بخش: {int(text):,} تومان', reply_markup=markup)
 
     @router.callback_query(F.data == "adm_wheel_settings")
     async def cb_admin_wheel_settings(call: CallbackQuery):
@@ -13859,6 +13904,40 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await _show_user_menu(call.message, tg_id)
         await call.answer()
 
+    @router.callback_query(F.data.startswith('adm_user_prefix:'))
+    async def cb_admin_user_prefix(call: CallbackQuery, state: FSMContext):
+        if not senior_admin_only(call.from_user.id):
+            return await deny_mid(call)
+        from user_config_prefix import get_prefix
+        tg_id = callback_id(call.data, 'adm_user_prefix')
+        if tg_id is None or not await asyncio.to_thread(db.get_user, tg_id):
+            return await call.answer('کاربر یافت نشد.', show_alert=True)
+        prefix = await asyncio.to_thread(get_prefix, db, tg_id)
+        await state.update_data(prefix_user_id=tg_id)
+        await state.set_state(AdminUserManage.waiting_config_prefix)
+        await call.answer()
+        await call.message.answer(f'پیشوند فعلی کاربر: {prefix}\nپیشوند جدید را با ۱ تا ۱۲ حرف انگلیسی یا عدد ارسال کنید. برای بازگشت به شناسه کاربری عدد 0 را بفرستید.', reply_markup=kb.admin_back_kb(f'adm_user_view:{tg_id}'))
+
+    @router.message(AdminUserManage.waiting_config_prefix)
+    async def process_admin_user_prefix(message: Message, state: FSMContext):
+        if not senior_admin_only(message.from_user.id):
+            return
+        from user_config_prefix import set_prefix
+        tg_id = (await state.get_data()).get('prefix_user_id')
+        if not tg_id or not await asyncio.to_thread(db.get_user, tg_id):
+            await state.clear()
+            return await message.answer('کاربر یافت نشد.')
+        value = (message.text or '').strip()
+        if not value:
+            return await message.answer('پیشوند را به صورت متن ارسال کنید.')
+        try:
+            prefix = await asyncio.to_thread(set_prefix, db, tg_id, '' if value == '0' else value)
+        except ValueError as exc:
+            return await message.answer(str(exc))
+        await asyncio.to_thread(db.log_admin_action, message.from_user.id, 'user_config_prefix', f'کاربر {tg_id}: {prefix}')
+        await state.clear()
+        await _show_user_menu(message, tg_id, f'✅ پیشوند کانفیگ‌های جدید: {prefix}')
+
     # ---- ارسال پیام مستقیم به کاربر ----
 
     @router.callback_query(F.data.startswith("adm_user_msg:"))
@@ -14016,7 +14095,18 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await message.answer(tr("لطفاً فقط عدد روز ارسال کنید (0 برای بدون انقضا)."))
             return
         days = int(message.text.strip())
+        await state.update_data(disc_days=days)
+        await state.set_state(AdminUserManage.waiting_discount_minimum)
+        return await message.answer('حداقل مبلغ شارژ کیف پول برای کد (تومان) را بفرستید؛ ۰ یعنی بدون حداقل.')
+
+    @router.message(AdminUserManage.waiting_discount_minimum)
+    async def process_admin_user_disc_minimum(message: Message, state: FSMContext, bot: Bot):
+        value = (message.text or '').strip().replace(',', '').translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹','0123456789'))
+        if not value.isdigit():
+            return await message.answer('لطفاً حداقل مبلغ را به صورت عدد ارسال کنید.')
+        minimum = int(value)
         data = await state.get_data()
+        days = int(data.get('disc_days') or 0)
         tg_id = data.get("target_user_id")
         percent = data.get("disc_percent")
         fixed_amount = data.get("disc_fixed")
@@ -14025,7 +14115,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             return
         expires_at = (datetime.utcnow() + timedelta(days=days)).isoformat() if days > 0 else None
         pairs = await asyncio.to_thread(
-            db.generate_bulk_discount_codes, [tg_id], percent, fixed_amount, expires_at
+            db.generate_bulk_discount_codes, [tg_id], percent, fixed_amount, expires_at, minimum
         )
         if not pairs:
             await message.answer(tr("⚠️ ساخت کد ناموفق بود؛ دوباره تلاش کن."))
@@ -14036,7 +14126,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         text = (
             "🎁 یک کد تخفیف اختصاصی برای شما صادر شد!\n\n"
             f"🎟 کد: `{code}`\n💰 تخفیف: {value_txt}\n⏳ {expiry_txt}\n\n"
-            "این کد فقط یک‌بار و فقط برای شما قابل استفاده است."
+            + (f"این کد فقط برای شارژ کیف پول از {minimum:,} تومان و یک‌بار قابل استفاده است." if minimum else "این کد فقط برای شارژ کیف پول و یک‌بار قابل استفاده است.")
         )
         try:
             await send_telegram(bot, db, tg_id, text, parse_mode="Markdown")
@@ -15089,20 +15179,13 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         # reconcile هر بات متوقف‌شده‌ای که هنوز فعال باشد را ظرف چند ثانیه
         # خودش دوباره روشن می‌کند.
         stopped_tokens = []
+        if bot_manager is not None:
+            bot_manager.restore_in_progress = True
         try:
-            with zipfile.ZipFile(tmp_path, "r") as zf:
-                names = zf.namelist()
-            reseller_ids = []
-            for n in names:
-                if n.startswith("reseller_") and n.endswith(".db"):
-                    try:
-                        reseller_ids.append(int(n[len("reseller_"):-len(".db")].split("_level")[0]))
-                    except (ValueError, IndexError):
-                        pass
             if bot_manager is not None:
-                for rid in reseller_ids:
-                    row = await asyncio.to_thread(db.get_reseller_bot, rid)
-                    if row and bot_manager.is_running(row["bot_token"]):
+                # IDs and tokens can differ between the two installations.
+                for row in await asyncio.to_thread(db.list_reseller_bots, False):
+                    if bot_manager.is_running(row["bot_token"]):
                         await bot_manager.stop_bot(row["bot_token"])
                         stopped_tokens.append(row["bot_token"])
 
@@ -15112,7 +15195,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             await asyncio.to_thread(db.init_db, call.from_user.id)
         except Exception as e:
             logger.exception("بازیابی کامل ناموفق بود.")
-            return await safe_edit(call, f"❌ بازیابی کامل ناموفق بود: {e}")
+            return await safe_edit(call, f"❌ بازیابی کامل ناموفق بود: {e}\n\nممکن است بخشی از بازیابی انجام شده باشد؛ نسخه‌های پیش از بازیابی در پوشه backups ذخیره شده‌اند.")
         else:
             (await asyncio.to_thread(
                 db.log_admin_action, call.from_user.id, "backup_full_restore",
@@ -15120,6 +15203,8 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
                 f"{len(result['resellers_skipped'])} رد شد.",
             ))
         finally:
+            if bot_manager is not None:
+                bot_manager.restore_in_progress = False
             try:
                 os.remove(tmp_path)
                 os.rmdir(os.path.dirname(tmp_path))

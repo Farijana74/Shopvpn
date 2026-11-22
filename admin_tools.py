@@ -75,6 +75,11 @@ NUM_FIELDS = {
         "lo": 1, "hi": 720, "presets": (6, 12, 24, 48, 72, 168), "default": 24, "card": "lottery",
         "hint": "فقط وقتی نوع جایزه «کد تخفیف» باشد اعمال می‌شود.",
     },
+    "lt_coupon_min": {
+        "key": "wallet_coupon_min_lottery", "title": "💰 حداقل شارژ برای کد جایزه", "unit": "تومان",
+        "lo": 0, "hi": 1_000_000_000, "presets": (0, 50000, 100000, 200000), "default": 0, "card": "lottery",
+        "hint": "برای کدهای جدید قرعه‌کشی اعمال می‌شود؛ صفر یعنی بدون حداقل.",
+    },
     "cb_ren": {
         "key": "renewal_cashback_percent", "title": "🔄 کش‌بک تمدید سرویس", "unit": "درصد",
         "lo": 0, "hi": 100, "presets": (0, 2, 5, 10, 15, 20), "default": 0, "card": "cashback",
@@ -290,6 +295,7 @@ def register(router: Router, db, is_main_bot, full_admin_only, senior_admin_only
         ]
         if not wallet:
             rows.append([_btn(f"⏳ اعتبار کد تخفیف: {s['discount_expiry_hours']} ساعت", "adm_ns:lt_exp")])
+            rows.append([_btn("💰 حداقل شارژ برای کد جایزه", "adm_ns:lt_coupon_min")])
         rows += [
             [_btn(f"🪙 خرید: {snap['buy']}", "adm_ns:lt_buy"),
              _btn(f"🔄 تمدید: {snap['ren']}", "adm_ns:lt_ren"),

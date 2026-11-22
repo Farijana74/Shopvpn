@@ -344,6 +344,9 @@ def create_engagement_router(db, is_main_bot: bool = True) -> Router:
         await call.answer()
         frame_message = await eg.animate(call.message)
         text = tr(eg.result_text(result, valid_days))
+        if result['kind'] == 'discount':
+            from wallet_coupon import conditions
+            text += '\n' + conditions(await asyncio.to_thread(db.get_discount_code, result['code']))
         markup = _kb([_btn("📦 صندوق‌های من", "lb_menu")])
         try:
             await frame_message.edit_text(text, reply_markup=markup)
@@ -400,6 +403,7 @@ def create_engagement_router(db, is_main_bot: bool = True) -> Router:
         rows = [
             [_btn(("⏸ خاموش کردن" if eg.lootbox_enabled(db) else "▶️ روشن کردن"), "eng_tg:lootbox_enabled")],
             [_btn("✏️ سقف خرید روزانه", "eng_set:lootbox_daily_limit"), _btn("⏱ اعتبار کد (روز)", "eng_set:lootbox_code_valid_days")],
+            [_btn("💰 حداقل شارژ کد جایزه", "eng_set:wallet_coupon_min_lootbox")],
         ]
         for box_type in types:
             state_icon = "🟢" if box_type["is_active"] else "🔴"
@@ -444,6 +448,7 @@ def create_engagement_router(db, is_main_bot: bool = True) -> Router:
         rows = [
             [_btn(("⏸ خاموش کردن" if eg.streak_enabled(db) else "▶️ روشن کردن"), "eng_tg:streak_enabled")],
             [_btn("⏱ اعتبار کد (روز)", "eng_set:streak_code_valid_days")],
+            [_btn("💰 حداقل شارژ کد جایزه", "eng_set:wallet_coupon_min_milestone")],
         ]
         for milestone in milestones:
             icon = "🟢" if milestone["is_active"] else "🔴"
@@ -541,7 +546,7 @@ def create_engagement_router(db, is_main_bot: bool = True) -> Router:
             return
         label, default, low, high = eg.SETTINGS[key]
         current = await asyncio.to_thread(db.get_setting, key, str(default))
-        back = "lb_adm" if key.startswith("lootbox_") else "st_adm"
+        back = "lb_adm" if key.startswith("lootbox_") or key == 'wallet_coupon_min_lootbox' else "st_adm"
         await _ask_value(call, state, f"{label}\nمقدار فعلی: {current}\nعدد جدید را بفرستید ({low:,} تا {high:,}):", back, mode="setting", key=key)
 
     @router.callback_query(F.data.startswith("lb_price:"))

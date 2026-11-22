@@ -2453,17 +2453,16 @@ async function renderPurchasePanel(productId, p, quantity, discountCode) {
         <button class="btn small outline" id="qty-dec-bulk-btn" ${quantity <= 1 ? "disabled" : ""}>➖${step}</button>
         <button class="btn small outline" id="qty-inc-bulk-btn" ${quantity >= p.stock ? "disabled" : ""}>➕${step}</button>
       </div>` : ""}
-      <input class="input" id="purchase-discount-code" type="text" placeholder="کد تخفیف (اختیاری)"
-        value="${discountCode ? escHtml(discountCode) : ""}" style="direction:ltr;text-align:left;margin-top:10px" />
       ${tier.amount > 0 ? `
       <div class="stat-row" style="margin-top:10px"><span>جمع کل</span><b>${fmt(tier.total)} تومان</b></div>
       <div class="stat-row"><span>${tier.icon} تخفیف سطح ${escHtml(tier.title)} (${tier.percent}٪)</span><b>-${fmt(tier.amount)} تومان</b></div>
       <div class="stat-row"><span>مبلغ پس از تخفیف سطح</span><b>${fmt(tier.total_after)} تومان</b></div>`
       : `<div class="stat-row" style="margin-top:10px"><span>جمع کل</span><b>${fmt(tier.total)} تومان</b></div>`}
+      ${p.has_product_prize ? `<input class="input" id="product-prize-code" placeholder="کد جایزه محصول رایگان" value="${escHtml(discountCode || "")}" />` : ""}
       <button class="btn" id="confirm-purchase-btn" style="margin-top:10px">✅ تایید و ادامه</button>
     </div>
   `;
-  const currentCode = () => document.getElementById("purchase-discount-code").value.trim();
+  const currentCode = () => document.getElementById("product-prize-code")?.value.trim() || null;
   const bindQty = (id, delta) => {
     const el = document.getElementById(id);
     if (el) el.onclick = () => renderPurchasePanel(productId, p, quantity + delta, currentCode());
@@ -2773,6 +2772,7 @@ async function spinWheel() {
             <div class="jackpot-result win">
               🎉 جکپات بردی! کد تخفیف ${apiResult.percent}٪
               <div class="code">${apiResult.code}</div>
+              <div>${escHtml(apiResult.conditions || "")}</div>
             </div>`;
         } else {
           resultBox.innerHTML = `<div class="jackpot-result lose">😔 امروز شانس نبود، فردا دوباره امتحان کن!</div>`;
@@ -2824,6 +2824,7 @@ async function renderWallet() {
       <div class="eyebrow">شارژ کیف پول</div>
       <div class="card" id="topup-card">
         <input id="topup-amount" class="input" type="number" placeholder="مبلغ به تومان" />
+        <input id="topup-discount-code" class="input" type="text" placeholder="کد تخفیف شارژ (اختیاری)" style="direction:ltr;text-align:left" />
         <button class="btn" id="topup-btn">ثبت درخواست شارژ</button>
       </div>
     `;
@@ -2840,8 +2841,14 @@ async function renderWallet() {
       const btn = document.getElementById("topup-btn");
       btn.disabled = true;
       try {
-        const r = await api("/api/wallet/topup-request", { method: "POST", body: JSON.stringify({ amount }) });
-        renderTopupPaymentStep(r.topup_id, amount, r.card_number, r.card_holder, r.crypto_enabled, r.card_to_card_enabled, r.card_to_card_auto_enabled, r.noapay_enabled, r.abangateway_enabled, r.blupal_enabled, r.extra_gateways);
+        const code = document.getElementById("topup-discount-code").value.trim();
+        const r = await api("/api/wallet/topup-request", { method: "POST", body: JSON.stringify({ amount, discount_code: code || null }) });
+        if (r.status === 'approved') {
+          notify(`✅ ${fmt(r.credit_amount)} تومان به کیف پول اضافه شد.`);
+          return renderWallet();
+        }
+        if (code) await renderCouponTopupChoice(r);
+        else renderTopupPaymentStep(r.topup_id, amount, r.card_number, r.card_holder, r.crypto_enabled, r.card_to_card_enabled, r.card_to_card_auto_enabled, r.noapay_enabled, r.abangateway_enabled, r.blupal_enabled, r.extra_gateways);
       } catch (e) {
         notify("خطا: " + e.message);
         btn.disabled = false;
@@ -2852,9 +2859,53 @@ async function renderWallet() {
   }
 }
 
-async function renderTopupPaymentStep(topupId, amount, cardNumber, cardHolder, cryptoEnabled, cardToCardEnabled, cardAutoEnabled, noapayEnabled, abangatewayEnabled, blupalEnabled, extraGateways) {
+async function renderCouponTopupChoice(r) {
+  const box = document.getElementById('topup-card');
+  const gateways = await fetchCustomGateways(r.pay_amount, null, false, true);
+  const options = [];
+  if (r.card_to_card_enabled && r.card_number) options.push(['card', '💳 کارت به کارت']);
+  if (r.card_to_card_auto_enabled) options.push(['card_auto', '💳 کارت به کارت خودکار']);
+  if (r.crypto_enabled) options.push(['crypto', '🪙 ارز دیجیتال']);
+  if (r.noapay_enabled) options.push(['noapay', 'پرداخت Noapay']);
+  if (r.abangateway_enabled) options.push(['abangateway', 'پرداخت آبان گیت وی']);
+  if (r.blupal_enabled) options.push(['blupal', 'پرداخت بلوپال']);
+  for (const gw of r.extra_gateways || []) options.push(['extra:' + gw.key, gw.text]);
+  for (const gw of gateways) options.push(['custom:' + gw.key, 'پرداخت با ' + gw.name]);
+  box.innerHTML = `<p>مبلغ شارژ: ${fmt(r.credit_amount)} تومان<br>تخفیف: ${fmt(r.discount_amount)} تومان<br>مبلغ پرداخت: ${fmt(r.pay_amount)} تومان</p><div id="coupon-topup-options"></div><button class="btn outline" id="coupon-topup-cancel">انصراف</button>`;
+  const list = document.getElementById('coupon-topup-options');
+  for (const [mode, label] of options) {
+    const button = document.createElement('button');
+    button.className = 'btn outline';
+    button.textContent = label;
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        if (mode === 'card') await api(`/api/wallet/topup/${r.topup_id}/card-start`, {method:'POST'});
+        await renderTopupPaymentStep(r.topup_id, r.pay_amount, r.card_number, r.card_holder, r.crypto_enabled, r.card_to_card_enabled, r.card_to_card_auto_enabled, r.noapay_enabled, r.abangateway_enabled, r.blupal_enabled, r.extra_gateways, mode);
+      } catch (e) { button.disabled = false; notify('خطا: ' + e.message); }
+    };
+    list.appendChild(button);
+  }
+  if (!options.length) list.textContent = 'برای این مبلغ روش پرداختی فعال نیست.';
+  document.getElementById('coupon-topup-cancel').onclick = async () => {
+    try { await api(`/api/wallet/topup/${r.topup_id}/cancel`, {method:'POST'}); await renderWallet(); }
+    catch (e) { notify('خطا: ' + e.message); }
+  };
+}
+
+async function renderTopupPaymentStep(topupId, amount, cardNumber, cardHolder, cryptoEnabled, cardToCardEnabled, cardAutoEnabled, noapayEnabled, abangatewayEnabled, blupalEnabled, extraGateways, restrict = null) {
   const box = document.getElementById("topup-card");
-  const customGateways = await fetchCustomGateways(amount, null, false, true);
+  let customGateways = await fetchCustomGateways(amount, null, false, true);
+  if (restrict) {
+    cardToCardEnabled = restrict === 'card';
+    cardAutoEnabled = restrict === 'card_auto';
+    cryptoEnabled = restrict === 'crypto';
+    noapayEnabled = restrict === 'noapay';
+    abangatewayEnabled = restrict === 'abangateway';
+    blupalEnabled = restrict === 'blupal';
+    extraGateways = (extraGateways || []).filter(g => restrict === 'extra:' + g.key);
+    customGateways = customGateways.filter(g => restrict === 'custom:' + g.key);
+  }
   renderReceiptCard(box, {
     amount, cardNumber, cardHolder, cardToCardEnabled,
     successText: "رسید ارسال شد. پس از تایید ادمین، کیف پول شما شارژ می‌شود.",
@@ -6243,6 +6294,8 @@ async function renderAdminSalesSection() {
         <input class="input" id="wheel-prizes" type="text" placeholder="مثال: 10,20,30,50" value="${wheel.prizes.join(",")}" style="margin-bottom:10px" />
         <label class="field-label">مدت اعتبار کد جایزه پس از برد (ساعت)</label>
         <input class="input" id="wheel-expiry" type="number" placeholder="مثال: 24" value="${wheel.expiry_hours}" style="margin-bottom:10px" />
+        <label class="field-label">حداقل شارژ برای کد جایزه (تومان)</label>
+        <input class="input" id="wheel-coupon-min" type="number" min="0" value="${wheel.coupon_min || 0}" />
         <label class="field-label">حداقل فاصله‌ی زمانی بین دو چرخش هر کاربر (ساعت)</label>
         <input class="input" id="wheel-cooldown" type="number" placeholder="مثال: 24" value="${wheel.cooldown_hours}" style="margin-bottom:4px" />
         <div class="field-error" id="wheel-error"></div>
@@ -6262,6 +6315,8 @@ async function renderAdminSalesSection() {
         <input class="input" id="ren-percent" type="number" placeholder="مثال: 20" value="${renewal.discount_percent}" style="margin-bottom:10px" />
         <label class="field-label">مدت اعتبار کد تشویقی (ساعت)</label>
         <input class="input" id="ren-expiry" type="number" placeholder="مثال: 24" value="${renewal.discount_expiry_hours}" style="margin-bottom:4px" />
+        <label class="field-label">حداقل شارژ برای کد تخفیف (تومان)</label>
+        <input class="input" id="ren-coupon-min" type="number" min="0" value="${renewal.coupon_min || 0}" />
         <div class="field-error" id="ren-error"></div>
         <button class="btn" id="ren-save" style="margin-top:8px">💾 ذخیره</button>
       </div>
@@ -6301,6 +6356,8 @@ async function renderAdminSalesSection() {
         <input class="input" id="vol-discount-percent" type="number" placeholder="مثال: 20" value="${volumeRem.discount_percent}" style="margin-bottom:10px" />
         <label class="field-label">مدت اعتبار کد تشویقی (ساعت)</label>
         <input class="input" id="vol-discount-expiry" type="number" placeholder="مثال: 24" value="${volumeRem.discount_expiry_hours}" style="margin-bottom:4px" />
+        <label class="field-label">حداقل شارژ برای کد تخفیف (تومان)</label>
+        <input class="input" id="vol-coupon-min" type="number" min="0" value="${volumeRem.coupon_min || 0}" />
         <div class="field-error" id="vol-error"></div>
         <button class="btn" id="vol-save" style="margin-top:8px">💾 ذخیره</button>
       </div>
@@ -6380,12 +6437,11 @@ async function renderAdminSalesSection() {
           <input class="input" id="new-disc-maxdiscount" type="number" placeholder="خالی یعنی بدون سقف" style="margin-bottom:10px" />
           <label class="field-label">حداکثر تعداد دفعات استفاده (۰ یعنی نامحدود)</label>
           <input class="input" id="new-disc-maxuses" type="number" placeholder="0" value="0" style="margin-bottom:4px" />
-          <label class="field-label">حداقل مبلغ سبد خرید (تومان — خالی یعنی بدون محدودیت)</label>
+          <label class="field-label">حداقل مبلغ شارژ کیف پول (تومان — خالی یعنی بدون محدودیت)</label>
           <input class="input" id="new-disc-minpurchase" type="number" placeholder="مثال: 100000" style="margin-bottom:10px" />
-          <label class="field-label">حداکثر مبلغ سبد خرید (تومان — خالی یعنی بدون محدودیت)</label>
+          <label class="field-label">حداکثر مبلغ شارژ کیف پول (تومان — خالی یعنی بدون محدودیت)</label>
           <input class="input" id="new-disc-maxpurchase" type="number" placeholder="مثال: 1000000" style="margin-bottom:10px" />
-          <label class="field-label">محدود به یک محصول یا دسته‌بندی خاص (اختیاری)</label>
-          <select class="input" id="new-disc-scope" style="margin-bottom:10px">
+          <select class="input" id="new-disc-scope" style="display:none">
             <option value="">🌐 بدون محدودیت (همه‌ی محصولات)</option>
             ${(allCategories || []).length ? `<optgroup label="فقط یک دسته‌بندی خاص">${(allCategories || []).map((c) => `<option value="cat:${c.id}">📁 ${c.name}</option>`).join("")}</optgroup>` : ""}
             ${(allProducts || []).length ? `<optgroup label="فقط یک محصول خاص">${(allProducts || []).map((p) => `<option value="prod:${p.id}">📦 ${p.name}</option>`).join("")}</optgroup>` : ""}
@@ -6480,6 +6536,7 @@ async function renderAdminSalesSection() {
           body: JSON.stringify({
             enabled: document.getElementById("wheel-enabled").checked,
             win_percent: winPercent, prizes, expiry_hours: expiry, cooldown_hours: cooldown,
+            coupon_min: Number(document.getElementById('wheel-coupon-min').value || 0),
           }),
         });
         tg.HapticFeedback.notificationOccurred("success");
@@ -6504,6 +6561,7 @@ async function renderAdminSalesSection() {
           body: JSON.stringify({
             enabled: document.getElementById("ren-enabled").checked,
             days_before: days, discount_percent: percent, discount_expiry_hours: expiry,
+            coupon_min: Number(document.getElementById('ren-coupon-min').value || 0),
           }),
         });
         tg.HapticFeedback.notificationOccurred("success");
@@ -6555,6 +6613,7 @@ async function renderAdminSalesSection() {
             enabled: document.getElementById("vol-enabled").checked,
             mode, percent, gb_left: gb,
             discount_percent: discPercent, discount_expiry_hours: discExpiry,
+            coupon_min: Number(document.getElementById('vol-coupon-min').value || 0),
           }),
         });
         tg.HapticFeedback.notificationOccurred("success");

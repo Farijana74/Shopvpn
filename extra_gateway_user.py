@@ -192,7 +192,12 @@ def register(router, db, is_main_bot: bool, order_error, topup_error, notify_adm
                 await call.answer(err, show_alert=True)
                 return
             await call.answer(tr("در حال ساخت فاکتور..."))
-            topup_id = await asyncio.to_thread(db.create_topup, call.from_user.id, amount)
+            import wallet_coupon
+            try:
+                topup_id = await asyncio.to_thread(wallet_coupon.topup_for_payment, db, call.from_user.id, data, amount, key)
+            except wallet_coupon.WalletCouponError as exc:
+                await call.message.answer(str(exc))
+                return
             tenant_id = await asyncio.to_thread(db.get_setting, "miniapp_tenant_id", "")
             label = f"شارژ کیف پول #{topup_id}"
             try:
@@ -200,7 +205,8 @@ def register(router, db, is_main_bot: bool, order_error, topup_error, notify_adm
                     db, tenant_id, call.from_user.id, key, "wallet_topup", topup_id, amount, label,
                 )
             except egp.ExtraGatewayError as e:
-                await asyncio.to_thread(db.reject_topup, topup_id)
+                if not data.get('coupon_topup_id'):
+                    await asyncio.to_thread(db.reject_topup, topup_id)
                 await call.message.answer(f"⚠️ {e}")
                 return
             await present_invoice(call.message, bot, key, result, "wallet_topup", label, amount)

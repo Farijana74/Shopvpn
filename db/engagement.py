@@ -29,10 +29,13 @@ def _now() -> str:
 def _insert_code(conn, prefix: str, percent: int, valid_days: int, source: str, product_id: int = None) -> str:
     code = f"{prefix}{secrets.token_hex(4).upper()}"
     expires_at = (datetime.utcnow() + timedelta(days=max(1, int(valid_days)))).isoformat()
+    min_key = 'wallet_coupon_min_milestone' if source == 'milestone_prize' else 'wallet_coupon_min_lootbox'
+    setting = conn.execute('SELECT value FROM settings WHERE key=?', (min_key,)).fetchone()
+    minimum = max(0, int(setting['value'] or 0)) if setting and not product_id else 0
     conn.execute(
-        "INSERT INTO discount_codes (code, percent, max_uses, expires_at, source, per_user_limit, product_id) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (code, int(percent), 1, expires_at, source, 1, product_id or None),
+        "INSERT INTO discount_codes (code, percent, max_uses, expires_at, source, per_user_limit, product_id, min_purchase) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (code, int(percent), 1, expires_at, source, 1, product_id or None, minimum or None),
     )
     return code
 
