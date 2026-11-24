@@ -40,13 +40,56 @@ class UserConfigPrefixTests(unittest.TestCase):
         self.assertEqual(reserve_order_name(self.root, 101, first), 'old_1')
         self.root.set_custom_config_prefix('new')
         second = self.root.create_order(101, self.pid, 100)
-        self.assertEqual(reserve_order_name(self.root, 101, second), 'new_2')
+        self.assertEqual(reserve_order_name(self.root, 101, second), 'new_1')
         self.assertEqual(reserve_order_name(self.root, 101, first), 'old_1')
         set_prefix(self.root, 101, 'personal')
         self.assertEqual(get_prefix(self.root, 101), 'personal')
         self.assertEqual(set_prefix(self.root, 101, ''), 'new')
         self.root.set_custom_config_prefix('')
         self.assertEqual(get_prefix(self.root, 101), 'buyer')
+
+    def test_shared_prefix_starts_after_previous_orders_for_all_users(self):
+        from user_config_prefix import reserve_order_name
+        self.root.add_or_update_user(202, 'second', 'Second')
+        self.root.set_custom_config_prefix('shop')
+        self.root.create_order(101, self.pid, 100, config_name='shop_75')
+        first = self.root.create_order(101, self.pid, 100)
+        second = self.root.create_order(202, self.pid, 100)
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'shop_76')
+        self.assertEqual(reserve_order_name(self.root, 202, second), 'shop_77')
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'shop_76')
+
+    def test_shared_prefix_advances_when_panel_reports_taken_name(self):
+        from direct_panel_provision import provision_direct
+        from panel_providers import PanelUsernameTakenError
+        self.root.set_custom_config_prefix('shop')
+        order = self.root.create_order(101, self.pid, 100)
+        async def create(name, *args, **kwargs):
+            if name in ('shop_1', 'shop_2'):
+                raise PanelUsernameTakenError('already exists')
+            return types.SimpleNamespace(username=name, subscription_url='https://example.invalid/sub')
+        provider = types.SimpleNamespace(create_user=AsyncMock(side_effect=create), supports_user_limit=False)
+        with patch('direct_panel_provision.get_provider', return_value=provider):
+            result = asyncio.run(provision_direct(self.root, self.root.get_product(self.pid), 1, 101, order))
+        self.assertEqual(result[0]['username'], 'shop_3')
+        self.assertEqual(self.root.get_order(order)['config_name'], 'shop_3')
+        self.assertEqual([call.args[0] for call in provider.create_user.await_args_list], ['shop_1', 'shop_2', 'shop_3'])
+
+    def test_shared_prefix_is_atomic_for_different_users_and_connections(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from database import Database
+        from user_config_prefix import reserve_order_name
+        self.root.add_or_update_user(202, 'second', 'Second')
+        self.root.set_custom_config_prefix('shop')
+        first = self.root.create_order(101, self.pid, 100)
+        second = self.root.create_order(202, self.pid, 100)
+        other = Database(self.root.db_path)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                names = list(pool.map(lambda item: reserve_order_name(*item), [(self.root, 101, first), (other, 202, second)]))
+            self.assertEqual(set(names), {'shop_1', 'shop_2'})
+        finally:
+            other.close()
 
     def test_username_default_and_sequential_names_survive_retries_and_prefix_change(self):
         from user_config_prefix import reserve_order_name

@@ -431,8 +431,10 @@ async def _provision(local_db, product, quantity, user_id, order_id, *, trial_po
         else:
             from user_config_prefix import reserve_order_name
             name=await asyncio.to_thread(reserve_order_name,local_db,user_id,order_id)
+        local_name_order = local_db.get_order(order_id)
+        generated_marker = 3 if not trial_policy and not volume_quote.get('username') and local_name_order['provision_username_generated'] == 3 else 2
         with root._get_conn() as conn:
-            conn.execute('UPDATE orders SET provision_username_generated=CASE WHEN config_name IS NULL OR config_name=\'\' THEN 2 ELSE provision_username_generated END, config_name=CASE WHEN config_name IS NULL OR config_name=\'\' THEN ? ELSE config_name END,user_limit=? WHERE id=?',(name,users,purchase))
+            conn.execute('UPDATE orders SET provision_username_generated=CASE WHEN config_name IS NULL OR config_name=\'\' THEN ? ELSE provision_username_generated END, config_name=CASE WHEN config_name IS NULL OR config_name=\'\' THEN ? ELSE config_name END,user_limit=? WHERE id=?',(generated_marker,name,users,purchase))
             ledger=conn.execute('SELECT status FROM managed_purchases WHERE request_key=?',(f'{bot_id}:{order_id}',)).fetchone()
             if ledger and ledger['status']=='completed':
                 count=conn.execute('SELECT COUNT(*) FROM custom_configs WHERE order_id=?',(purchase,)).fetchone()[0]

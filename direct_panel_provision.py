@@ -103,13 +103,16 @@ async def _provision_vpn(db, product, quantity: int = 1, user_id: int = None, or
     planned = []
     order = db.get_order(order_id) if order_id is not None else None
     generated_order_name = False
+    sequential_global = False
     if order is not None:
         base_name = _order_config_name(order)
         if not base_name and user_id is not None and user_id > 0:
             from user_config_prefix import reserve_order_name
             base_name = reserve_order_name(db, user_id, order_id)
+            order = db.get_order(order_id)
         elif "provision_username_generated" in order.keys():
             generated_order_name = order["provision_username_generated"] == 1
+        sequential_global = order["provision_username_generated"] == 3 and quantity == 1
         if base_name:
             planned = planned_usernames(base_name, quantity)
     existing_by_username = {}
@@ -171,14 +174,17 @@ async def _provision_vpn(db, product, quantity: int = 1, user_id: int = None, or
             if not db.panel_has_capacity(server_id, 1):
                 await _rollback_built()
                 raise ProvisionError("ظرفیت پنل در همین لحظه تکمیل شد؛ مبلغ سفارش به شما برگردانده می‌شود.")
-            for attempt in range(5):
-                if wanted and attempt == 0:
+            for attempt in range(20 if sequential_global else 5):
+                if wanted and (attempt == 0 or sequential_global):
                     candidate = wanted
                 elif wanted:
                     candidate = wanted + "_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=3))
                 else:
                     candidate = _random_username(prefix)
                 if db.is_custom_username_taken(candidate):
+                    if sequential_global:
+                        from user_config_prefix import advance_global_order_name
+                        wanted = advance_global_order_name(db, order_id, candidate)
                     continue
                 try:
                     result = await provider.create_user(candidate, 0 if shared_pool else volume_gb, duration_days, **extra_kwargs)
@@ -186,6 +192,10 @@ async def _provision_vpn(db, product, quantity: int = 1, user_id: int = None, or
                     created_this_attempt = True
                     break
                 except PanelUsernameTakenError:
+                    if sequential_global:
+                        from user_config_prefix import advance_global_order_name
+                        wanted = advance_global_order_name(db, order_id, candidate)
+                        continue
                     if wanted and attempt == 0 and order_id is not None and generated_order_name:
                         try:
                             result = await provider.get_user(candidate)

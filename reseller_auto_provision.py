@@ -138,21 +138,26 @@ async def provision_auto_config(
         from user_config_prefix import get_prefix
         username_prefix = get_prefix(local_db, user_id)
     names = None
+    sequential_global = False
     if source == 'direct_product' and user_id is not None and order_id is not None:
         from user_config_prefix import reserve_order_name
         from direct_panel_provision import planned_usernames
         names = planned_usernames(reserve_order_name(local_db, user_id, order_id), quantity)
+        sequential_global = quantity == 1 and local_db.get_order(order_id)['provision_username_generated'] == 3
     try:
         for index in range(quantity):
             username = None
             result = None
-            for _try in range(5):
-                candidate = (names[index] if _try == 0 else f'{names[index]}_{_try}') if names else _random_username(username_prefix)
+            for _try in range(20 if sequential_global else 5):
+                candidate = (names[index] if _try == 0 or sequential_global else f'{names[index]}_{_try}') if names else _random_username(username_prefix)
                 try:
                     result = await provider.create_user(candidate, volume_gb, duration_days, **extra_kwargs)
                     username = candidate
                     break
                 except PanelUsernameTakenError:
+                    if sequential_global:
+                        from user_config_prefix import advance_global_order_name
+                        names[index] = advance_global_order_name(local_db, order_id, candidate)
                     continue
             if username is None:
                 await _rollback_built()
