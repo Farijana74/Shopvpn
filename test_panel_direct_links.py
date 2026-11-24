@@ -36,7 +36,27 @@ class PanelDirectLinksTests(unittest.IsolatedAsyncioTestCase):
             caption,extras=await prepare_delivery('https://example.invalid/sub','plan',1,1,db=self.db,user_tg_id=42)
         body=caption+''.join(extras)
         self.assertTrue(all(link.replace('&','&amp;') in body for link in self.links))
+        self.assertIn('نام سرویس: client', body)
         sub.assert_not_awaited();info.assert_not_awaited()
+
+    async def test_purchase_shows_actual_account_name_even_with_display_prefix(self):
+        self.db.get_setting.side_effect=lambda k,default='': {'shop_display_prefix':'Shop '}.get(k,default)
+        self.db.get_alternate_sub_urls.return_value=[]
+        with patch('panel_providers.get_provider',return_value=self.provider), \
+             patch('config_delivery.dedicated_sub.dedicated_link_for_upstream',side_effect=lambda db,url:url):
+            caption,extras=await prepare_delivery('https://example.invalid/sub','plan',1,1,db=self.db,user_tg_id=42)
+        body=caption+''.join(extras)
+        self.assertIn('نام سرویس: client',body)
+        self.assertNotIn('نام سرویس: Shop ',body)
+        self.assertIn('Shop%20one',body)
+
+    async def test_purchase_never_displays_another_users_account_name(self):
+        self.db.get_setting.side_effect=lambda k,default='':default
+        self.db.ds_find_config_by_sub_url.return_value={'user_id':43,'panel_server_id':7,'username':'other_secret'}
+        with patch('config_delivery.collect_service_info',new=AsyncMock(return_value={'is_sub':True,'sub_url':'https://example.invalid/sub','configs':[], 'protocol':None,'name':'plan','volume':None,'duration':None})), \
+             patch('config_delivery.dedicated_sub.dedicated_link_for_upstream',side_effect=lambda db,url:url):
+            caption,extras=await prepare_delivery('https://example.invalid/sub','plan',1,1,db=self.db,user_tg_id=42)
+        self.assertNotIn('other_secret',caption+''.join(extras))
 
     async def test_rejects_wrong_owner_and_local_endpoint(self):
         with patch('panel_providers.get_provider',return_value=self.provider):

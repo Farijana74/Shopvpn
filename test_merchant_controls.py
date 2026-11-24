@@ -48,7 +48,7 @@ class MerchantTests(unittest.TestCase):
         async def create(db,source,quantity,user_id,order_id):
             self.assertEqual(source['auto_provision_volume_gb'],10)
             self.assertEqual(source['duration_days'],30)
-            name=db.get_order(order_id)['config_name'];self.assertTrue(name.startswith('agent-'))
+            name=db.get_order(order_id)['config_name'];self.assertTrue(name.startswith('agent_'))
             cc=db.add_custom_config(user_id,source['provision_server_id'],name,10,30,'https://example.invalid/sub',order_id=order_id,source='direct_product')
             return [dict(username=name,subscription_url='https://example.invalid/sub',volume_gb=10,duration_days=30,panel_server_id=source['provision_server_id'],custom_config_id=cc)]
         self.local.set_custom_config_prefix('agent')
@@ -69,6 +69,26 @@ class MerchantTests(unittest.TestCase):
         self.assertEqual(result.split('#')[0],uri.split('#')[0])
         self.assertEqual(unquote(result.split('#')[1]),'My shop Original')
         self.assertEqual(prefix_uri(result,'My shop '),result)
+
+    def test_merchant_panel_prefix_applies_to_new_orders_and_personal_override(self):
+        from aiogram import Router
+        from merchant_controls import register
+        from user_config_prefix import get_prefix, reserve_order_name, set_prefix
+        self.local.add_or_update_user(303, 'customer', 'Customer')
+        router = Router()
+        register(router, self.local)
+        handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == 'merchant_value')
+        message = types.SimpleNamespace(text='newprefix', from_user=types.SimpleNamespace(id=101), answer=AsyncMock())
+        state = types.SimpleNamespace(get_data=AsyncMock(return_value={'merchant_action':'username'}), clear=AsyncMock())
+        asyncio.run(handler(message, state))
+        self.assertEqual(self.local.get_custom_config_prefix(), 'newprefix')
+        product = self.local_product()
+        order = self.local.create_order(303, product['id'], product['price'])
+        self.assertEqual(reserve_order_name(self.local, 303, order), 'newprefix_1')
+        set_prefix(self.local, 303, 'personal')
+        self.assertEqual(get_prefix(self.local, 303), 'personal')
+        set_prefix(self.local, 303, '')
+        self.assertEqual(get_prefix(self.local, 303), 'newprefix')
 
     def test_volume_insufficient_funds_cannot_provision(self):
         source=self.root.get_product(self.pid)

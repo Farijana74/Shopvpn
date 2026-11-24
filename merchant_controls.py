@@ -103,7 +103,7 @@ def register(router,db):
                     await call.message.answer(f"تغییر قیمت «{html.escape(product['name'])}» برای کاربر {user_id}\nقیمت فعلی: {price:,} تومان\nحداقل مجاز: {max(1,floor):,} تومان\nقیمت جدید را به تومان بفرستید؛ برای برگشت به قیمت عمومی «حذف» را بفرستید.",reply_markup=M(inline_keyboard=[[B(text='فهرست محصولات کاربر',callback_data=f'merchant:list:{user_id}:0')]]))
             except (ValueError,IndexError) as exc:return await call.answer(str(exc),show_alert=True)
         else:
-            prompts={'username':'پیشوند نام کاربری پنل را با حروف انگلیسی، عدد یا آندرلاین بفرستید؛ برای پاک کردن «حذف» بفرستید.','display':'پیشوند نام نمایشی کانفیگ را ارسال کنید؛ برای پاک کردن «حذف» بفرستید.','menu':'متن دلخواه به جای «📋 منو:» را ارسال کنید.'}
+            prompts={'username':'پیشوند پیش‌فرض نام کاربری پنل را با حروف انگلیسی، عدد یا آندرلاین بفرستید؛ برای پاک کردن «حذف» بفرستید. این پیشوند برای کاربرانی استفاده می‌شود که پیشوند اختصاصی ندارند و روی سفارش‌های جدید اثر دارد.','display':'پیشوند نام نمایشی کانفیگ را ارسال کنید؛ برای پاک کردن «حذف» بفرستید.','menu':'متن دلخواه به جای «📋 منو:» را ارسال کنید.'}
             if action not in prompts:return await call.answer()
             await state.set_state(ControlsFlow.value);await state.update_data(merchant_action=action)
             await call.message.answer(prompts[action])

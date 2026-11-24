@@ -517,6 +517,17 @@ async def prepare_delivery(link: str, product_name: str, idx: int, total: int,
             name=str(svc.get("name") or product_name)
             svc["name"]=name if name.startswith(prefix) else prefix+name
             if svc.get("sub_url"):svc["sub_url"]=prefix_uri(svc["sub_url"],prefix)
+    # A subscription's title or its first individual-link remark can be an
+    # inbound name rather than the actual account created on the panel. Prefer
+    # the stored panel username only when the exact link belongs to this user.
+    if db is not None and user_tg_id is not None and not is_test:
+        try:
+            lookup = getattr(db, 'ds_find_config_by_sub_url', None)
+            row = await asyncio.to_thread(lookup, link) if callable(lookup) else None
+            if row and row['user_id'] == user_tg_id and isinstance(row['username'], str) and row['username'].strip():
+                svc['name'] = row['username']
+        except Exception:
+            logging.getLogger(__name__).warning('Could not resolve the delivered service name', exc_info=True)
     alternates = []
     if db is not None and svc["is_sub"]:
         # ساب اختصاصی: به‌جای آدرس پنل، لینک روی دامنه‌ی خودِ فروشگاه نمایش داده می‌شود
