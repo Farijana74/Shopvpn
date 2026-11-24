@@ -6827,6 +6827,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             "🏷 پیش‌وند ثابت نام کانفیگ‌ها را وارد کنید (فقط حروف انگلیسی، عدد و آندرلاین، ۲ تا ۱۵ کاراکتر؛ "
             "بدون خط تیره - خودِ خط تیره خودکار اضافه می‌شود).\n"
             f"وضعیت فعلی: {('«' + current + '-»') if current else 'خاموش'}\n\n"
+            "برای خرید خودکار، همین پیشوند همراه شماره سفارش به کار می‌رود؛ پیشوند اختصاصی کاربر اولویت دارد.\n"
             "برای خاموش‌کردن پیش‌وند، کلمه‌ی «خاموش» را ارسال کنید.",
             reply_markup=kb.admin_back_kb("adm_custom_config_settings"),
         )
@@ -13916,7 +13917,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await state.update_data(prefix_user_id=tg_id)
         await state.set_state(AdminUserManage.waiting_config_prefix)
         await call.answer()
-        await call.message.answer(f'پیشوند فعلی کاربر: {prefix}\nپیشوند جدید را با ۱ تا ۳۲ حرف انگلیسی، عدد یا آندرلاین ارسال کنید. برای بازگشت به نام کاربری تلگرام عدد 0 را بفرستید.', reply_markup=kb.admin_back_kb(f'adm_user_view:{tg_id}'))
+        await call.message.answer(f'پیشوند فعلی کاربر: {prefix}\nپیشوند جدید را با ۱ تا ۳۲ حرف انگلیسی، عدد یا آندرلاین ارسال کنید. برای بازگشت به پیشوند عمومی (یا نام کاربری تلگرام اگر عمومی خاموش است)، عدد 0 را بفرستید.', reply_markup=kb.admin_back_kb(f'adm_user_view:{tg_id}'))
 
     @router.message(AdminUserManage.waiting_config_prefix)
     async def process_admin_user_prefix(message: Message, state: FSMContext):

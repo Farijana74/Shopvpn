@@ -8,6 +8,9 @@ def get_prefix(db, user_id):
     saved = db.get_setting(f'user_config_prefix:{int(user_id)}', '')
     if saved:
         return saved
+    default = db.get_custom_config_prefix()
+    if default:
+        return default
     user = db.get_user(int(user_id))
     username = (user['username'] or '').lstrip('@') if user else ''
     return username if re.fullmatch(r'[A-Za-z0-9_]{1,32}', username) else str(int(user_id))

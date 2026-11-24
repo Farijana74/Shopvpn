@@ -4206,7 +4206,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         prefix = await asyncio.to_thread(get_user_config_prefix, db, call.from_user.id)
         await state.set_state(UserConfigPrefixFlow.waiting_prefix)
         await call.answer()
-        await call.message.answer(f"پیشوند فعلی: {prefix}\nپیشوند جدید را با ۱ تا ۳۲ حرف انگلیسی، عدد یا آندرلاین ارسال کنید. برای بازگشت به نام کاربری تلگرام، عدد 0 را بفرستید.", reply_markup=kb.admin_back_kb('acct:prefix_cancel'))
+        await call.message.answer(f"پیشوند فعلی: {prefix}\nپیشوند جدید را با ۱ تا ۳۲ حرف انگلیسی، عدد یا آندرلاین ارسال کنید. برای بازگشت به پیشوند عمومی (یا نام کاربری تلگرام اگر عمومی خاموش است)، عدد 0 را بفرستید.", reply_markup=kb.admin_back_kb('acct:prefix_cancel'))
 
     @router.callback_query(F.data == 'acct:prefix_cancel')
     async def cb_account_prefix_cancel(call: CallbackQuery, state: FSMContext):

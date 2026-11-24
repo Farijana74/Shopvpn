@@ -32,6 +32,22 @@ class UserConfigPrefixTests(unittest.TestCase):
         self.assertEqual(session.post.call_args.kwargs['json']['client']['email'], 'Customer_1')
         self.assertEqual(self.root.get_order(order)['config_name'], 'Customer_1')
 
+    def test_global_prefix_changes_for_new_orders_but_respects_personal_prefix(self):
+        from user_config_prefix import reserve_order_name
+        self.root.add_or_update_user(101, 'buyer', 'Buyer')
+        self.root.set_custom_config_prefix('old')
+        first = self.root.create_order(101, self.pid, 100)
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'old_1')
+        self.root.set_custom_config_prefix('new')
+        second = self.root.create_order(101, self.pid, 100)
+        self.assertEqual(reserve_order_name(self.root, 101, second), 'new_2')
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'old_1')
+        set_prefix(self.root, 101, 'personal')
+        self.assertEqual(get_prefix(self.root, 101), 'personal')
+        self.assertEqual(set_prefix(self.root, 101, ''), 'new')
+        self.root.set_custom_config_prefix('')
+        self.assertEqual(get_prefix(self.root, 101), 'buyer')
+
     def test_username_default_and_sequential_names_survive_retries_and_prefix_change(self):
         from user_config_prefix import reserve_order_name
         self.root.add_or_update_user(101, 'john_doe', 'John')
