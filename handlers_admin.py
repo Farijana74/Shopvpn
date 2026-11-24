@@ -13916,7 +13916,7 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
         await state.update_data(prefix_user_id=tg_id)
         await state.set_state(AdminUserManage.waiting_config_prefix)
         await call.answer()
-        await call.message.answer(f'پیشوند فعلی کاربر: {prefix}\nپیشوند جدید را با ۱ تا ۱۲ حرف انگلیسی یا عدد ارسال کنید. برای بازگشت به شناسه کاربری عدد 0 را بفرستید.', reply_markup=kb.admin_back_kb(f'adm_user_view:{tg_id}'))
+        await call.message.answer(f'پیشوند فعلی کاربر: {prefix}\nپیشوند جدید را با ۱ تا ۳۲ حرف انگلیسی، عدد یا آندرلاین ارسال کنید. برای بازگشت به نام کاربری تلگرام عدد 0 را بفرستید.', reply_markup=kb.admin_back_kb(f'adm_user_view:{tg_id}'))
 
     @router.message(AdminUserManage.waiting_config_prefix)
     async def process_admin_user_prefix(message: Message, state: FSMContext):
@@ -14051,6 +14051,12 @@ def create_admin_router(db, is_main_bot: bool = True, bot_manager=None) -> Route
             f"کاربر {tg_id} | تغییر: {amount:,} | موجودی جدید: {new_balance:,}",
         ))
         note = f"✅ موجودی کیف‌پول {'افزایش' if amount > 0 else 'کاهش'} یافت. موجودی جدید: {new_balance:,} تومان"
+        if amount > 0:
+            try:
+                await message.bot.send_message(tg_id, f"💰 موجودی کیف پول شما {amount:,} تومان افزایش یافت.\n💳 موجودی فعلی: {new_balance:,} تومان")
+            except Exception:
+                logger.warning('اعلان افزایش موجودی برای کاربر %s ارسال نشد.', tg_id, exc_info=True)
+                note += "\n⚠️ پیام به کاربر ارسال نشد؛ ممکن است ربات را مسدود کرده باشد."
         await _show_user_menu(message, tg_id, note)
 
     # ---- کد تخفیف اختصاصی ----

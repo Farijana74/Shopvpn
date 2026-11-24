@@ -137,12 +137,17 @@ async def provision_auto_config(
     if user_id is not None:
         from user_config_prefix import get_prefix
         username_prefix = get_prefix(local_db, user_id)
+    names = None
+    if source == 'direct_product' and user_id is not None and order_id is not None:
+        from user_config_prefix import reserve_order_name
+        from direct_panel_provision import planned_usernames
+        names = planned_usernames(reserve_order_name(local_db, user_id, order_id), quantity)
     try:
-        for _ in range(quantity):
+        for index in range(quantity):
             username = None
             result = None
             for _try in range(5):
-                candidate = _random_username(username_prefix)
+                candidate = (names[index] if _try == 0 else f'{names[index]}_{_try}') if names else _random_username(username_prefix)
                 try:
                     result = await provider.create_user(candidate, volume_gb, duration_days, **extra_kwargs)
                     username = candidate

@@ -2786,6 +2786,12 @@ const bindUsersSort = () => {
   const el = $('#user-sort');
   if (el) el.addEventListener('change', e => { usersState.sort = e.target.value; usersState.page = 1; renderUsers(); });
 };
+const bindUsersSearch = () => {
+  const input = $('#user-search');
+  const search = () => { usersState.q = input.value.trim().replace(/^@/, ''); usersState.page = 1; renderUsers(); };
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+  $('#user-search-btn').addEventListener('click', search);
+};
 async function renderUsers() {
   const res = await apiGet(`/users?q=${encodeURIComponent(usersState.q)}&status=${usersState.status}&page=${usersState.page}&sort=${usersState.sort}`);
   const pages = Math.max(Math.ceil(res.total / res.limit), 1);
@@ -2794,6 +2800,7 @@ async function renderUsers() {
   setContent(`
     <div class="toolbar">
       <input class="input" id="user-search" placeholder="جستجو (آیدی، یوزرنیم، نام)..." value="${esc(usersState.q)}">
+      <button class="btn btn-primary" id="user-search-btn">جستجو</button>
       <select class="input" id="user-status">
         ${[['all', 'همه'], ['active', 'فعال'], ['expired', 'منقضی'], ['blocked', 'مسدود']].map(([v, l]) => `<option value="${v}" ${v === usersState.status ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
@@ -2821,7 +2828,7 @@ async function renderUsers() {
       <div class="pager">${Array.from({ length: pages }, (_, i) => i + 1).map(p => `<button class="btn btn-sm ${p === usersState.page ? 'btn-primary' : ''}" data-page="${p}">${p}</button>`).join('')}</div>
     </div>
   `);
-  $('#user-search').addEventListener('keydown', e => { if (e.key === 'Enter') { usersState.q = e.target.value; usersState.page = 1; renderUsers(); } });
+  bindUsersSearch();
   $('#user-status').addEventListener('change', e => { usersState.status = e.target.value; usersState.page = 1; renderUsers(); });
   bindUsersSort();
   $$('[data-page]', content()).forEach(b => b.addEventListener('click', () => { usersState.page = Number(b.dataset.page); renderUsers(); }));
@@ -2842,6 +2849,7 @@ function renderUsersBento(res, pages) {
       <div class="bn-seg">${['all', 'active', 'expired', 'blocked'].map(s => `<button class="bn-seg-btn ${s === usersState.status ? 'active' : ''}" data-ustatus="${s}">${USERS_STATUS_LABEL[s]}</button>`).join('')}</div>
     </div>
     <input class="bn-search" id="user-search" placeholder="جستجو: آیدی، یوزرنیم، نام..." value="${esc(usersState.q)}" style="margin-bottom:14px">
+    <button class="bn-btn" id="user-search-btn">جستجو</button>
     ${usersSortSelect()}
     <div class="bn-list">
       ${res.items.map((u, i) => `
@@ -2863,7 +2871,7 @@ function renderUsersBento(res, pages) {
     </div>
     <div class="pager" style="margin-top:16px">${Array.from({ length: pages }, (_, i) => i + 1).map(p => `<button class="btn btn-sm ${p === usersState.page ? 'btn-primary' : ''}" data-page="${p}">${p}</button>`).join('')}</div>
   `);
-  $('#user-search').addEventListener('keydown', e => { if (e.key === 'Enter') { usersState.q = e.target.value; usersState.page = 1; renderUsers(); } });
+  bindUsersSearch();
   $$('.bn-seg-btn[data-ustatus]', content()).forEach(b => b.addEventListener('click', () => { usersState.status = b.dataset.ustatus; usersState.page = 1; renderUsers(); }));
   bindUsersSort();
   $$('[data-page]', content()).forEach(b => b.addEventListener('click', () => { usersState.page = Number(b.dataset.page); renderUsers(); }));
@@ -2903,6 +2911,7 @@ function renderUsersBrutalist(res, pages) {
 
     <div class="bru-toolbar">
       <input class="bru-search-input" id="user-search" placeholder="جستجو: آیدی، یوزرنیم، نام..." value="${esc(usersState.q)}">
+      <button class="btn btn-primary" id="user-search-btn">جستجو</button>
       <div class="bru-seg" role="tablist">
         ${['all', 'active', 'expired', 'blocked'].map(s => `<button class="bru-seg-btn ${s === usersState.status ? 'active' : ''}" data-ustatus="${s}">${USERS_STATUS_LABEL[s]}</button>`).join('')}
       </div>
@@ -2933,7 +2942,7 @@ function renderUsersBrutalist(res, pages) {
 
     <div class="pager" style="margin-top:16px">${Array.from({ length: pages }, (_, i) => i + 1).map(p => `<button class="btn btn-sm ${p === usersState.page ? 'btn-primary' : ''}" data-page="${p}">${p}</button>`).join('')}</div>
   `);
-  $('#user-search').addEventListener('keydown', e => { if (e.key === 'Enter') { usersState.q = e.target.value; usersState.page = 1; renderUsers(); } });
+  bindUsersSearch();
   $$('.bru-seg-btn[data-ustatus]', content()).forEach(b => b.addEventListener('click', () => { usersState.status = b.dataset.ustatus; usersState.page = 1; renderUsers(); }));
   bindUsersSort();
   $$('[data-page]', content()).forEach(b => b.addEventListener('click', () => { usersState.page = Number(b.dataset.page); renderUsers(); }));

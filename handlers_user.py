@@ -2460,26 +2460,6 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
             await call.answer(tr(f"موجودی کافی نیست. فقط {stock} عدد موجود است."), show_alert=True)
             return
 
-        if config_name is None and product["is_auto_provision"] and product["provision_server_id"]:
-            if draft:
-                await state.update_data(product_checkout=dict(draft, phase='naming'))
-            await state.update_data(buy_name_product_id=product_id, buy_name_quantity=quantity)
-            await state.set_state(BuyFlow.waiting_config_name)
-            prefix = (await asyncio.to_thread(get_user_config_prefix, db, call.from_user.id))
-            max_len = 20 if quantity == 1 else 16
-            text = "🛠 نام کانفیگ\n\n"
-            if prefix:
-                text += f"نام با پیش‌وند ثابت «{prefix}-» شروع می‌شود. فقط ادامه‌ی نام (بعد از خط تیره) را ارسال کنید"
-            else:
-                text += "یک نام دلخواه برای کانفیگ ارسال کنید"
-            text += "، یا از دکمه‌ی زیر نام خودکار بگیرید.\n"
-            if quantity > 1:
-                text += "نام هر کانفیگ با شماره‌ی ترتیبی (_1، _2، ...) ادامه پیدا می‌کند.\n"
-            text += f"فقط حروف انگلیسی، عدد و آندرلاین مجاز است (بین ۳ تا {max_len} کاراکتر)."
-            await _safe_edit(call.message, text, reply_markup=kb.custom_config_username_kb())
-            await call.answer()
-            return
-
         data = await state.get_data()
         discount_code_id = data.get("discount_code_id")
         discount_amount = data.get("discount_amount", 0) or 0
@@ -4226,7 +4206,7 @@ def create_user_router(db, is_main_bot: bool = True, bot_manager=None) -> Router
         prefix = await asyncio.to_thread(get_user_config_prefix, db, call.from_user.id)
         await state.set_state(UserConfigPrefixFlow.waiting_prefix)
         await call.answer()
-        await call.message.answer(f"پیشوند فعلی: {prefix}\nپیشوند جدید را با ۱ تا ۱۲ حرف انگلیسی یا عدد ارسال کنید. برای بازگشت به شناسه کاربری، عدد 0 را بفرستید.", reply_markup=kb.admin_back_kb('acct:prefix_cancel'))
+        await call.message.answer(f"پیشوند فعلی: {prefix}\nپیشوند جدید را با ۱ تا ۳۲ حرف انگلیسی، عدد یا آندرلاین ارسال کنید. برای بازگشت به نام کاربری تلگرام، عدد 0 را بفرستید.", reply_markup=kb.admin_back_kb('acct:prefix_cancel'))
 
     @router.callback_query(F.data == 'acct:prefix_cancel')
     async def cb_account_prefix_cancel(call: CallbackQuery, state: FSMContext):

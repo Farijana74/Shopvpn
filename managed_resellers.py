@@ -424,9 +424,15 @@ async def _provision(local_db, product, quantity, user_id, order_id, *, trial_po
             purchase=await asyncio.to_thread(reserve,root,bot_id,order_id,original['id'],quantity,Fraction(cost_factor,1),extra)
         from user_config_prefix import get_prefix
         customer_prefix = get_prefix(local_db, user_id)
-        name=(str(volume_quote['username'])+f'a{bot_id}') if volume_quote.get('username') else f"{customer_prefix}-a{bot_id}o{purchase}"
+        if trial_policy:
+            name=f"{customer_prefix}-a{bot_id}o{purchase}"
+        elif volume_quote.get('username'):
+            name=str(volume_quote['username'])+f'a{bot_id}'
+        else:
+            from user_config_prefix import reserve_order_name
+            name=await asyncio.to_thread(reserve_order_name,local_db,user_id,order_id)
         with root._get_conn() as conn:
-            conn.execute('UPDATE orders SET config_name=COALESCE(config_name,?),user_limit=? WHERE id=?',(name,users,purchase))
+            conn.execute('UPDATE orders SET provision_username_generated=CASE WHEN config_name IS NULL OR config_name=\'\' THEN 2 ELSE provision_username_generated END, config_name=CASE WHEN config_name IS NULL OR config_name=\'\' THEN ? ELSE config_name END,user_limit=? WHERE id=?',(name,users,purchase))
             ledger=conn.execute('SELECT status FROM managed_purchases WHERE request_key=?',(f'{bot_id}:{order_id}',)).fetchone()
             if ledger and ledger['status']=='completed':
                 count=conn.execute('SELECT COUNT(*) FROM custom_configs WHERE order_id=?',(purchase,)).fetchone()[0]

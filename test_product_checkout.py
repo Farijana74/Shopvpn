@@ -164,13 +164,10 @@ class ProductCheckoutTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.get_wallet_credit(101),0)
         delivery.assert_awaited_once()
 
-    async def test_auto_product_keeps_name_step_then_selected_payment(self):
+    async def test_auto_product_skips_name_step_and_opens_selected_payment(self):
         self.pid=self.fixture.pid
         draft=await self.enter()
         await self.invoke('cb_checkout_pay',f"checkout_pay:{draft['token']}",bot=self.bot)
-        self.assertEqual(await self.state.get_state(),BuyFlow.waiting_config_name.state)
-        self.assertFalse(self.orders())
-        await self.invoke('cb_buy_random_config_name','custom_config_random_username',bot=self.bot)
         self.assertEqual(len(self.orders()),1)
         self.assertEqual(await self.state.get_state(),BuyFlow.waiting_receipt.state)
         self.assertEqual(self.message.answer.await_args.kwargs['reply_markup'].inline_keyboard[0][1].copy_text.text,'1000')

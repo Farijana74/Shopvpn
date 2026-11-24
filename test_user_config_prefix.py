@@ -15,7 +15,7 @@ class UserConfigPrefixTests(unittest.TestCase):
         self.assertEqual(get_prefix(self.root, 101), '101')
         self.assertEqual(set_prefix(self.root, 101, 'my123'), 'my123')
         self.assertEqual(get_prefix(self.root, 102), '102')
-        for invalid in ('bad name', 'a/b', 'نام', 'a' * 13):
+        for invalid in ('bad name', 'a/b', 'نام', 'a' * 33):
             with self.assertRaises(ValueError):
                 set_prefix(self.root, 101, invalid)
         self.assertEqual(get_prefix(self.root, 101), 'my123')
@@ -29,8 +29,54 @@ class UserConfigPrefixTests(unittest.TestCase):
         provider, session = provider_session()
         with patch('direct_panel_provision.get_provider', return_value=provider):
             asyncio.run(provision_direct(self.root, self.root.get_product(self.pid), 1, 101, order))
-        self.assertTrue(session.post.call_args.kwargs['json']['client']['email'].startswith('Customer-'))
-        self.assertTrue(self.root.get_order(order)['config_name'].startswith('Customer-'))
+        self.assertEqual(session.post.call_args.kwargs['json']['client']['email'], 'Customer_1')
+        self.assertEqual(self.root.get_order(order)['config_name'], 'Customer_1')
+
+    def test_username_default_and_sequential_names_survive_retries_and_prefix_change(self):
+        from user_config_prefix import reserve_order_name
+        self.root.add_or_update_user(101, 'john_doe', 'John')
+        self.assertEqual(get_prefix(self.root, 101), 'john_doe')
+        first = self.root.create_order(101, self.pid, 100)
+        second = self.root.create_order(101, self.pid, 100)
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'john_doe_1')
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'john_doe_1')
+        set_prefix(self.root, 101, 'custom')
+        self.assertEqual(reserve_order_name(self.root, 101, second), 'custom_2')
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'john_doe_1')
+
+    def test_concurrent_orders_receive_different_numbers(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from user_config_prefix import reserve_order_name
+        self.root.add_or_update_user(101, 'buyer', 'Buyer')
+        orders = [self.root.create_order(101, self.pid, 100) for _ in range(5)]
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            names = list(pool.map(lambda order: reserve_order_name(self.root, 101, order), orders))
+        self.assertEqual(set(names), {f'buyer_{i}' for i in range(1, 6)})
+
+    def test_concurrent_orders_across_database_connections_are_unique(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from database import Database
+        from user_config_prefix import reserve_order_name
+        self.root.add_or_update_user(101, 'buyer', 'Buyer')
+        orders = [self.root.create_order(101, self.pid, 100) for _ in range(2)]
+        other = Database(self.root.db_path)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                names = list(pool.map(lambda pair: reserve_order_name(pair[0], 101, pair[1]), [(self.root, orders[0]), (other, orders[1])]))
+            self.assertEqual(set(names), {'buyer_1', 'buyer_2'})
+        finally:
+            other.close()
+
+    def test_manual_wallet_increase_sends_the_user_a_notice(self):
+        from handlers_admin import create_admin_router
+        router = create_admin_router(self.root, True)
+        handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == 'process_admin_user_wallet')
+        message = types.SimpleNamespace(text='5000', from_user=types.SimpleNamespace(id=1), answer=AsyncMock(), bot=types.SimpleNamespace(send_message=AsyncMock()))
+        state = types.SimpleNamespace(clear=AsyncMock(), get_data=AsyncMock(return_value={'target_user_id': 101}))
+        asyncio.run(handler(message, state))
+        message.bot.send_message.assert_awaited_once()
+        self.assertEqual(message.bot.send_message.await_args.args[0], 101)
+        self.assertIn('5,000', message.bot.send_message.await_args.args[1])
 
     def test_trial_uses_customer_prefix(self):
         from test_config_provision import provision_test_plan

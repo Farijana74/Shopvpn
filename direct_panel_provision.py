@@ -105,11 +105,11 @@ async def _provision_vpn(db, product, quantity: int = 1, user_id: int = None, or
     generated_order_name = False
     if order is not None:
         base_name = _order_config_name(order)
-        if not base_name and hasattr(db, "reserve_order_config_name"):
-            base_name = db.reserve_order_config_name(order_id, _random_username(prefix))
-            generated_order_name = bool(base_name)
+        if not base_name and user_id is not None and user_id > 0:
+            from user_config_prefix import reserve_order_name
+            base_name = reserve_order_name(db, user_id, order_id)
         elif "provision_username_generated" in order.keys():
-            generated_order_name = bool(order["provision_username_generated"])
+            generated_order_name = order["provision_username_generated"] == 1
         if base_name:
             planned = planned_usernames(base_name, quantity)
     existing_by_username = {}
@@ -345,20 +345,25 @@ async def provision_ssh_direct(db, product, quantity: int = 1, user_id: int = No
     # Keep the SSH login recognizable and tied to the name shown for the order.
     # SSH usernames are restricted to portable ASCII account-name characters.
     requested_base = _order_config_name(order).strip().lower()
+    if not requested_base and order_id is not None and user_id is not None and user_id > 0:
+        from user_config_prefix import reserve_order_name
+        requested_base = reserve_order_name(db, user_id, order_id).lower()
+        order = db.get_order(order_id)
     if not requested_base and user_id is not None:
         from user_config_prefix import get_prefix
         requested_base = get_prefix(db, user_id).lower()
     requested_base = "".join(ch for ch in requested_base if ch in string.ascii_lowercase + string.digits + "_-").strip("_-")
     if requested_base and requested_base[0].isdigit():
         requested_base = 'u' + requested_base
-    requested_base = requested_base[:12]
+    requested_base = requested_base[:24]
     try:
         for item_index in range(quantity):
             result = None
             for attempt in range(5):
                 suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=7))
-                unit_base = requested_base if quantity == 1 else f"{requested_base[:9]}{item_index + 1}"
-                username = f"{unit_base}_{suffix}" if unit_base else "sv" + suffix
+                unit_base = requested_base if quantity == 1 else f"{requested_base[:20]}_{item_index + 1}"
+                sequential = order is not None and order['provision_username_generated'] == 2
+                username = unit_base if sequential and attempt == 0 and unit_base else (f"{unit_base[:20]}_{suffix}" if unit_base else "sv" + suffix)
                 try:
                     # The shared pool is the sole volume authority. A duplicate
                     # per-account cap would prevent a renewed/increased pool from
