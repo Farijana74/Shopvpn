@@ -2,6 +2,18 @@
 import re
 
 
+def _highest_saved_number(conn, prefix):
+    pattern = re.compile(re.escape(prefix) + r'_(\d+)(?:_\d+)?$', re.IGNORECASE)
+    highest = 0
+    for table, column in (('orders', 'config_name'), ('custom_configs', 'username')):
+        rows = conn.execute(f'SELECT {column} FROM {table} WHERE substr({column},1,?)=? COLLATE NOCASE', (len(prefix) + 1, prefix + '_'))
+        for saved in rows:
+            match = pattern.fullmatch(saved[0] or '')
+            if match:
+                highest = max(highest, int(match.group(1)))
+    return highest
+
+
 def _next_global_name(conn, prefix, minimum=0):
     """Allocate the next number for a shared prefix inside a write transaction."""
     key = f'global_config_sequence:{prefix.lower()}'
@@ -9,13 +21,7 @@ def _next_global_name(conn, prefix, minimum=0):
     number = int(row['value']) if row and str(row['value']).isdigit() else 0
     if not row:
         # Include names created by earlier versions before starting the counter.
-        pattern = re.compile(re.escape(prefix) + r'_(\d+)(?:_\d+)?$', re.IGNORECASE)
-        for table, column in (('orders', 'config_name'), ('custom_configs', 'username')):
-            rows = conn.execute(f'SELECT {column} FROM {table} WHERE substr({column},1,?)=? COLLATE NOCASE', (len(prefix) + 1, prefix + '_'))
-            for saved in rows:
-                match = pattern.fullmatch(saved[0] or '')
-                if match:
-                    number = max(number, int(match.group(1)))
+        number = max(number, _highest_saved_number(conn, prefix))
     number = max(number, minimum)
     while True:
         number += 1
@@ -24,6 +30,34 @@ def _next_global_name(conn, prefix, minimum=0):
             break
     conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, str(number)))
     return name
+
+
+def global_sequence_start(db, prefix):
+    """Return the first safe next number without consuming it."""
+    with db._get_conn() as conn:
+        row = conn.execute('SELECT value FROM settings WHERE key=?', (f'global_config_sequence:{prefix.lower()}',)).fetchone()
+        saved = int(row['value']) if row and str(row['value']).isdigit() else 0
+        return max(saved, _highest_saved_number(conn, prefix)) + 1
+
+
+def set_global_sequence_start(db, expected_prefix, start):
+    """Set the next number atomically without moving behind existing names."""
+    if not isinstance(start, int) or not 1 <= start <= 2_000_000_000:
+        raise ValueError('عدد شروع باید بین ۱ و ۲٬۰۰۰٬۰۰۰٬۰۰۰ باشد.')
+    with db._get_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        current = conn.execute("SELECT value FROM settings WHERE key='custom_config_prefix'").fetchone()
+        prefix = str(current['value'] or '').strip() if current else ''
+        if not prefix or prefix != expected_prefix:
+            raise ValueError('پیشوند عمومی تغییر کرده یا غیرفعال است؛ دوباره وارد این بخش شوید.')
+        key = f'global_config_sequence:{prefix.lower()}'
+        row = conn.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+        saved = int(row['value']) if row and str(row['value']).isdigit() else 0
+        minimum = max(saved, _highest_saved_number(conn, prefix)) + 1
+        if start < minimum:
+            raise ValueError(f'برای جلوگیری از تکرار نام، عدد شروع باید حداقل {minimum:,} باشد.')
+        conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, str(start - 1)))
+    return start
 
 
 def get_prefix(db, user_id):

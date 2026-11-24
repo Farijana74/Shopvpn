@@ -59,6 +59,25 @@ class UserConfigPrefixTests(unittest.TestCase):
         self.assertEqual(reserve_order_name(self.root, 202, second), 'shop_77')
         self.assertEqual(reserve_order_name(self.root, 101, first), 'shop_76')
 
+    def test_global_start_number_is_safe_and_only_affects_new_orders(self):
+        from user_config_prefix import global_sequence_start, reserve_order_name, set_global_sequence_start
+        self.root.set_custom_config_prefix('shop')
+        old = self.root.create_order(101, self.pid, 100, config_name='shop_10')
+        self.assertEqual(global_sequence_start(self.root, 'shop'), 11)
+        with self.assertRaises(ValueError):
+            set_global_sequence_start(self.root, 'shop', 10)
+        self.assertEqual(set_global_sequence_start(self.root, 'shop', 1000), 1000)
+        first = self.root.create_order(101, self.pid, 100)
+        second = self.root.create_order(101, self.pid, 100)
+        self.assertEqual(reserve_order_name(self.root, 101, first), 'shop_1000')
+        self.assertEqual(reserve_order_name(self.root, 101, second), 'shop_1001')
+        self.assertEqual(self.root.get_order(old)['config_name'], 'shop_10')
+        with self.assertRaises(ValueError):
+            set_global_sequence_start(self.root, 'shop', 1000)
+        self.root.set_custom_config_prefix('other')
+        with self.assertRaises(ValueError):
+            set_global_sequence_start(self.root, 'shop', 2000)
+
     def test_shared_prefix_advances_when_panel_reports_taken_name(self):
         from direct_panel_provision import provision_direct
         from panel_providers import PanelUsernameTakenError

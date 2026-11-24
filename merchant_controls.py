@@ -37,7 +37,7 @@ def set_personal_price(db,user_id,product_id,price):
 
 def register(router,db):
     def markup():
-        return M(inline_keyboard=[[B(text='تنظیم حجم دلخواه نمایندگان / نرخ فروش',callback_data='volume:settings')],[B(text='قیمت اختصاصی کاربر و محصول',callback_data='merchant:price')],[B(text='پیشوند نام کاربری پنل',callback_data='merchant:username')],[B(text='پیشوند نام نمایشی کانفیگ',callback_data='merchant:display')],[B(text='تغییر متن منوی اصلی',callback_data='merchant:menu')],[B(text='بازگشت',callback_data='adm_back_panel')]])
+        return M(inline_keyboard=[[B(text='تنظیم حجم دلخواه نمایندگان / نرخ فروش',callback_data='volume:settings')],[B(text='قیمت اختصاصی کاربر و محصول',callback_data='merchant:price')],[B(text='پیشوند نام کاربری پنل',callback_data='merchant:username')],[B(text='🔢 شماره شروع پیشوند عمومی',callback_data='merchant:sequence')],[B(text='پیشوند نام نمایشی کانفیگ',callback_data='merchant:display')],[B(text='تغییر متن منوی اصلی',callback_data='merchant:menu')],[B(text='بازگشت',callback_data='adm_back_panel')]])
     def product_list(user_id,page=0):
         from volume_personal_prices import entries,personal_volume_rate
         products=[{**p,'volume_plan':True} for p in entries(db)]+list(db.get_all_products())
@@ -71,6 +71,16 @@ def register(router,db):
         elif action=='price':
             await state.clear();await state.set_state(ControlsFlow.price_user)
             await call.message.answer('آیدی عددی کاربر را بفرستید تا محصولات و قیمت‌های مخصوص همین کاربر نمایش داده شوند.',reply_markup=M(inline_keyboard=[[B(text='بازگشت',callback_data='merchant:home')]]))
+        elif action=='sequence':
+            prefix=await asyncio.to_thread(db.get_custom_config_prefix)
+            if not prefix:
+                await call.message.answer('ابتدا از بخش «پیشوند نام کاربری پنل» یک پیشوند عمومی تنظیم کنید.',reply_markup=markup())
+            else:
+                from user_config_prefix import global_sequence_start
+                number=await asyncio.to_thread(global_sequence_start,db,prefix)
+                await state.set_state(ControlsFlow.value)
+                await state.update_data(merchant_action='sequence', merchant_sequence_prefix=prefix)
+                await call.message.answer(f'🔢 پیشوند عمومی: {prefix}\nشمارهٔ بعدی در حال حاضر: {number:,}\n\nعدد شروع جدید را بفرستید؛ مثلاً 1000 یعنی نام بعدی در صورت آزاد بودن {prefix}_1000 خواهد بود. عدد باید از شماره‌های رزروشده و موجود بزرگ‌تر باشد.',reply_markup=M(inline_keyboard=[[B(text='بازگشت',callback_data='merchant:home')]]))
         elif action in ('list','pick'):
             try:
                 parts=call.data.split(':');user_id=int(parts[2]);data=await state.get_data()
@@ -152,6 +162,14 @@ def register(router,db):
                 value='' if text=='حذف' else text
                 if value and not re.fullmatch(r'[A-Za-z0-9_]{1,20}',value):raise ValueError('پیشوند باید حداکثر ۲۰ حرف انگلیسی، عدد یا آندرلاین باشد.')
                 db.set_custom_config_prefix(value)
+            elif action=='sequence':
+                from user_config_prefix import set_global_sequence_start
+                digits=text.translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩','01234567890123456789')).replace(',','').replace('٬','')
+                if not digits.isascii() or not digits.isdecimal():raise ValueError('شمارهٔ شروع را فقط به صورت عدد صحیح مثبت بفرستید.')
+                prefix=(await state.get_data()).get('merchant_sequence_prefix','')
+                start=await asyncio.to_thread(set_global_sequence_start,db,prefix,int(digits))
+                await state.clear()
+                return await message.answer(f'✅ شمارهٔ شروع تنظیم شد؛ نام بعدی در صورت آزاد بودن: {prefix}_{start}.',reply_markup=markup())
             elif action=='display':
                 if len(text)>80:raise ValueError('پیشوند حداکثر ۸۰ کاراکتر باشد.')
                 db.set_setting('shop_display_prefix','' if text=='حذف' else text)

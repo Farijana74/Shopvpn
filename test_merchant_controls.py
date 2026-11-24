@@ -90,6 +90,23 @@ class MerchantTests(unittest.TestCase):
         set_prefix(self.local, 303, '')
         self.assertEqual(get_prefix(self.local, 303), 'newprefix')
 
+    def test_admin_can_choose_global_start_from_merchant_menu(self):
+        from aiogram import Router
+        from merchant_controls import register
+        from user_config_prefix import reserve_order_name
+        self.local.add_or_update_user(303, 'customer', 'Customer')
+        self.local.set_custom_config_prefix('shop')
+        router = Router()
+        register(router, self.local)
+        handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == 'merchant_value')
+        message = types.SimpleNamespace(text='۱۰۰۰', from_user=types.SimpleNamespace(id=101), answer=AsyncMock())
+        state = types.SimpleNamespace(get_data=AsyncMock(return_value={'merchant_action':'sequence','merchant_sequence_prefix':'shop'}), clear=AsyncMock())
+        asyncio.run(handler(message, state))
+        product = self.local_product()
+        order = self.local.create_order(303, product['id'], product['price'])
+        self.assertEqual(reserve_order_name(self.local, 303, order), 'shop_1000')
+        self.assertIn('shop_1000', message.answer.await_args.args[0])
+
     def test_volume_insufficient_funds_cannot_provision(self):
         source=self.root.get_product(self.pid)
         configure(self.root,self.aid,source['provision_server_id'],5000)
